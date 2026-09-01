@@ -1004,29 +1004,44 @@ describe("runCodexAppServerSideQuestion", () => {
   it.each([
     {
       metadata: "Platform",
+      thinking: "off",
       supported: ["none", "low", "medium", "high", "xhigh", "max"],
       expected: "none",
     },
     {
       metadata: "subscription",
+      thinking: "off",
       supported: ["low", "medium", "high", "xhigh", "max"],
       expected: null,
     },
-    { metadata: "unknown", supported: undefined, expected: null },
+    { metadata: "unknown", thinking: "off", supported: undefined, expected: null },
+    {
+      metadata: "Platform",
+      thinking: "ultra",
+      supported: ["none", "low", "medium", "high", "xhigh", "max"],
+      expected: "ultra",
+    },
+    {
+      metadata: "subscription",
+      thinking: "ultra",
+      supported: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      expected: "ultra",
+    },
+    { metadata: "unknown", thinking: "ultra", supported: undefined, expected: "ultra" },
   ] as const)(
-    "sends off with $metadata metadata to the side-question request boundary",
-    async ({ metadata, supported, expected }) => {
+    "sends $thinking with $metadata metadata to the side-question request boundary",
+    async ({ metadata, thinking, supported, expected }) => {
       const client = createFakeClient();
       getSharedCodexAppServerClientMock.mockResolvedValue(client);
       const compat: ModelCompatConfig | undefined = supported
         ? { supportedReasoningEfforts: [...supported] }
         : undefined;
       const params = sideParams({
-        model: "gpt-5.6-luna",
-        resolvedThinkLevel: "off",
+        model: "gpt-5.6-sol",
+        resolvedThinkLevel: thinking,
         runtimeModel: {
           ...createCodexTestModel(),
-          id: "gpt-5.6-luna",
+          id: "gpt-5.6-sol",
           api: metadata === "subscription" ? "openai-chatgpt-responses" : "openai-responses",
           baseUrl:
             metadata === "subscription"
@@ -1047,13 +1062,16 @@ describe("runCodexAppServerSideQuestion", () => {
         text: "Side answer.",
       });
 
+      expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterThinkingLevel: thinking }),
+      );
       const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
       expect(turnStartCall?.[1]).toMatchObject({
         threadId: "side-thread",
-        model: "gpt-5.6-luna",
+        model: "gpt-5.6-sol",
         effort: expected,
         collaborationMode: {
-          settings: { model: "gpt-5.6-luna", reasoning_effort: expected },
+          settings: { model: "gpt-5.6-sol", reasoning_effort: expected },
         },
       });
     },
@@ -2905,20 +2923,18 @@ describe("runCodexAppServerSideQuestion", () => {
         opts: { runId: "run-side-diagnostics" },
       }),
     );
-    await handleClientRequestWhenReady(
-      client,
-      {
-        id: 42,
-        method: "item/tool/call",
-        params: {
-          ...codexTestTurnIds("side-thread"),
-          callId: "tool-1",
-          tool: "wiki_status",
-          arguments: { topic: "AGENTS.md" },
-        },
+    const response = await handleClientRequestWhenReady(client, {
+      id: 42,
+      method: "item/tool/call",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        callId: "tool-1",
+        tool: "wiki_status",
+        arguments: { topic: "AGENTS.md" },
       },
-      () => expect(toolExecuteMock).toHaveBeenCalledTimes(1),
-    );
+    });
+    expect(response).toMatchObject({ success: true });
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
     client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
     client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
     await run;
