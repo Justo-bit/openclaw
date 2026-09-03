@@ -872,7 +872,7 @@ describe("anthropic transport stream", () => {
 
       expect(latestAnthropicRequest().payload.fallbacks).toBe("default");
       expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
-        "fine-grained-tool-streaming-2025-05-14,server-side-fallback-2026-07-01",
+        "fine-grained-tool-streaming-2025-05-14,server-side-fallback-2026-07-01,thinking-binding-controls-2026-08-01",
       );
     },
   );
@@ -4141,7 +4141,11 @@ describe("anthropic transport stream", () => {
       );
 
       const payload = latestAnthropicRequest().payload;
-      expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+      expect(payload.thinking).toEqual({
+        type: "adaptive",
+        display: "summarized",
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      });
       expect(payload.output_config).toEqual({ effort: testCase.effort });
     }
   });
@@ -4217,7 +4221,11 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({
+      type: "adaptive",
+      display: "summarized",
+      block_binding: { prefix_mismatch_behavior: "drop_block" },
+    });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
   });
 
@@ -4241,7 +4249,11 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({
+      type: "adaptive",
+      display: "summarized",
+      block_binding: { prefix_mismatch_behavior: "drop_block" },
+    });
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 

@@ -57,6 +57,7 @@ import {
   providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
@@ -990,6 +991,10 @@ export async function validateReplayTurns(params: {
   const validatedGemini = policy.validateGeminiTurns
     ? validateGeminiTurns(params.messages)
     : params.messages;
-  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini, {
+        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+      })
+    : validatedGemini;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
