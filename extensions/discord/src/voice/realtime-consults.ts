@@ -79,6 +79,14 @@ export class DiscordRealtimeConsults {
     this.clearProviderConsultState();
   }
 
+  isIdle(): boolean {
+    return (
+      this.talkback.isIdle() &&
+      this.providerDeliveries.size === 0 &&
+      this.params.harness.forcedConsults.handles().every((handle) => handle.context?.result)
+    );
+  }
+
   resetProviderContinuity(): void {
     this.talkback.close();
     this.talkback = this.createTalkbackQueue();
@@ -91,6 +99,10 @@ export class DiscordRealtimeConsults {
   ): Promise<void> {
     const providerEpoch = this.params.providerEpoch();
     const callId = event.callId || event.itemId || "unknown";
+    if (this.params.stopped() || !this.params.turns.speakerContext()) {
+      await session.submitToolResult(callId, { error: "No Discord speaker context available" });
+      return;
+    }
     if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
       await this.handleAgentControlToolCall(event, session, callId, providerEpoch);
       return;
@@ -360,10 +372,7 @@ export class DiscordRealtimeConsults {
       );
       return undefined;
     }
-    let context = speakerContext ?? this.params.turns.consumePendingSpeakerContext();
-    if (!context) {
-      context = this.params.turns.consumeRecentIgnoredWakeNameSpeakerContext();
-    }
+    const context = speakerContext ?? this.params.turns.consumePendingSpeakerContext();
     if (!context) {
       const recent = this.findRecentAgentProxyConsultContext(question);
       if (recent) {
