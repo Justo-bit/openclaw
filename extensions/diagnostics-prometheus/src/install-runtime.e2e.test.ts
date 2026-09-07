@@ -268,7 +268,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const gatewayLog = path.join(root, "gateway.log");
-    const gatewayToken = "prometheus-managed-install-test-token";
+    const gatewayPassword = "prometheus-managed-install-test-password";
     const gatewayPort = await reservePort();
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
@@ -281,7 +281,27 @@ describe("diagnostics-prometheus managed install runtime", () => {
             mode: "local",
             bind: "loopback",
             port: gatewayPort,
-            auth: { mode: "token", token: gatewayToken },
+            trustedProxies: ["127.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              password: gatewayPassword,
+              trustedProxy: {
+                allowLoopback: true,
+                allowUsers: ["restricted-scraper@example.com"],
+                requiredHeaders: ["x-forwarded-proto"],
+                userHeader: "x-forwarded-user",
+              },
+            },
+            roles: {
+              default: "metrics-denied",
+              definitions: {
+                "metrics-denied": {
+                  agents: "*",
+                  scopes: ["operator.approvals"],
+                  sessions: { others: "none" },
+                },
+              },
+            },
           },
         },
         null,
@@ -365,7 +385,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
     const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayToken}` },
+      headers: { authorization: `Bearer ${gatewayPassword}` },
     });
     const body = await authenticated.text();
     expect(authenticated.status).toBe(200);
@@ -373,6 +393,25 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const restrictedHeaders = {
+      "x-forwarded-for": "203.0.113.25",
+      "x-forwarded-proto": "https",
+      "x-forwarded-user": "restricted-scraper@example.com",
+    };
+    const restricted = await fetch(url, { headers: restrictedHeaders });
+    const restrictedBody = await restricted.text();
+    expect(restricted.status).toBe(403);
+    expect(restricted.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedBody).toBe("missing scope: operator.read");
+    expect(restrictedBody).not.toContain("openclaw_telemetry_exporter_total");
+
+    const restrictedHead = await fetch(url, { headers: restrictedHeaders, method: "HEAD" });
+    expect(restrictedHead.status).toBe(403);
+    expect(restrictedHead.headers.get("cache-control")).toBe("no-store");
+    expect(restrictedHead.headers.get("content-length")).not.toBe(
+      authenticated.headers.get("content-length"),
+    );
+    expect(await restrictedHead.text()).toBe("");
     const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
