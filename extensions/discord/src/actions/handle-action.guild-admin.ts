@@ -24,15 +24,7 @@ import {
 
 type Ctx = Pick<
   ChannelMessageActionContext,
-  | "action"
-  | "params"
-  | "cfg"
-  | "accountId"
-  | "requesterSenderId"
-  | "senderIsOwner"
-  | "toolContext"
-  | "mediaLocalRoots"
-  | "mediaReadFile"
+  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "senderIsOwner" | "toolContext"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -123,6 +115,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -155,6 +148,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
+      actionOptions,
     );
   }
 
@@ -368,7 +362,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         ...senderParam(senderUserId),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots },
+      actionOptions,
     );
   }
 
