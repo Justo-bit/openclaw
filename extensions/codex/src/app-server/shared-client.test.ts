@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessTaskRecord,
+  AgentHarnessTaskRuntime,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { SemVer } from "semver";
@@ -390,6 +394,47 @@ describe("shared Codex app-server client", () => {
     );
     await client.closeAndWait();
   });
+
+  it.each(["shared", "isolated"] as const)(
+    "opens a native %s catalog client without selecting an OpenClaw agent",
+    async (kind) => {
+      const harness = createAutoInitializingClientHarness();
+      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const acquire =
+        kind === "shared" ? getSharedCodexAppServerClient : createIsolatedCodexAppServerClient;
+      await mocks.resolveDefaultAgentDir.withImplementation(
+        () => {
+          throw new Error("An OpenClaw agent must be selected");
+        },
+        async () => {
+          const client = await acquire({
+            config: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
+            startOptions: {
+              transport: "stdio",
+              homeScope: "user",
+              command: "codex",
+              commandSource: "managed",
+              args: ["app-server"],
+              headers: {},
+              env: { CODEX_HOME: "/native/codex" },
+            },
+            authProfileId: null,
+            timeoutMs: 1_000,
+          });
+          expect(client).toBe(harness.client);
+          expect(startSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              homeScope: "user",
+              managedCommandOrder: "desktop-first",
+              env: { CODEX_HOME: "/native/codex" },
+            }),
+            expect.anything(),
+          );
+          await client.closeAndWait();
+        },
+      );
+    },
+  );
 
   it("closes the shared app-server when the version gate fails", async () => {
     const harness = createClientHarness();
@@ -2473,12 +2518,40 @@ describe("shared Codex app-server client", () => {
     await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
     const client = await clientPromise;
     const deliverCompletion = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
-    const taskRuntime = {
-      tryCreateRunningTaskRun: vi.fn(() => ({ taskId: "child-thread" })),
+    const task: AgentHarnessTaskRecord = {
+      taskId: "child-thread",
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      taskKind: "codex-native",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      scopeKind: "session",
+      task: "inspect the repo",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    };
+    let created = false;
+    const createTask = vi.fn(() => {
+      created = true;
+      return task;
+    });
+    const taskRuntime: AgentHarnessTaskRuntime = {
+      createRunningTaskRun: createTask,
+      tryCreateRunningTaskRun: createTask,
       recordTaskRunProgressByRunId: vi.fn(() => []),
-      finalizeTaskRunByRunId: vi.fn(() => []),
-      listTaskRecords: vi.fn(() => []),
-      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+      finalizeTaskRunByRunId: vi.fn((params) => {
+        task.status = params.status;
+        task.endedAt = params.endedAt;
+        task.terminalSummary = params.terminalSummary ?? undefined;
+        return [task];
+      }),
+      listTaskRecords: vi.fn(() => (created ? [task] : [])),
+      setDetachedTaskDeliveryStatusByRunId: vi.fn((params) => {
+        task.deliveryStatus = params.deliveryStatus;
+        return [task];
+      }),
     };
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
@@ -2486,13 +2559,13 @@ describe("shared Codex app-server client", () => {
       {
         createAgentHarnessTaskRuntime: vi.fn(() => taskRuntime),
         deliverAgentHarnessTaskCompletion: deliverCompletion,
-      } as never,
+      },
       { retainClient },
     );
     monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
-      taskRuntimeScope: {} as never,
+      taskRuntimeScope: { requesterSessionKey: "agent:main:main" },
       agentId: "main",
     });
 
@@ -2557,6 +2630,11 @@ describe("shared Codex app-server client", () => {
     expect(deliverCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ childSessionId: "child-thread", result: "child final result" }),
     );
+    expect(task).toMatchObject({
+      status: "succeeded",
+      deliveryStatus: "delivered",
+      terminalSummary: "child final result",
+    });
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 

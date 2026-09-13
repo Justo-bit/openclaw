@@ -145,6 +145,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.tooling.config.ts",
     },
     {
+      title: "test-projects routes the bundled native Gateway test to its Gateway owner",
+      target: "test/plugins/codex-model-catalog.gateway.test.ts",
+      config: "test/vitest/vitest.gateway-methods.config.ts",
+    },
+    {
       title: "routes script tests to the tooling config",
       target: "test/scripts/test-projects-routing.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",
@@ -210,9 +215,9 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.unit-fast.config.ts",
     },
     {
-      title: "routes tasks targets to the tasks config",
+      title: "routes the worker-backed task registry to the infra config",
       target: "src/tasks/task-registry.test.ts",
-      config: "test/vitest/vitest.tasks.config.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes logging targets to the logging config",
@@ -381,7 +386,7 @@ describe("test-projects args", () => {
     },
     {
       title: "routes unclassified plugin targets to the catch-all owner",
-      target: "extensions/workboard/index.test.ts",
+      target: "extensions/example/index.test.ts",
       config: "test/vitest/vitest.extensions.config.ts",
     },
     {

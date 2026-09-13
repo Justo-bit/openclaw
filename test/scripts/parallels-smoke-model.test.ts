@@ -70,7 +70,7 @@ import {
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { withEnv } from "../../src/test-utils/env.js";
-import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
+import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const WRAPPERS = {
@@ -112,6 +112,7 @@ const TS_SOURCE = Object.fromEntries(
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 const tempDirs: string[] = [];
+const testNodeExecPath = resolveTestNodeExecPath();
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -155,7 +156,7 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   writeFileSync(prlctlPath, posixScript);
   chmodSync(prlctlPath, 0o755);
   if (process.platform === "win32") {
-    copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+    copyFileSync(testNodeExecPath, join(tempDir, "prlctl.exe"));
   }
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
@@ -326,7 +327,7 @@ async function waitForProcessClose(
 }
 
 function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]> = {}) {
-  return run(process.execPath, ["-e", source], { quiet: true, ...options });
+  return run(testNodeExecPath, ["-e", source], { quiet: true, ...options });
 }
 
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
@@ -439,7 +440,7 @@ run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
   return {
     grandchildPidPath,
     readyPath,
-    runner: spawn(process.execPath, ["--import", "tsx", runnerPath], {
+    runner: spawn(testNodeExecPath, ["--import", "tsx", runnerPath], {
       cwd: process.cwd(),
       detached: true,
       stdio: "ignore",
@@ -769,7 +770,7 @@ ensure_vm_running`,
     chmodSync(fakePnpm, 0o755);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "--import",
         "tsx",
@@ -1271,7 +1272,7 @@ if (commandArgs[0] === "list") {
       );
 
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           "tsx",
@@ -1615,8 +1616,13 @@ if (commandArgs[0] === "list") {
       }
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("off");
-      expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
+      expect(script, scriptPath).toContain(
+        scriptPath === TS_PATHS.windows
+          ? "finalAssistant(Raw|Visible)Text"
+          : "posixAgentTurnScript({",
+      );
     }
+    expect(smokeCommon).toContain("finalAssistant(Raw|Visible)Text");
     expect(macos).toContain("modelProviderConfigBatchJson");
     expect(macos).toContain("config set --batch-file");
     expect(linux).toContain("modelProviderConfigBatchJson");
@@ -1632,6 +1638,7 @@ if (commandArgs[0] === "list") {
     expect(npmUpdateScripts).toContain("--thinking off");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
+    expect(npmUpdateScripts).toContain("posixAgentTurnScript({");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
     expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
     expect(npmUpdateScripts).toContain("config set --batch-file");
@@ -2246,7 +2253,7 @@ if (commandArgs[0] === "list") {
       const startedAt = Date.now();
 
       try {
-        const result = run(process.execPath, ["-e", parentScript], {
+        const result = run(testNodeExecPath, ["-e", parentScript], {
           check: false,
           env: {
             ...process.env,

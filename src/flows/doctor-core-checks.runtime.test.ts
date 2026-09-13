@@ -241,40 +241,57 @@ describe("doctor runtime tool schema checks", () => {
     );
   });
 
-  it("reports bundle MCP runtime diagnostics when tool listing fails schema validation", async () => {
-    mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
-      tools: [],
-      diagnostics: [
-        {
-          serverName: "fuzzplugin",
-          safeServerName: "fuzzplugin",
-          launchSummary: "node fuzzplugin-mcp.mjs",
-          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-        },
-      ],
-      dispose: mocks.disposeBundleRuntime,
-    });
+  it.each([false, true])(
+    "preserves MCP schema diagnostics with cleanup failure=%s",
+    async (cleanupFails) => {
+      if (cleanupFails) {
+        mocks.disposeBundleRuntime.mockRejectedValueOnce(
+          new Error("MCP runtime cleanup could not confirm closure"),
+        );
+      }
+      mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
+        tools: [],
+        diagnostics: [
+          {
+            serverName: "fuzzplugin",
+            safeServerName: "fuzzplugin",
+            launchSummary: "node fuzzplugin-mcp.mjs",
+            message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+          },
+        ],
+        dispose: mocks.disposeBundleRuntime,
+      });
 
-    await expect(
-      collectRuntimeToolSchemaFindings({
+      const findings = await collectRuntimeToolSchemaFindings({
         mcp: {
           servers: {
             fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
           },
         },
-      }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
-      message:
-        'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
-      path: "mcp.servers.fuzzplugin",
-      requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
-      fixHint:
-        "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
-    });
-    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
-  });
+      });
+      expect(findings).toContainEqual({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message:
+          'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        fixHint:
+          "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+      });
+      if (cleanupFails) {
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            path: "mcp.servers",
+            requirement: "MCP runtime cleanup could not confirm closure",
+            fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
+          }),
+        );
+      }
+      expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
     mocks.createBundleMcpToolRuntime.mockReturnValueOnce({
@@ -653,7 +670,7 @@ describe("doctor gateway runtime checks", () => {
     mocks.resolveGatewayService.mockReset().mockReturnValue({ label: "openclaw-gateway" });
   });
 
-  it("projects every degraded SecretRef owner from exactly one authenticated read-only status RPC", async () => {
+  it("projects SecretRef and SQLite warnings from one authenticated read-only status RPC", async () => {
     const cfg = { gateway: { mode: "local" as const } };
     const privateToken = "SYNTHETIC_PRIVATE_URL_TOKEN";
     mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
@@ -691,6 +708,17 @@ describe("doctor gateway runtime checks", () => {
         },
       ],
       degradedPlugins: [{ pluginId: "not-this-check" }],
+      sqliteWal: {
+        state: "blocked",
+        observedAtMs: 1_800_000,
+        walBytes: 128 * 1024 * 1024,
+        databaseBytes: 32 * 1024 * 1024,
+        logFrames: 4000,
+        checkpointedFrames: 100,
+        lastCompletedAtMs: null,
+        consecutiveBlocked: 2,
+        warning: true,
+      },
     });
 
     const findings = await collectGatewayHealthFindings({
@@ -731,6 +759,12 @@ describe("doctor gateway runtime checks", () => {
         message: expect.stringContaining("provider:vault"),
         path: expect.stringContaining("providers.example.0"),
         target: expect.stringContaining("provider:vault"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("SQLite WAL: checkpoint blocked"),
+        fixHint: expect.stringContaining("openclaw status --deep"),
       }),
     ]);
     expect(findings[1]?.message).toContain("tts.providers.elevenlabs.voiceId");
@@ -1526,7 +1560,7 @@ describe("doctor provider catalog projection checks", () => {
         path: "plugins.entries.mockplugin",
         target: "mockplugin",
         message: "Provider catalog mockplugin failed during doctor validation.",
-        requirement: "Cannot perform 'get' on a proxy that has been revoked",
+        requirement: expect.stringMatching(/proxy.*revoked/iu),
       }),
     );
   });

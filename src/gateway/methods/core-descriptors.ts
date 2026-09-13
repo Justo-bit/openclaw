@@ -419,7 +419,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.refresh", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   ["controlUi.sessionPullRequests.subscribe", "control-ui", "operator.read", "2026.7"],
@@ -669,19 +669,22 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["models.authRefresh", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authLogin", "models-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["models.authSetApiKey", "models-auth-status", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["sessions.storage.status", "sessions-read", "operator.admin", "2026.9"],
+  ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
+  ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["canvas.document.preview", "canvas", "operator.read", "2026.9"],
+  ["computer.status", "computer", "operator.read", "2026.9"],
+  ["computer.invoke", "computer", "operator.write", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
 
 // Rows are `as const`, so a present policy flag is already the exact literal the spec allows.
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
-  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
-    const spec: CoreGatewayMethodSpec = { name, scope, since };
-    if (family) {
-      spec.family = family;
-    }
-    return Object.assign(spec, policy);
-  });
+  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) =>
+    Object.assign({ name, scope, since, ...(family ? { family } : {}) }, policy),
+  );
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
   CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),

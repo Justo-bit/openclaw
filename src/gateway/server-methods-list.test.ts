@@ -151,6 +151,19 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises plugin reload with admin mutation policy and generation invalidation", () => {
+    expect(GATEWAY_EVENTS).toContain("plugins.changed");
+    expect(listGatewayMethods()).toContain("plugins.reload");
+    expect(coreGatewayHandlers["plugins.reload"]).toBeTypeOf("function");
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    for (const name of ["plugins.reload", "plugins.refresh"]) {
+      expect(descriptors.find((descriptor) => descriptor.name === name)).toMatchObject({
+        scope: "operator.admin",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
   it("advertises node plugin tool catalog updates", () => {
     expect(listGatewayMethods()).toContain("node.pluginTools.update");
   });
@@ -188,6 +201,13 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
+      "canvas.document.preview",
+      "computer.status",
+      "computer.invoke",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -216,6 +236,13 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
+      "canvas.document.preview",
+      "computer.status",
+      "computer.invoke",
     ]);
   });
 
@@ -371,6 +398,13 @@ describe("listGatewayMethods", () => {
       "models.authRefresh",
       "models.authLogin",
       "models.authSetApiKey",
+      "sessions.storage.status",
+      "sessions.storage.run",
+      "plugins.reload",
+      "claws.packages.remove",
+      "canvas.document.preview",
+      "computer.status",
+      "computer.invoke",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

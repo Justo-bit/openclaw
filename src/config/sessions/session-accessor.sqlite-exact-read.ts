@@ -7,8 +7,13 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
+import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+  type SessionSqliteTargetResolutionCache,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
@@ -83,6 +88,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
   })[],
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const results: Array<Result<ExactSessionEntry[], unknown>> = scopes.map(() => ok([]));
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
   const groups = new Map<
     string,
     {
@@ -98,7 +104,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
       continue;
     }
     try {
-      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
+      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }, targetCache));
       const groupKey = [
         options.agentId,
         resolveOpenClawAgentSqlitePath(options),
@@ -119,6 +125,11 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
         assertCanonicalSqliteSessionKeysCurrent(database);
         const source = { agentId: database.agentId, path: database.path };
         const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
+        const readPrepared = prepareExactSessionEntryRowReads(
+          database,
+          [...new Set(group.requests.flatMap((request) => request.sessionKeys))],
+          group.projection,
+        );
         const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
           const cached = entries.get(sessionKey);
           if (cached) {
@@ -126,11 +137,7 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
           }
           let result: Result<ExactSessionEntry | undefined, unknown>;
           try {
-            const entry = readExactSessionEntryRowValidated(
-              database,
-              sessionKey,
-              group.projection,
-            )?.entry;
+            const entry = readPrepared(sessionKey)?.entry;
             result = ok(entry ? { sessionKey, entry } : undefined);
           } catch (error) {
             result = err(error);

@@ -1,9 +1,12 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configIO from "../../config/io.factory.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -36,6 +39,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 describe("connected in-process plugin finalization authority", () => {
@@ -98,6 +102,11 @@ describe("connected in-process plugin finalization authority", () => {
           );
           await fs.symlink(state.root, peerLink, "junction");
         }
+        const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
+        vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementation(
+          async (root, options) =>
+            root === state.root ? "package" : resolveInstallKind(root, options),
+        );
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
         const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
         const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
@@ -203,11 +212,11 @@ describe("connected in-process plugin finalization authority", () => {
                 startedAt: Date.now(),
                 updateStepTimeoutMs: 1_000,
               };
-              const unlink = fs.unlink;
+              const unlink = fsSync.unlinkSync.bind(fsSync);
               const unlinkSpy =
                 scenario === "host-link-recovery" && !recovering
-                  ? vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
-                      await unlink(file);
+                  ? vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
+                      unlink(file);
                       if (file === peerLink) {
                         indexAtConvergence = readIndex();
                         runAtConvergence = getUpdateRun(created.runId, { env: state.env });
@@ -215,6 +224,7 @@ describe("connected in-process plugin finalization authority", () => {
                       }
                     })
                   : undefined;
+              syncBuiltinESMExports();
               const revokeAtBoundary = () => {
                 fence.assertCurrent();
                 otherFence.assertCurrent();
@@ -308,6 +318,7 @@ describe("connected in-process plugin finalization authority", () => {
                 throw cause;
               } finally {
                 unlinkSpy?.mockRestore();
+                syncBuiltinESMExports();
               }
             });
           });
@@ -316,7 +327,10 @@ describe("connected in-process plugin finalization authority", () => {
             { json: true, yes: true, run },
             { root: state.root, env: targetEnv },
             async () => {
-              await withUpdateCommandTerminalResult(run, execution);
+              await withUpdateCommandTerminalResult((registerRun) => {
+                registerRun(run);
+                return execution();
+              });
             },
           );
         const terminal = finishWithTerminal();

@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { writeStateDirDotEnv } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { SecretInput } from "../config/types.secrets.js";
 import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
@@ -400,6 +403,7 @@ describe("buildGatewayInstallPlan", () => {
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
       port: 3000,
+      allowUnconfigured: false,
       dev: false,
       runtime: "bun",
       runtimePath: bunPath,
@@ -411,36 +415,51 @@ describe("buildGatewayInstallPlan", () => {
     );
   });
 
-  it("passes override ownership to heap resolution without persisting operator options", async () => {
-    mockNodeGatewayPlanFixture();
-    const managedDefinition = {
-      programArguments: ["node", "--max-heap-size=24576", "cli.js", "gateway"],
-      environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
-    };
-    const existingCommand = {
-      ...managedDefinition,
-      environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
-      managedDefinition,
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
+  it.each([
+    { mode: "remote" as const, allowUnconfigured: undefined, expectedOverride: true },
+    { mode: "local" as const, allowUnconfigured: undefined, expectedOverride: false },
+    { mode: "remote" as const, allowUnconfigured: false, expectedOverride: false },
+  ])(
+    "preserves managed launch options through repair: $mode $allowUnconfigured",
+    async ({ mode, allowUnconfigured, expectedOverride }) => {
+      mockNodeGatewayPlanFixture();
+      const managedDefinition = {
+        programArguments: [
+          "node",
+          "--max-heap-size=24576",
+          "cli.js",
+          "gateway",
+          "--allow-unconfigured",
+        ],
+        environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
+      };
+      const existingCommand = {
+        ...managedDefinition,
+        environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
+        managedDefinition,
+        managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      };
 
-    await buildGatewayInstallPlan({
-      env: {
-        HOME: isolatedHome,
-        NODE_OPTIONS: "--max-old-space-size=16384",
-      },
-      port: 3000,
-      runtime: "node",
-      existingCommand,
-    });
+      await buildGatewayInstallPlan({
+        env: {
+          HOME: isolatedHome,
+          NODE_OPTIONS: "--max-old-space-size=16384",
+        },
+        port: 3000,
+        runtime: "node",
+        existingCommand,
+        config: { gateway: { mode } },
+        allowUnconfigured,
+      });
 
-    expect(
-      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
-    ).toBe("--max-old-space-size=6144");
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({ existingCommand }),
-    );
-  });
+      expect(
+        firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
+      ).toBe("--max-old-space-size=6144");
+      expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+        expect.objectContaining({ existingCommand, allowUnconfigured: expectedOverride }),
+      );
+    },
+  );
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     mockNodeGatewayPlanFixture();
@@ -846,32 +865,44 @@ describe("buildGatewayInstallPlan", () => {
     },
   );
 
-  it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
+  it.each<{ name: string; token: SecretInput; resolved: boolean; managed: boolean }>([
+    {
+      name: "structured reference",
+      token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      resolved: false,
+      managed: true,
+    },
+    { name: "raw shorthand", token: "${DISCORD_BOT_TOKEN}", resolved: false, managed: true },
+    { name: "resolved shorthand", token: "${DISCORD_BOT_TOKEN}", resolved: true, managed: true },
+    { name: "pending shorthand", token: "$DISCORD_BOT_TOKEN", resolved: true, managed: true },
+    { name: "escaped literal", token: "$${DISCORD_BOT_TOKEN}", resolved: true, managed: false },
+  ])("renders Linux service env for $name", async ({ token, resolved, managed }) => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
       },
     });
 
+    const env = isolatedPlanEnv({ DISCORD_BOT_TOKEN: "discord-test-token" });
+    let config: OpenClawConfig = { channels: { discord: { token } } };
+    if (resolved) {
+      const read = resolveConfigForRead(config, env);
+      config = coerceConfig(read.resolvedConfigRaw);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+    }
     const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
-        DISCORD_BOT_TOKEN: "discord-test-token",
-      }),
+      env,
       port: 3000,
       runtime: "node",
       platform: "linux",
-      config: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      },
+      config,
     });
 
-    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
-    expect(plan.environmentValueSources?.DISCORD_BOT_TOKEN).toBe("file");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe(managed ? "discord-test-token" : undefined);
+    expect(plan.environmentValueSources?.DISCORD_BOT_TOKEN).toBe(managed ? "file" : undefined);
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      managed ? "DISCORD_BOT_TOKEN" : undefined,
+    );
   });
 
   it("retains config env SecretRefs for Windows task scripts", async () => {

@@ -26,8 +26,11 @@ import {
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 import {
   previousReleaseInventory,
   writeUpdateCompatibilityBuildFixture,
@@ -1199,7 +1202,7 @@ describe("runtime postbuild static assets", () => {
       'export async function restart() { return (await import("./shared-1Uyqkfns.js")).resolveNodeRunner(); }\n',
     );
     const output = childProcess.execFileSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "--import",
         path.join(MODULE_ROOT, "scripts/tsx.mjs"),
@@ -1221,7 +1224,7 @@ describe("runtime postbuild static assets", () => {
       { encoding: "utf8" },
     );
 
-    expect(output).toBe(process.execPath);
+    expect(output).toBe(testNodeExecPath);
   });
 
   it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
@@ -1232,7 +1235,7 @@ describe("runtime postbuild static assets", () => {
       writeLegacyCliExitCompatChunks({ rootDir });
 
       const bridge = await import(pathToFileURL(path.join(rootDir, "dist", chunk)).href);
-      expect(bridge.resolveNodeRunner()).toBe(process.execPath);
+      expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
     },
   );
 });
@@ -1303,18 +1306,23 @@ describe("previous release update compatibility", () => {
     );
   }
 
-  function recordImportedFixture(expression: string, modules: Record<string, string>) {
+  function recordImportedFixture(
+    expression: string,
+    modules: Record<string, string>,
+    identity: Pick<UpdateCompatibilityRelease, "version" | "buildId" | "commit" | "integrity"> = {
+      version: "2026.9.1",
+      buildId: "fixture",
+      commit: "0".repeat(40),
+      integrity,
+    },
+  ) {
     const root = createTempDir("update-compat-import-graph-");
     write(
       root,
       "package.json",
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", type: "module" }),
+      JSON.stringify({ name: "openclaw", version: identity.version, type: "module" }),
     );
-    write(
-      root,
-      "dist/build-info.json",
-      JSON.stringify({ version: "2026.9.1", buildId: "fixture", commit: "0".repeat(40) }),
-    );
+    write(root, "dist/build-info.json", JSON.stringify(identity));
     write(
       root,
       "dist/command.js",
@@ -1328,10 +1336,83 @@ describe("previous release update compatibility", () => {
     }
     const inventory: UpdateCompatibilityInventory = {
       schemaVersion: 1,
-      releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
+      releases: [
+        recordUpdateCompatibilityRelease({ packageDir: root, integrity: identity.integrity }),
+      ],
     };
     return { root, inventory };
   }
+
+  it.each(
+    previousReleaseInventory.releases.flatMap((release) =>
+      ["exact", "version", "buildId", "commit", "integrity", "chunk", "owner", "symbol"].map(
+        (changed) => ({ release, changed }),
+      ),
+    ),
+  )(
+    "corrects only verified coalesced release provenance ($release.version, $changed)",
+    async ({ release, changed }) => {
+      const chunk = release.chunks.find((entry) =>
+        entry.exports.some((item) => item.exported === "markPluginRegistryRetired"),
+      );
+      if (!chunk) {
+        throw new Error(`Missing historical retirement import for ${release.version}`);
+      }
+      const identity = { ...release };
+      if (changed === "version") {
+        identity.version = "2026.9.99";
+      }
+      if (changed === "buildId") {
+        identity.buildId = "different-build";
+      }
+      if (changed === "commit") {
+        identity.commit = "0".repeat(40);
+      }
+      if (changed === "integrity") {
+        identity.integrity = integrity;
+      }
+      const target = changed === "chunk" ? "registry-lifecycle-unknown1.js" : chunk.path;
+      const module =
+        changed === "owner" ? "src/plugins/another-owner.ts" : "src/plugins/loader-cache-state.ts";
+      const symbol = changed === "symbol" ? "anotherRetirement" : "markPluginRegistryRetired";
+      const { inventory } = recordImportedFixture(
+        `(await import("./${target}")).${symbol}`,
+        { [target]: `//#region ${module}\nfunction ${symbol}() {}\nexport { ${symbol} };\n` },
+        identity,
+      );
+      expect(inventory.releases[0]?.chunks[0]?.exports).toEqual([
+        {
+          exported: symbol,
+          origin: {
+            module: changed === "exact" ? "src/plugins/registry-lifecycle.ts" : module,
+            symbol,
+          },
+        },
+      ]);
+      if (changed !== "exact") {
+        return;
+      }
+      const current = createTempDir("update-compat-corrected-origin-");
+      write(current, "package.json", '{"type":"module"}');
+      write(
+        current,
+        "src/plugins/registry-lifecycle.ts",
+        'export function markPluginRegistryRetired() { return "current"; }',
+      );
+      write(
+        current,
+        "dist/current.mjs",
+        '//#region src/plugins/registry-lifecycle.ts\nfunction markPluginRegistryRetired() { return "current"; }\nexport { markPluginRegistryRetired };\n',
+      );
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(current, "dist"),
+        sourceDir: current,
+        inventory,
+      });
+      const bridge = await import(pathToFileURL(path.join(current, "dist", target)).href);
+      expect(bridge.markPluginRegistryRetired()).toBe("current");
+    },
+  );
 
   it.each([
     {
@@ -1435,7 +1516,7 @@ describe("previous release update compatibility", () => {
       write(root, "dist/left.mjs", '//#region src/infra/original.ts\nexport const x = "left";\n');
       write(root, "dist/right.mjs", '//#region src/infra/other.ts\nexport const x = "right";\n');
       const namespaceHasX = childProcess.execFileSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--input-type=module",
           "-e",
@@ -1548,7 +1629,7 @@ describe("previous release update compatibility", () => {
       root,
       "bin/npm.cjs",
       [
-        `#!${process.execPath}`,
+        `#!${testNodeExecPath}`,
         'const fs = require("node:fs");',
         `const callsFile = ${JSON.stringify(callsFile)};`,
         `const replies = ${JSON.stringify(replies)};`,
@@ -1562,13 +1643,13 @@ describe("previous release update compatibility", () => {
       ].join("\n"),
     );
     if (process.platform === "win32") {
-      write(root, "bin/npm.cmd", `@"${process.execPath}" "${stub}" %*\r\n`);
+      write(root, "bin/npm.cmd", `@"${testNodeExecPath}" "${stub}" %*\r\n`);
     } else {
       fsSync.copyFileSync(stub, path.join(bin, "npm"));
       fsSync.chmodSync(path.join(bin, "npm"), 0o755);
     }
     const result = childProcess.spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [path.join(MODULE_ROOT, "scripts/update-compat-inventory.mts"), ...args],
       {
         encoding: "utf8",
@@ -1758,6 +1839,59 @@ describe("previous release update compatibility", () => {
     expect(loaded.runner()).toBe("node");
     expect(loaded.mode()).toBe("npm");
   });
+
+  it.each([
+    'import { y as mode } from "../current.mjs"; export { mode as forwarded };',
+    'export { y as forwarded } from "../current.mjs";',
+    'export * from "../current.mjs";',
+  ])("bridges shared declaration bindings through %s", async (forwarding) => {
+    const inventory = recordFixture();
+    const root = createTempDir("update-compat-shared-binding-");
+    candidate(root);
+    fsSync.appendFileSync(path.join(root, "dist/current.mjs"), "\nexport { resolveMode as z };\n");
+    write(
+      root,
+      "dist/a-facade/forward.mjs",
+      `//#region src/cli/update-cli/mode.ts\n${forwarding}\n`,
+    );
+    const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
+    writeUpdateCompatibilityChunks(options);
+    const bridge = path.join(root, "dist/service-abcdefgh.js");
+    const contents = fsSync.readFileSync(bridge, "utf8");
+    expect(contents).toContain('export { y as mode } from "./current.mjs";');
+    writeUpdateCompatibilityChunks(options);
+    expect(fsSync.readFileSync(bridge, "utf8")).toBe(contents);
+    const loaded = await import(pathToFileURL(bridge).href);
+    const current = await import(pathToFileURL(path.join(root, "dist/current.mjs")).href);
+    expect(loaded.mode).toBe(current.y);
+    expect(loaded.mode()).toBe("npm");
+    expect(loaded.runner).toBe(current.x);
+  });
+
+  it.each(["present", "missing"])(
+    "excludes the isolated config-doctor graph when the runtime binding is %s",
+    async (runtime) => {
+      const inventory = recordFixture();
+      const root = createTempDir("update-compat-isolated-graph-");
+      candidate(root);
+      const current = path.join(root, "dist/current.mjs");
+      write(root, "dist/config-doctor/inspect.mjs", fsSync.readFileSync(current, "utf8"));
+      const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
+      if (runtime === "missing") {
+        fsSync.unlinkSync(current);
+        expect(() => writeUpdateCompatibilityChunks(options)).toThrow(
+          /no equivalent current export/,
+        );
+        expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+        return;
+      }
+      writeUpdateCompatibilityChunks(options);
+      const bridge = await import(pathToFileURL(path.join(root, "dist/service-abcdefgh.js")).href);
+      const declaration = await import(pathToFileURL(current).href);
+      expect(bridge.mode).toBe(declaration.y);
+      expect(bridge.runner).toBe(declaration.x);
+    },
+  );
 
   it.each(["missing", "ambiguous"])(
     "refuses %s required implementations before writing bridges",

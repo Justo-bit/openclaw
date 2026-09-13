@@ -7,7 +7,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionsListParams,
-  validateSessionsCleanupParams,
   validateSessionsListParams,
   validateSessionsPreviewParams,
   validateSessionsResolveParams,
@@ -18,14 +17,13 @@ import {
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStorePathCore,
-  runSessionsCleanup,
-  serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../../config/sessions/session-accessor.js";
+import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -66,12 +64,12 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
-import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
-import { listFilter } from "./sessions-board-inventory.js";
+import { listBoardSessionKeys } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
+import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -144,14 +142,20 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
-            ? listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
+            ? listSessionEntriesReadOnly({
+                agentId: target.agentId,
+                storePath: target.storePath,
+                projection: "list",
+                clone: false,
+              })
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => {
-                  if (!canSearchSessionKey(sessionKey)) {
+                  // A shared physical store can include rows owned by another agent.
+                  const parsed = parseAgentSessionKey(sessionKey);
+                  if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
                     return false;
                   }
-                  const parsed = parseAgentSessionKey(sessionKey);
-                  return !parsed || normalizeAgentId(parsed.agentId) === agentId;
+                  return canSearchSessionKey(sessionKey);
                 })
             : undefined);
         if (targetSessionKeys?.length === 0) {
@@ -188,6 +192,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       });
       respond(true, {
         results: hits.slice(0, limit),
+        ...(targetResults.some((result) => result.archivedTranscriptsExcluded)
+          ? {
+              archivedTranscriptsExcluded: targetResults.reduce(
+                (count, result) => count + (result.archivedTranscriptsExcluded ?? 0),
+                0,
+              ),
+            }
+          : {}),
         ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
         ...(targetResults.some((result) => result.truncated) || hits.length > limit
           ? { truncated: true }
@@ -283,7 +295,17 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           }
           const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
           diagnostics?.mark("filterSetup");
-          const visibleEntryFilter = listFilter({ p, loaded, client, cfg, options });
+          const boardSessionKeys =
+            p.hasBoard === undefined ? undefined : await listBoardSessionKeys(targetsBySessionKey);
+          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
+          const excludedSessionKeys = options.excludedKeys;
+          const visibleEntryFilter =
+            !visibilityFilter && !boardSessionKeys && !excludedSessionKeys?.size
+              ? undefined
+              : (key: string, entry: SessionEntry) =>
+                  !excludedSessionKeys?.has(key) &&
+                  (visibilityFilter?.(key, entry) ?? true) &&
+                  (p.hasBoard === undefined || boardSessionKeys?.has(key) === p.hasBoard);
           const selectionRuns =
             p.activeOnly === true || p.search?.trim()
               ? createVisibleActiveSessionRunProjector(context)
@@ -568,52 +590,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       diagnostics,
     });
   }),
-  "sessions.cleanup": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
-      return;
-    }
-    try {
-      const { mode, appliedSummaries, failure } = await runSessionsCleanup({
-        cfg: context.getRuntimeConfig(),
-        opts: {
-          agent: params.agent,
-          allAgents: params.allAgents,
-          enforce: params.enforce,
-          activeKey: params.activeKey,
-          fixMissing: params.fixMissing,
-          fixDmScope: params.fixDmScope,
-        },
-      });
-      const result = serializeSessionCleanupResult({
-        mode,
-        dryRun: false,
-        summaries: appliedSummaries,
-        failure,
-      });
-      if (failure) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, failure.message, { details: result }),
-        );
-      } else {
-        respond(true, result, undefined);
-      }
-      for (const summary of appliedSummaries) {
-        emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
-        if (summary.wouldMutate) {
-          context.logGateway.debug(
-            `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
-          );
-        }
-      }
-      if (failure?.lifecycleCommitted) {
-        emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
-      }
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-    }
-  },
   "sessions.preview": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
@@ -653,6 +629,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           agentId: requestedAgent.agentId,
           exactRead: true,
           readOnly: true,
+          projection: "list",
         });
         const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
         if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
@@ -671,8 +648,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           maxChars,
         );
         previews.push({ key, status: items.length > 0 ? "ok" : "empty", items });
-      } catch {
-        previews.push({ key, status: "error", items: [] });
+      } catch (error) {
+        previews.push({
+          key,
+          status: error instanceof SessionTranscriptColdError ? "cold" : "error",
+          items: [],
+        });
       }
     }
 
@@ -702,6 +683,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     respond(true, resolved, undefined);
   },
   ...sessionByKeyReadHandlers,
+  ...sessionMaintenanceHandlers,
 };
 
 export const sessionsListHandler = sessionReadHandlers["sessions.list"]!;

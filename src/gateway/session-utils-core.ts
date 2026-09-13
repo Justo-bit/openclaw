@@ -3,16 +3,14 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  countActiveDescendantRuns,
-  getSessionDisplaySubagentRunByChildSessionKey,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
   type ModelCostConfig,
@@ -234,17 +232,13 @@ export function resolveSessionChildOwners(params: {
   key: string;
   entry: SessionEntry;
   now: number;
-  subagentRuns?: SessionListRowContext["subagentRuns"];
+  subagentRuns: SessionListRowContext["subagentRuns"];
 }): string[] {
   const { key, entry, now, subagentRuns } = params;
-  const latest = subagentRuns
-    ? subagentRuns.getDisplaySubagentRun(key)
-    : getSessionDisplaySubagentRunByChildSessionKey(key);
+  const latest = subagentRuns.getDisplaySubagentRun(key);
   const keep = latest
     ? shouldKeepSubagentRunChildLink(latest, {
-        activeDescendants: subagentRuns
-          ? subagentRuns.countActiveDescendantRuns(key)
-          : countActiveDescendantRuns(key),
+        activeDescendants: subagentRuns.countActiveDescendantRuns(key),
         now,
       })
     : shouldKeepStoreOnlyChildLink(entry, now);
@@ -256,9 +250,15 @@ export function resolveSessionChildOwners(params: {
     ? normalizeOptionalString(latest.controllerSessionKey) ||
       normalizeOptionalString(latest.requesterSessionKey)
     : normalizeOptionalString(entry.spawnedBy);
-  return [...new Set([controller, normalizeOptionalString(entry.parentSessionKey)])].filter(
-    (owner): owner is string => Boolean(owner) && owner !== key,
-  );
+  const parent = normalizeOptionalString(entry.parentSessionKey);
+  const owners: string[] = [];
+  if (controller && controller !== key) {
+    owners.push(controller);
+  }
+  if (parent && parent !== key && parent !== controller) {
+    owners.push(parent);
+  }
+  return owners;
 }
 
 /** Index only canonical children; retained run results cannot create session links. */
@@ -269,17 +269,34 @@ export function buildStoreChildSessionIndex(params: {
   subagentRuns?: SessionListRowContext["subagentRuns"];
   excludedChildKeys?: ReadonlySet<string>;
 }): Map<string, string[]> {
+  return runSynchronousWork(buildStoreChildSessionIndexWork(params));
+}
+
+export function* buildStoreChildSessionIndexWork(
+  params: Parameters<typeof buildStoreChildSessionIndex>[0],
+  shouldYield?: () => boolean,
+): SynchronousWork<Map<string, string[]>> {
   const children = new Map<string, string[]>();
   if (params.keys.length === 0) {
     return children;
   }
+  const subagentRuns = params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now);
   const parents = new Set(params.keys);
   // One store pass discovers both persisted navigation and runtime-only controller links.
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const key of Object.keys(params.store)) {
+    if (shouldYield?.()) {
+      yield;
+    }
+    const entry = params.store[key];
     if (!entry || params.excludedChildKeys?.has(key)) {
       continue;
     }
-    for (const owner of resolveSessionChildOwners({ ...params, key, entry })) {
+    for (const owner of resolveSessionChildOwners({
+      key,
+      entry,
+      now: params.now,
+      subagentRuns,
+    })) {
       if (parents.has(owner)) {
         const siblings = children.get(owner) ?? [];
         siblings.push(key);

@@ -5,15 +5,24 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
   callGateway,
   inspectPortUsage,
   makeGatewayService,
+  monotonicClock,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
 } from "../daemon-cli/restart-health.test-helpers.js";
+import {
+  GatewayRestartHealthError,
+  runUpdatedInstallGatewayCommand,
+} from "./update-command-service-command.js";
+import { maybeRestartService } from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
@@ -23,6 +32,18 @@ vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
 }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
+}));
+vi.mock("./restart-helper.js", () => ({ runRestartScript: vi.fn(async () => true) }));
+vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-supervision.js")>()),
+  assertGatewayServiceMutationAllowed: vi.fn(),
+}));
+vi.mock("./update-command-config-snapshot.js", () => ({
+  createUpdateConfigSnapshot: vi.fn(async () => undefined),
+}));
+vi.mock("./update-command-service-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
+  runUpdatedInstallGatewayCommand: vi.fn(async () => "accepted"),
 }));
 
 let server: Server;
@@ -48,6 +69,138 @@ afterEach(async () => {
 
 describe("update readiness generation", () => {
   it.each([
+    { startupAtMs: 0, verified: true },
+    { startupAtMs: 1_500, verified: false },
+  ])(
+    "includes settling once without extending the startup allowance (startup=$startupAtMs)",
+    async ({ startupAtMs, verified }) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < startupAtMs ? "free" : "busy",
+        listeners: monotonicClock.nowMs < startupAtMs ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(async (opts) => {
+        const responseMs = 5;
+        const remainingMs = opts.timeoutMs ?? responseMs;
+        monotonicClock.nowMs += Math.min(responseMs, remainingMs);
+        if (remainingMs < responseMs) {
+          throw new Error("Gateway health response exceeded its remaining allowance");
+        }
+        return gatewayHealthResponse({
+          server: { version: "2026.9.4", buildId: "candidate-build", bootId: "settling-boot" },
+        })(opts);
+      });
+      let httpRequests = 0;
+      server = createServer((_req, res) => {
+        httpRequests++;
+        res.writeHead(200).end();
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const verification = verifyUpdatedGateway({
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        opts: { json: true },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: address.port,
+        expectedVersion: "2026.9.4",
+        expectedBuildId: "candidate-build",
+        requireRunningService: true,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      pendingVerification = verification;
+      expect((await verification).ok).toBe(verified);
+      expect(httpRequests).toBe(verified ? 2 : 0);
+      expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(verified ? 5_500 : 6_500);
+      expect(monotonicClock.nowMs).toBeLessThan(verified ? 6_500 : 7_000);
+    },
+  );
+
+  it.each(["restart script", "service refresh", "child readiness timeout", "legacy update marker"])(
+    "lets a 90-second startup finish within the update budget (%s)",
+    async (activation) => {
+      const refreshServiceEnv = activation === "service refresh";
+      const childTimeout = activation === "child readiness timeout";
+      if (childTimeout) {
+        vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {
+          monotonicClock.nowMs = 60_000;
+          throw new GatewayRestartHealthError(
+            "Gateway restart timed out after 60s waiting for health checks.",
+          );
+        });
+      }
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: monotonicClock.nowMs < 90_000 ? "free" : "busy",
+        listeners: monotonicClock.nowMs < 90_000 ? [] : [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.9.4", buildId: "candidate-build", bootId: "slow-boot" },
+        }),
+      );
+      server = createServer((_req, res) => res.writeHead(200).end());
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const result =
+        activation === "legacy update marker"
+          ? (
+              await verifyUpdatedGateway({
+                result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+                opts: { json: true },
+                serviceEnv: { HOME: "/synthetic-home", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+                gatewayPort: address.port,
+                expectedVersion: "2026.9.4",
+                expectedBuildId: "candidate-build",
+                requireRunningService: true,
+              })
+            ).ok
+            ? "ok"
+            : "restart-health-failed"
+          : await maybeRestartService({
+              shouldRestart: true,
+              result: {
+                status: "ok",
+                mode: "npm",
+                steps: [],
+                durationMs: 0,
+                after: { version: "2026.9.4", buildId: "candidate-build" },
+              },
+              opts: { json: true },
+              refreshServiceEnv,
+              serviceEnv: { HOME: "/synthetic-home" },
+              gatewayPort: address.port,
+              restartScriptPath: childTimeout ? undefined : "/synthetic-restart.sh",
+              requireRunningServiceAfterRestart: true,
+              timeoutMs: 120_000,
+            });
+      expect(result, JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toBe("ok");
+      expect(monotonicClock.nowMs).toBe(95_500);
+      expect(callGateway).toHaveBeenCalledTimes(14);
+      const { runRestartScript } = await import("./restart-helper.js");
+      expect(runRestartScript).toHaveBeenCalledTimes(
+        refreshServiceEnv || childTimeout || activation === "legacy update marker" ? 0 : 1,
+      );
+    },
+  );
+
+  it.each([
     { transition: "unchanged", supplied: false },
     { transition: "replacement", supplied: false },
     { transition: "same-pid-new-boot", supplied: false },
@@ -57,6 +210,7 @@ describe("update readiness generation", () => {
     { transition: "unchanged-pidless", supplied: false },
     { transition: "first-final-health-error", supplied: false },
     { transition: "last-final-health-error", supplied: false },
+    { transition: "readyz-error", supplied: false },
     { transition: "unchanged", supplied: true },
     { transition: "replacement", supplied: true },
   ] as const)(
@@ -107,7 +261,9 @@ describe("update readiness generation", () => {
       server = createServer((req, res) => {
         if (req.url === "/readyz") {
           reached.resolve();
-          void release.promise.then(() => res.writeHead(200).end());
+          void release.promise.then(() =>
+            res.writeHead(transition === "readyz-error" ? 503 : 200).end(),
+          );
         } else {
           res.writeHead(200).end();
         }
@@ -131,8 +287,9 @@ describe("update readiness generation", () => {
       const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
       const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
       const onVerified = vi.fn();
+      const updateResult: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
       const verification = verifyUpdatedGateway({
-        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        result: updateResult,
         opts: { json: true, run: { runId: "synthetic-update", env: {} } },
         serviceEnv: probeParams.env,
         signal: controller.signal,
@@ -158,6 +315,23 @@ describe("update readiness generation", () => {
       release.resolve();
       const result = await verification;
       expect(result.ok).toBe(unchanged);
+      if (transition === "readyz-error") {
+        const report = await prepareUpdateFailureReport(
+          {
+            attemptId: "loopback-readyz-failure",
+            result: { ...updateResult, status: "error", reason: result.summary },
+          },
+          { env: {}, stateDir: "/synthetic-state" },
+        );
+        const local = JSON.stringify(updateResult);
+        for (const output of [local, report.body]) {
+          expect(output).toContain("readyz-unhealthy");
+          expect(output).toContain(
+            "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+          );
+        }
+        expect(report.body).toContain("Failing check readyz (readyz-unhealthy)");
+      }
       if (unchanged) {
         expect(onVerified).toHaveBeenCalledOnce();
         expect(recordUpdateRunVerification).toHaveBeenLastCalledWith(

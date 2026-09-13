@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -9,6 +11,8 @@ import {
   bindLegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -165,25 +169,35 @@ async function createGatewayKernelWithSdkHost(
   // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
   captureRemoteModelCatalogStartupSnapshot();
   ensureOpenClawCliOnPath();
-  const releasePluginMetadata = retainGatewayPluginMetadata();
+  const pluginMetadata = retainGatewayPluginMetadata();
+  let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
   let closeStartupTrace: (() => void) | undefined;
   let startupError: unknown;
   try {
-    const bootstrap = await prepareGatewayServerBootstrap({
-      port,
-      opts,
-      log,
-      logSecrets,
-      loadWorkerEnvironmentStartupModule,
-      formatRuntimeGatewayAuthTokenWarning,
-    });
+    const bootstrap = await pluginMetadata.runBootstrap(() =>
+      prepareGatewayServerBootstrap({
+        port,
+        opts,
+        log,
+        logSecrets,
+        loadWorkerEnvironmentStartupModule,
+        formatRuntimeGatewayAuthTokenWarning,
+      }),
+    );
     closeStartupTrace = bootstrap.startupTrace.close;
+    pluginRegistryOwner = createPluginRegistryOwner(
+      bootstrap.pluginBootstrap.pluginRegistry,
+      bootstrap.pluginBootstrap.pluginWorkspaceDir,
+    );
+    pluginMetadata.publish(bootstrap.pluginMetadataSnapshot);
+    const preparedPluginRegistryOwner = pluginRegistryOwner;
     const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
       prepareGatewayKernelState({
         bootstrap,
         bootId,
+        pluginRegistryOwner: preparedPluginRegistryOwner,
         port,
         opts,
         log,
@@ -208,7 +222,7 @@ async function createGatewayKernelWithSdkHost(
       prepareGatewayLifecycle({
         runtime,
         sdkResourceHost,
-        releasePluginMetadata,
+        pluginMetadata,
         port,
         log,
         logCron,
@@ -216,6 +230,9 @@ async function createGatewayKernelWithSdkHost(
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
+    // Retain teardown first. A timer turn lets I/O run before more cached imports.
+    await delay(0, undefined, { signal: runtime.connectionWork.signal });
+    runtime.connectionWork.signal.throwIfAborted();
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
     }
@@ -237,6 +254,7 @@ async function createGatewayKernelWithSdkHost(
     if (!options.deferEarlyRuntime) {
       await coreRuntime.startEarlyRuntime();
     }
+    await pluginMetadata.waitForRetirement();
     return await runtime.startupTrace.measure("gateway.request-runtime", () =>
       prepareGatewayKernelRequestRuntime({
         coreRuntime,
@@ -249,25 +267,42 @@ async function createGatewayKernelWithSdkHost(
     startupError = error;
   }
   return await rethrowGatewayStartupError(startupError, async () => {
+    pluginMetadata.beginClose();
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
       closeStartupTrace?.();
       kernelState?.mentionInbox.dispose();
-      clearGatewayAgentCliShim();
+      await sdkResourceHost.drainWork();
       const cleanupErrors: unknown[] = [];
-      try {
-        await sdkResourceHost.close();
-      } catch (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-      for (const cleanup of [clearSecretsRuntimeSnapshotState, releasePluginMetadata]) {
+      const releaseMetadata = async (retireRegistry?: () => Promise<void>) => {
         try {
-          cleanup();
+          await sdkResourceHost.close();
         } catch (cleanupError) {
+          if (hasRetainedPluginRuntimeCloseError(cleanupError)) {
+            throw cleanupError;
+          }
           cleanupErrors.push(cleanupError);
         }
+        await pluginMetadata.close(async (retire) => {
+          await closePreparedModelRuntimeSnapshots();
+          await retire();
+          for (const cleanup of [clearGatewayAgentCliShim, clearSecretsRuntimeSnapshotState]) {
+            try {
+              cleanup();
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+        }, retireRegistry);
+      };
+      try {
+        await (pluginRegistryOwner
+          ? pluginRegistryOwner.close(releaseMetadata)
+          : releaseMetadata());
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
       }
       if (cleanupErrors.length === 1) {
         throw cleanupErrors[0];

@@ -222,10 +222,13 @@
   flex-shrink: 0;
 }
 
-.chat-tool-msg-summary__icon img {
+.chat-tool-activity-icon {
   width: 16px;
   height: 16px;
-  object-fit: contain;
+  background: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
 }
 
 .chat-tool-msg-summary__icon svg {
@@ -555,6 +558,20 @@
 
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {
   margin-bottom: 8px;
+}
+
+.chat-tool-children {
+  min-width: 0;
+  margin: 4px 0 8px 8px;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.chat-tool-wrapper-details > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  cursor: default;
 }
 
 .chat-tool-msg-body .chat-diff {
@@ -1103,6 +1120,12 @@
   color: inherit;
 }
 
+.chat-activity-group__duration {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
 }
@@ -1458,4 +1481,8 @@ openclaw-tooltip.chat-tasks-status__preview {
   .chat-tool-card__block-content {
     max-height: min(360px, 55vh);
   }
+}
+.chat-tool-failure {
+  flex: none;
+  white-space: nowrap;
 }

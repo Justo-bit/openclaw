@@ -9,7 +9,7 @@ read_when:
   - You want to observe collector children in chat
 ---
 
-Swarm is an experimental way to orchestrate many sub-agents from a
+Swarm orchestrates many sub-agents from a
 [Code Mode](/tools/code-mode) script. It is enabled by default, with an explicit
 opt-out. Use normal JavaScript or TypeScript control flow such as `Promise.all`,
 `while`, and `if` to fan out work, collect results, and make decisions.
@@ -35,10 +35,8 @@ separately opt-in, and normal tool policy still applies. Existing Codex sessions
 can retain an older tool catalog. See the
 [fresh-session guidance](/tools/swarm#use-swarm-from-other-harnesses) below.
 
-To opt out, turn off **Settings → Agents & Tools → Labs → Swarm** in the
-Control UI. The switch saves `tools.swarm.enabled: false` immediately and
-applies to future runs without restarting the Gateway. Or set the boolean
-shorthand in `openclaw.json`:
+To opt out, disable Swarm in **Settings → Agent Defaults → Tools**, or set
+`tools.swarm: false` in `openclaw.json`:
 
 ```json5
 {
@@ -50,7 +48,7 @@ shorthand in `openclaw.json`:
 
 `swarm: { enabled: false }` has the same effect while preserving configured
 limits. To re-enable Swarm, remove the explicit opt-out, set `swarm: true` or
-`swarm: { enabled: true }`, or turn the Labs switch back on.
+`swarm: { enabled: true }`, or enable it in **Settings → Agent Defaults → Tools**.
 
 To tune the limits, use object form. These are the defaults. You only need to
 include values you want to change:
@@ -408,6 +406,13 @@ Delete-mode collector children can clean up their child sessions immediately aft
 completion while retaining their waitable results. Those collector records remain
 available until the group is archived after every member reaches its retention
 deadline. Retained child sessions are archived as a batch at that point.
+
+Resetting a child session durably revokes completed runs' cleanup before changing
+that session, so a delayed cleanup retry cannot delete its replacement. Reset fails
+if completion is still settling or revocation cannot be saved. If reset fails or
+the Gateway stops after revocation is saved, the original session may remain with
+that cleanup disabled. Collector results and task outcomes keep their normal
+retention, and active reset continuations keep running.
 
 ## Stop a Swarm
 

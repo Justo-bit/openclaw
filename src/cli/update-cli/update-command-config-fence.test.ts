@@ -9,7 +9,6 @@ import { CONFIG_AUDIT_SCOPE } from "../../config/io.audit.js";
 import * as configFactory from "../../config/io.factory.js";
 import { createConfigIO } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
-import { GUARDED_CONFIG_INCLUDE_WRITE_ERROR } from "../../config/mutation-conflict.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "../../config/write-lock.js";
 import * as gatewayEntrypoint from "../../daemon/gateway-entrypoint.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -23,6 +22,7 @@ import {
   POST_CORE_UPDATE_STARTED_AT_ENV,
 } from "../../infra/update-post-core-context.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as pluginBridges from "../../plugins/location-bridges.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import * as pluginRegistryRefresh from "../../plugins/registry-refresh.js";
 import * as updateCohort from "../../plugins/update-cohort.js";
@@ -32,7 +32,6 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import * as pluginBridges from "../plugins-location-bridges.js";
 import {
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
@@ -458,7 +457,8 @@ it("converges healthy candidate code once without nested delegation and restores
         pluginValidation: "skip",
       }).readConfigFileSnapshot();
       expect(configSnapshot.valid).toBe(true);
-      const pluginUpdate: updatePlugins.PostCorePluginUpdateResult = {
+      const pluginUpdate: Awaited<ReturnType<typeof updatePlugins.updatePluginsAfterCoreUpdate>> = {
+        assessment: { kind: "no-payload-repair" },
         status: "ok",
         changed: false,
         sync: {
@@ -656,25 +656,27 @@ it.each([
         () => fence.assertCurrent(),
       );
     });
-    if (included) {
-      // These revocations were scheduled at commit/fsync. Guarded includes now
-      // refuse before either boundary; they must not reach those callbacks.
-      await expect(owned).rejects.toThrow(new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR));
-      expect(reachedCommit).toBe(false);
-      expect(await captureFiles()).toEqual(beforeFiles);
-      expect([await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]).toEqual(
-        beforeEntries,
-      );
-    } else {
-      if (revoked) {
-        await expect(owned).rejects.toThrow(/executor|ownership/i);
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      } else {
-        await owned;
-        expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(18791);
+    if (revoked) {
+      await expect(owned).rejects.toThrow(/executor|ownership/i);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      if (included) {
+        expect(await captureFiles()).toEqual(beforeFiles);
+        expect([await fs.readdir(stateDir), await fs.readdir(path.dirname(includePath))]).toEqual(
+          beforeEntries,
+        );
       }
-      expect(reachedCommit).toBe(true);
+    } else {
+      await owned;
+      expect(
+        JSON.parse(await fs.readFile(included ? includePath : configPath, "utf8")).gateway?.port ??
+          JSON.parse(await fs.readFile(includePath, "utf8")).port,
+      ).toBe(18791);
+      if (included) {
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includedRaw);
+      }
     }
+    expect(reachedCommit).toBe(true);
     if (included && process.platform !== "win32") {
       expect((await fs.stat(path.dirname(includePath))).mode & 0o7777).toBe(0o3700);
     }

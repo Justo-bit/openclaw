@@ -35,6 +35,10 @@ All query commands use WebSocket RPC.
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
 
+WebSocket opening-handshake timeouts report a Gateway transport error with
+`ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
+`error.type: "gateway_transport_error"`, as for other connection failures.
+
 ### `gateway health`
 
 ```bash
@@ -307,6 +311,12 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 ### `gateway call <method>`
 
 Low-level RPC helper.
+
+Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
+without changing URL selection or authentication. The CLI compares the exact
+resolved URL before connecting and fails if the destination changed. Automation
+can obtain the endpoint from `gateway.url` in `openclaw status --json`; a redacted
+URL cannot serve as an exact endpoint assertion.
 
 ```bash
 openclaw gateway call status

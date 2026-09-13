@@ -1,4 +1,6 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,7 +15,10 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import { updateNpmInstalledPlugins } from "./update-installed.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 describe("plugin update authority", () => {
   it("keeps dry-run checks free of lifecycle lease writes", async () => {
@@ -75,14 +80,15 @@ describe("plugin update authority", () => {
           await withUpdateCommandExecutor(run.runId, async (executor) => {
             const fence = await executor.enter(state.root, { preflight: true });
             let unlinked = false;
-            const unlink = fs.unlink;
-            const removal = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
-              await unlink(file);
+            const unlink = fsSync.unlinkSync.bind(fsSync);
+            const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
+              unlink(file);
               if (String(file) === peerLink && revoke) {
                 unlinked = true;
                 releaseUpdateCommandPreflightForHandoff(fence);
               }
             });
+            syncBuiltinESMExports();
             try {
               const operation = withPluginLifecycleLease(
                 { env: state.env, assertCurrent: fence.assertCurrent },
@@ -101,6 +107,7 @@ describe("plugin update authority", () => {
               }
             } finally {
               removal.mockRestore();
+              syncBuiltinESMExports();
             }
           });
         }

@@ -207,11 +207,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Android at 2. Every compact profile has an enforced 80-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 64 push or
   120 PR rows, including precise plans. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories. Jobs requesting the existing
-  Blacksmith class admit at most two project processes with one Vitest worker
-  each; hosted fallbacks remain serial. Runtime preparation completes before
-  project readers start. Native proof must cover available CPUs/RAM, concurrent
-  fixture memory and cleanup. This adds no runner registrations.
+- Windows keeps two disjoint file inventories and at most two concurrent jobs.
+  Each job runs project processes serially with one Vitest worker on every
+  backend, after runtime preparation completes. Native allocation can be smaller
+  than the runner label. Native proof must cover available CPUs/RAM, fixture
+  memory and cleanup. This adds no runner registrations.
 - macOS Swift regular PR/main and PR `release_gate` CI retains the complete
   shared/app test workload plus lint/schema guards in one `tests` phase.
   Ordinary full-scope manual validation adds independent release compilation,
@@ -271,7 +271,26 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   Complete ordinary hybrid bins containing only non-build CLI groups may use
   250s and co-locate split siblings, provided each original child still fits
   150s. Keep file splits, workers, process isolation and other profiles unchanged.
-  Runtime consumers in ordinary bins share preparation only with other consumers;
+  Initial packing separates runtime consumers from ordinary groups. Complete
+  hybrid main and PR runtime-placement observations apply only after file splitting;
+  precise changed-file templates retain their original capacity and floors.
+  Typed observations preserve configs, environment, complete files and build mode.
+  Prefer an exact measurement; otherwise use the maximum compatible contained
+  workload as an advisory floor, never sum overlaps or treat globs as whole files.
+  Whole pinned runtime groups may move to existing compatible ordinary jobs under
+  a 440s budget including the existing 100s build reserve. Keep runner anchors,
+  test partitions, invocation counts and worker limits. An ordinary recipient
+  becomes serial, explicitly retaining its old parallel groups' two-worker budget
+  while preserving their prepared timing identities and complete parent
+  generations. The CI executor applies the smaller of the
+  supplied job ceiling and group cap. This may add one runtime preparation while
+  reducing requested process slots; measure the tradeoff without adding jobs or
+  registrations. Equal maximum estimates prefer more recipient headroom.
+  Reapply shared family, group-count and budget admission to both replacements;
+  never suppress coverage or count a runtime subset as a complete parent.
+  An unfit optimization retains the runnable plan and its truthful estimate.
+  Compare recipients with the donor job's fixed anchor, not only its group class.
+  Exclusive, private-QA, dist and hosted policies stay unchanged.
   Affordable generated CLI runtime children may share one preparation in an
   exclusive serial bin within the same 150s budget; fixed stripe families remain
   separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
@@ -300,10 +319,23 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   that contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
   including the browser-extension row. Failed-job-only PR and hybrid push retries
   retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
-  The browser-extension row stays on 8 and real-Gateway
-  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
-  native timing proof and does not refresh stale timing weights.
-- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+  The browser-extension row stays on 8. Twelve rows finished by 4:38 in run
+  33695337496; the reduced width needs native timing proof and does not refresh
+  stale timing weights.
+- Eligible real-Gateway jobs request the existing 32-class for the private artifact
+  build's two canonical SDK cache misses. Overlap requires at least two available
+  CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
+  768 MiB native headroom each. Unknown finite-cgroup usage or insufficient capacity
+  keeps compilation serial. Keep browser workers, inventory, build/read ordering,
+  routing, deadlines and all caps unchanged. This adds zero jobs or registrations.
+  Compiler-only AWS evidence does not prove CI timing; validate the complete job
+  through exact-head native CI before claiming an improvement.
+- Current-target `build-artifacts` uses the existing 16-class after a complete
+  four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
+  The SDK memory owner keeps declarations serial when two heaps do not fit.
+  Frozen or unclassified targets retain 32-class; hosted fallbacks, job counts,
+  concurrency and deadlines stay unchanged. Measured compute fit does not prove
+  queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid

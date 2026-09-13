@@ -9,7 +9,6 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -28,6 +27,10 @@ import {
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import {
+  matchesInstalledPluginRecord,
+  resolvePluginTrust,
+} from "./installed-plugin-record-match.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
@@ -48,7 +51,6 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -61,10 +63,18 @@ import {
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheFile,
+  readPluginCacheDirectory,
 } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginTrust } from "./plugin-trust.js";
+import {
+  isPluginActivityToolName,
+  MAX_PLUGIN_ACTIVITY_TOOL_ICONS,
+  PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
+  PORTABLE_PLUGIN_ICON_PATH,
+} from "./portable-icon-paths.js";
 
 export type {
   BundledChannelConfigCollector,
@@ -174,13 +184,12 @@ type SeenIdEntry = {
   record: PluginManifestRecord;
 };
 
-const PORTABLE_PLUGIN_ICON_PATH = path.join("assets", "icon.png");
-
 function resolvePortablePluginIconPath(params: {
   rootDir: string;
   rejectHardlinks: boolean;
+  relativePath?: string;
 }): string | undefined {
-  const iconPath = path.resolve(params.rootDir, PORTABLE_PLUGIN_ICON_PATH);
+  const iconPath = path.resolve(params.rootDir, params.relativePath ?? PORTABLE_PLUGIN_ICON_PATH);
   const iconStat = pluginCacheLstatSync(iconPath);
   if (!iconStat?.isFile() || (params.rejectHardlinks && iconStat.nlink > 1)) {
     return undefined;
@@ -196,6 +205,55 @@ function resolvePortablePluginIconPath(params: {
   })
     ? iconPath
     : undefined;
+}
+
+function resolvePortableActivityIcons(params: {
+  rootDir: string;
+  rejectHardlinks: boolean;
+}): Pick<PluginManifestRecord, "activityIconPath" | "toolActivityIconPaths"> {
+  const activityIconPath = resolvePortablePluginIconPath({
+    ...params,
+    relativePath: PLUGIN_ACTIVITY_ICON_PATH,
+  });
+  const directory = path.resolve(params.rootDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR);
+  if (
+    !isPluginRootPath({
+      rootPath: params.rootDir,
+      rootRealPath: pluginCacheRealpathSync(params.rootDir) ?? params.rootDir,
+      targetPath: directory,
+      targetMustExist: true,
+    })
+  ) {
+    return { activityIconPath };
+  }
+  let entries: ReturnType<typeof readPluginCacheDirectory>;
+  try {
+    entries = readPluginCacheDirectory(directory);
+  } catch {
+    return { activityIconPath };
+  }
+  // Ignore an overflowing directory as a whole; filesystem order never picks winners.
+  if (entries.length > MAX_PLUGIN_ACTIVITY_TOOL_ICONS) {
+    return { activityIconPath };
+  }
+  const paths: Array<[string, string]> = [];
+  for (const name of entries.map((entry) => entry.name).toSorted()) {
+    const toolName = name.endsWith(".svg") ? name.slice(0, -4) : "";
+    if (!isPluginActivityToolName(toolName)) {
+      continue;
+    }
+    const iconPath = resolvePortablePluginIconPath({
+      ...params,
+      relativePath: `${PLUGIN_TOOL_ACTIVITY_ICON_DIR}/${name}`,
+    });
+    if (iconPath) {
+      paths.push([toolName, iconPath]);
+    }
+  }
+  return {
+    activityIconPath,
+    ...(paths.length ? { toolActivityIconPaths: Object.fromEntries(paths) } : {}),
+  };
 }
 
 // Canonicalize identical physical plugin roots with the most explicit source.
@@ -443,6 +501,10 @@ function buildRecord(params: {
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,
     }),
+    ...resolvePortableActivityIcons({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -455,6 +517,7 @@ function buildRecord(params: {
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
+    channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
     providerDiscoverySource: providerSourceEntry
       ? resolveManifestPluginSourcePath({
@@ -575,6 +638,10 @@ function buildBundleRecord(params: {
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,
     }),
+    ...resolvePortableActivityIcons({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -679,136 +746,6 @@ function dedupePluginDiagnostics(
     deduped.push(diagnostic);
   }
   return deduped;
-}
-
-function resolveCandidateInstallOwner(params: {
-  pluginId: string;
-  candidate: PluginCandidate;
-  installRecords: Record<string, PluginInstallRecord>;
-}): string | undefined {
-  if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
-    return undefined;
-  }
-  const installOwner = resolvePluginCandidateInstallOwner(params.candidate);
-  if (installOwner) {
-    return Object.hasOwn(params.installRecords, installOwner) ? installOwner : undefined;
-  }
-  return undefined;
-}
-
-function matchesInstalledPluginRecord(params: {
-  pluginId: string;
-  candidate: PluginCandidate;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-  installPathOnly?: boolean;
-}): boolean {
-  if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
-    return false;
-  }
-  const installOwner = resolveCandidateInstallOwner(params);
-  const record = installOwner ? params.installRecords[installOwner] : undefined;
-  if (!record) {
-    return false;
-  }
-  const candidatePaths = [
-    params.candidate.rootDir,
-    params.candidate.packageDir,
-    params.candidate.source,
-    params.candidate.setupSource,
-  ]
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return pluginCacheRealpathSync(resolved) ?? resolved;
-    });
-  // Security decisions must bind to the current install output. sourcePath can
-  // legitimately identify path installs, but it can also survive a source switch.
-  const trackedPaths = (
-    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
-  )
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const resolved = resolveUserPath(entry, params.env);
-      return pluginCacheRealpathSync(resolved) ?? resolved;
-    });
-  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
-    return false;
-  }
-  return trackedPaths.some((trackedPath) =>
-    candidatePaths.some(
-      (candidatePath) =>
-        candidatePath === trackedPath ||
-        isPathInside(trackedPath, candidatePath) ||
-        isPathInside(candidatePath, trackedPath),
-    ),
-  );
-}
-
-function resolvePluginTrust(params: {
-  pluginId: string;
-  candidate: PluginCandidate;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-  registryPath: string;
-}): PluginTrust {
-  const installOwner = resolveCandidateInstallOwner(params);
-  const record = installOwner ? params.installRecords[installOwner] : undefined;
-  const origin = params.candidate.origin;
-  let reason: PluginTrust["reason"];
-  if (origin === "bundled") {
-    reason = "bundled";
-  } else if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
-    reason = "owner-ambiguous";
-  } else if (
-    origin === "workspace" ||
-    record?.source === "path" ||
-    (record?.source === "npm" &&
-      (record.artifactKind !== undefined || record.sourcePath !== undefined))
-  ) {
-    reason = "origin-path";
-  } else if (!record || !installOwner) {
-    reason = "record-missing";
-  } else if (
-    !matchesInstalledPluginRecord({
-      pluginId: params.pluginId,
-      candidate: params.candidate,
-      env: params.env,
-      installRecords: params.installRecords,
-      installPathOnly: true,
-    })
-  ) {
-    reason = "install-path-mismatch";
-  } else if (
-    isTrustedOfficialPluginInstallRecord({
-      pluginId: installOwner,
-      packageName: params.candidate.packageName,
-      record,
-    })
-  ) {
-    reason = "trusted-official";
-  } else if (
-    (record.source === "npm" &&
-      record.spec === undefined &&
-      record.resolvedName === undefined &&
-      record.resolvedSpec === undefined) ||
-    (record.source === "clawhub" &&
-      record.clawhubUrl === undefined &&
-      record.clawhubChannel === undefined)
-  ) {
-    reason = "provenance-missing";
-  } else {
-    reason = "provenance-invalid";
-  }
-  return {
-    reason,
-    registryPath: params.registryPath,
-    origin,
-    installSource: record?.source,
-    installSpec:
-      record?.spec === undefined ? undefined : redactSensitiveText(record.spec, { mode: "tools" }),
-  };
 }
 
 function resolveDuplicatePrecedenceRank(params: {

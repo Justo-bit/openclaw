@@ -81,7 +81,7 @@ type MemoryRewrite = {
   expectedContent: string;
 };
 type ForgetIndexPlan = {
-  chunks: Array<ForgetDatabase["memory_index_chunks"]>;
+  chunks: Array<Pick<ForgetDatabase["memory_index_chunks"], "id" | "path" | "source">>;
   sources: Array<ForgetDatabase["memory_index_sources"]>;
   ftsRows: number;
   vectorRows: number;
@@ -203,11 +203,18 @@ async function planMemoryIndex(params: {
             "memory_index_chunks.id as id",
             "memory_index_chunks.path as path",
             "memory_index_chunks.source as source",
-            "memory_index_chunks.hash as hash",
-            "memory_index_chunks.text as text",
             "memory_index_chunk_provenance.origin_class as originClass",
             "memory_index_chunk_provenance.session_kind as sessionKind",
-          ]),
+          ])
+          .select((eb) =>
+            eb
+              .case("memory_index_chunks.source")
+              .when("sessions")
+              .then("")
+              .else(eb.ref("memory_index_chunks.text"))
+              .end()
+              .as("text"),
+          ),
       ).rows;
       const changedPaths = new Set(params.changedPaths);
       // Another workspace agent may already have scrubbed the shared file.
@@ -243,8 +250,11 @@ async function planMemoryIndex(params: {
         chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
           ? executeSqliteQuerySync(
               db,
-              kysely.selectFrom("memory_index_chunks_fts").select("id").where("id", "in", chunkIds),
-            ).rows.length
+              kysely
+                .selectFrom("memory_index_chunks_fts")
+                .select((eb) => eb.fn.countAll<number>().as("count"))
+                .where("id", "in", chunkIds),
+            ).rows[0]!.count
           : 0;
       const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
       let embeddingCacheRows = 0;
@@ -295,13 +305,13 @@ async function planMemoryIndex(params: {
           db,
           vectorKysely
             .selectFrom("memory_index_chunks_vec")
-            .select("id")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
             .where(
               "id",
               "in",
               result.value.chunks.map((chunk) => chunk.id),
             ),
-        ).rows.length;
+        ).rows[0]!.count;
       },
       { agentId: params.agentId },
       { allowExtension: true },

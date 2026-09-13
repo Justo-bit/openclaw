@@ -15,9 +15,11 @@ import {
   qaMaturityCoverageCategoryKey,
   qaMaturityScoreObjectForScore,
   qaMaturityTaxonomyLevelMap,
+  qaMaturityTaxonomyIdentity,
   readQaMaturityTaxonomySource,
   readValidatedQaMaturityScoreSources,
   type QaMaturityCoverageScores,
+  type QaMaturityDecision,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
@@ -54,6 +56,7 @@ type EvidenceSummary = {
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
+  taxonomyStatus: "current" | "unknown" | "mismatch";
 };
 
 type StatusCounts = Record<QaEvidenceStatus, number>;
@@ -506,6 +509,63 @@ function indentMarkdown(lines: string[], spaces = 4): string[] {
   return lines.map((line) => (line ? `${prefix}${line}` : ""));
 }
 
+type DecisionContext = {
+  label: string;
+  current: QaMaturityDecision["value"] | undefined;
+  decision?: QaMaturityDecision;
+};
+
+function renderDecisionContext(entries: DecisionContext[]): string[] {
+  // The docs publisher renders HTML/Markdown, not JSX expressions. Keep authored text literal.
+  const text = (value: string | number | boolean) =>
+    `<span>${String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replace(/[{}|`*_[\]\\]/gu, (character) => `&#${character.charCodeAt(0)};`)
+      .replace(/\r\n?|\n/gu, "<br />")}</span>`;
+  return [
+    "<details>",
+    "<summary>Decision context</summary>",
+    "<p>Missing history is unknown. Differences are non-gating and do not change current values.</p>",
+    ...entries.map(({ label, current, decision }) => {
+      const context = decision
+        ? [
+            `Recorded value: ${decision.value}`,
+            ...(decision.value !== current ? ["Non-gating mismatch"] : []),
+            `Rationale: ${decision.rationale}`,
+            `Reviewer: ${decision.reviewer}`,
+            `Evidence: ${decision.evidence_refs.join("; ")}`,
+            `Revalidate when: ${decision.revalidate_when}`,
+          ]
+            .map((field) => `<div>${text(field)}</div>`)
+            .join("")
+        : text("Unknown (not recorded)");
+      return `<div><p><strong>${text(label)}</strong></p><p>Current value: ${text(current ?? "Unknown")}</p><div>Recorded decision: ${context}</div></div>`;
+    }),
+    "</details>",
+  ];
+}
+
+function surfaceDecisionContext(
+  surface: QaMaturityTaxonomySurface,
+  scoreSurface: QaMaturityScoreSurface | undefined,
+): DecisionContext[] {
+  return [
+    { label: "Level", current: surface.level, decision: surface.level_decision },
+    {
+      label: "Quality",
+      current: scoreSurface?.scores.quality.score,
+      decision: scoreSurface?.scores.quality.decision,
+    },
+    {
+      label: "Completeness",
+      current: scoreSurface?.scores.completeness.score,
+      decision: scoreSurface?.scores.completeness.decision,
+    },
+  ];
+}
+
 function renderSurfaceRows({
   coverage,
   levels,
@@ -780,7 +840,11 @@ function followUpText(missingCoverageIds: readonly string[]): string {
   return `${missingCoverageIds.length} capability ${missingCoverageIds.length === 1 ? "gap" : "gaps"}`;
 }
 
-function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
+function readEvidenceSummaries(
+  taxonomy: QaMaturityTaxonomy,
+  evidenceDir?: string,
+): EvidenceSummary[] {
+  const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
     return {
@@ -792,6 +856,12 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
       statuses: countStatuses(payload.entries),
       blockingResults: blockingResultLabels(payload.entries),
       scorecard: payload.scorecard,
+      taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
+        ? "unknown"
+        : payload.profilePlan.taxonomyIdentity.version === identity.version &&
+            payload.profilePlan.taxonomyIdentity.sha256 === identity.sha256
+          ? "current"
+          : "mismatch",
     };
   });
 }
@@ -836,14 +906,24 @@ function deriveCoverageScores(
   taxonomy: QaMaturityTaxonomy,
   evidenceSummaries: EvidenceSummary[],
 ): DerivedCoverageScores {
-  const warnings: string[] = [];
-  const coverageSummary = latestCoverageScorecard(evidenceSummaries);
+  const warnings = evidenceSummaries.flatMap((item) =>
+    !item.scorecard || item.taxonomyStatus === "current"
+      ? []
+      : [
+          `${item.path}: semantic taxonomy identity is ${item.taxonomyStatus === "unknown" ? "missing" : "mismatched"}; historical evidence cannot supply current coverage`,
+        ],
+  );
+  const current = evidenceSummaries.filter((item) => item.taxonomyStatus === "current");
+  const coverageSummary = latestCoverageScorecard(current);
   if (!coverageSummary) {
+    if (latestCoverageScorecard(evidenceSummaries)) {
+      return { categories: new Map(), surfaces: new Map(), rollups: {}, warnings };
+    }
     throw new Error(
       "maturity scorecard rendering requires all or release profile qa-evidence.json with a scorecard field; pass --evidence-dir with QA evidence artifacts",
     );
   }
-  const selectedProfileScorecardSummaries = evidenceSummaries.filter(
+  const selectedProfileScorecardSummaries = current.filter(
     (item) => item.profile === coverageSummary.profile && item.scorecard,
   );
   if (selectedProfileScorecardSummaries.length > 1) {
@@ -990,6 +1070,7 @@ function renderEvidenceSection(
       '  <div className="maturity-evidence-card">',
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
+      `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
@@ -997,9 +1078,31 @@ function renderEvidenceSection(
   }
   lines.push("</div>", "");
 
-  const categoryRows = scorecardSummaries.flatMap((item) =>
-    (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
-  );
+  const historical = scorecardSummaries.filter((item) => item.taxonomyStatus !== "current");
+  if (historical.length > 0) {
+    lines.push(
+      "### Historical category evidence",
+      "",
+      "These recorded categories describe the original run and do not contribute to current coverage.",
+      "",
+      "| Profile | Recorded category | ID | Outcome | Features | Coverage IDs |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const item of historical) {
+      for (const category of item.scorecard?.categoryReports ?? []) {
+        lines.push(
+          `| ${markdownEscape(item.profile)} | ${markdownEscape(category.name)} | ${markdownEscape(category.id)} | ${markdownEscape(category.status)} | ${markdownEscape(countText(category.features))} | ${markdownEscape(countText(category.coverageIds))} |`,
+        );
+      }
+    }
+    lines.push("");
+  }
+
+  const categoryRows = scorecardSummaries
+    .filter((item) => item.taxonomyStatus === "current")
+    .flatMap((item) =>
+      (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
+    );
   if (categoryRows.length > 0) {
     const grouped = new Map<string, Array<(typeof categoryRows)[number]>>();
     for (const row of categoryRows) {
@@ -1112,8 +1215,18 @@ function renderMaturityScorecard({
     "",
     ...renderSurfaceTabs({ coverage, levels, scoreSurfaces, surfaces }),
     "",
-    ...renderEvidenceSection(evidenceSummaries, surfaceNames),
+    "## Decision context",
+    "",
   );
+  for (const surface of surfaces) {
+    lines.push(
+      `### ${markdownEscape(surface.name)}`,
+      "",
+      ...renderDecisionContext(surfaceDecisionContext(surface, scoreSurfaces.get(surface.id))),
+      "",
+    );
+  }
+  lines.push(...renderEvidenceSection(evidenceSummaries, surfaceNames));
   if (updatedDate) {
     lines.push(`> Last updated: ${updatedDate}`, "");
   }
@@ -1235,6 +1348,30 @@ function renderTaxonomy({
           [
             `<div className="maturity-surface-rollup"><span>Coverage ${scoreLabel(coverage.surfaces.get(surface.id))}</span><span>Quality ${scoreLabel(scoreSurface?.scores?.quality)}</span><span>Completeness ${scoreLabel(scoreSurface?.scores?.completeness)}</span><span>${maturityLtsBadge(scoreSurface?.lts)}</span></div>`,
             "",
+            ...renderDecisionContext([
+              ...surfaceDecisionContext(surface, scoreSurface),
+              ...surface.categories.flatMap((category): DecisionContext[] => {
+                const score = categoryScores.get(category.name);
+                return [
+                  {
+                    label: `${category.name} / Quality`,
+                    current: score?.quality.score,
+                    decision: score?.quality.decision,
+                  },
+                  {
+                    label: `${category.name} / Completeness`,
+                    current: score?.completeness.score,
+                    decision: score?.completeness.decision,
+                  },
+                  {
+                    label: `${category.name} / LTS`,
+                    current: score?.lts.supported,
+                    decision: score?.lts.decision,
+                  },
+                ];
+              }),
+            ]),
+            "",
             ...categoryLines,
             "",
           ],
@@ -1323,7 +1460,7 @@ function main(): void {
 
   validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
 
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const evidenceSummaries = readEvidenceSummaries(taxonomy, args.evidenceDir);
   if (!args.allowFailures) {
     rejectBlockingEvidence(evidenceSummaries);
   }

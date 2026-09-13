@@ -3,29 +3,35 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
-import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
+import { isActiveTaskStatus } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
   normalizeTaskTimestamps,
+  compareTasksNewestFirst,
+  pickPreferredRunIdTask,
 } from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
+  controlRuntimeLoader,
+  deliveryRuntimeLoader,
+  type TaskRegistryDeliveryRuntime,
+  type TaskRegistryGlobalWithRuntimeOverrides,
+} from "./task-registry-runtime-loaders.js";
+import {
+  withTaskRegistryMutation,
   bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
-  compareTasksNewestFirst,
-  controlRuntimeLoader,
   deleteOwnerKeyIndex,
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
-  deliveryRuntimeLoader,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
-  pickPreferredRunIdTask,
   readTaskRegistryRevision,
   rebuildRunIdIndex,
   resetTaskRegistryListenerState,
@@ -36,12 +42,13 @@ import {
   taskIdsByParentFlowId,
   taskIdsByRelatedSessionKey,
   tasks,
-  tryPersistTaskDelete,
-  type TaskRegistryDeliveryRuntime,
-  type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
-import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
+import {
+  tryPersistTaskDelete,
+  getTaskRegistryStore,
+  resetTaskRegistryRuntimeForTests,
+} from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
 
@@ -153,6 +160,7 @@ function heapifyWorstTaskFirst(
 }
 
 const TASK_PAGE_MAX_ATTEMPTS = 3;
+const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
   offset: number;
@@ -182,6 +190,7 @@ export async function listTaskRecordPage(params: {
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
   const windowSize = params.offset + params.limit;
+  let workStartedAt = performance.now();
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     const revision = readTaskRegistryRevision();
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
@@ -197,9 +206,11 @@ export async function listTaskRecordPage(params: {
     const iterator = source?.keys() ?? [].values();
     let current = iterator.next();
     while (!current.done && scannedCount < scanLimit) {
-      // Yield only when another batch exists; completed pages keep their revision.
-      if (scannedCount > 0) {
+      // Cheap pages finish atomically even while other sessions are busy. Expensive
+      // scans share the event loop without charging time queued behind other work.
+      if (scannedCount > 0 && performance.now() - workStartedAt >= TASK_PAGE_YIELD_INTERVAL_MS) {
         await yieldToEventLoop();
+        workStartedAt = performance.now();
         // A carried revision cannot recover; skip unrelated reads once it is stale.
         // Cursorless scans still finish their attempt before retrying.
         if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {
@@ -207,7 +218,9 @@ export async function listTaskRecordPage(params: {
         }
       }
       const batch: TaskRecord[] = [];
-      while (!current.done && batch.length < 32 && scannedCount < scanLimit) {
+      // A registry reload can leave this iterator with IDs whose records no longer exist.
+      const batchEnd = Math.min(scannedCount + 32, scanLimit);
+      while (!current.done && scannedCount < batchEnd) {
         const task = tasks.get(current.value);
         if (task) {
           batch.push(task);
@@ -364,7 +377,7 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 
-export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskRecord[]> {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
@@ -374,7 +387,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (store.listTasksForOwnerKey) {
     try {
       const merged = new Map<string, TaskRecord>();
-      for (const task of store.listTasksForOwnerKey(key)) {
+      for (const task of await store.listTasksForOwnerKey(key)) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]
@@ -431,32 +444,37 @@ export function resolveTaskForLookupToken(token: string): TaskRecord | undefined
 }
 
 export function deleteTaskRecordById(taskId: string): boolean {
-  ensureTaskRegistryReady();
-  const current = tasks.get(taskId);
-  if (!current) {
-    return false;
-  }
-  ensureLinkedTaskFlowRegistryReady(current);
-  // Persist the delete before mutating memory, as a single atomic store
-  // operation. If persistence fails, leave the in-memory record intact and
-  // report that no delete was applied.
-  if (!tryPersistTaskDelete(taskId)) {
-    return false;
-  }
-  deleteOwnerKeyIndex(taskId, current);
-  deleteParentFlowIdIndex(taskId, current);
-  deleteRelatedSessionKeyIndex(taskId, current);
-  clearTaskActivity(taskId);
-  tasks.delete(taskId);
-  bumpTaskRegistryRevision();
-  taskDeliveryStates.delete(taskId);
-  rebuildRunIdIndex();
-  emitTaskRegistryObserverEvent(() => ({
-    kind: "deleted",
-    taskId: current.taskId,
-    previous: cloneTaskRecordForObserver(current),
-  }));
-  return true;
+  return withTaskRegistryMutation(
+    () => {
+      ensureTaskRegistryReady();
+      const current = tasks.get(taskId);
+      if (!current) {
+        return false;
+      }
+      ensureLinkedTaskFlowRegistryReady(current);
+      // Persist the delete before mutating memory, as a single atomic store
+      // operation. If persistence fails, leave the in-memory record intact and
+      // report that no delete was applied.
+      if (!tryPersistTaskDelete(taskId)) {
+        return false;
+      }
+      deleteOwnerKeyIndex(taskId, current);
+      deleteParentFlowIdIndex(taskId, current);
+      deleteRelatedSessionKeyIndex(taskId, current);
+      clearTaskActivity(taskId);
+      tasks.delete(taskId);
+      bumpTaskRegistryRevision();
+      taskDeliveryStates.delete(taskId);
+      rebuildRunIdIndex();
+      emitTaskRegistryObserverEvent(() => ({
+        kind: "deleted",
+        taskId: current.taskId,
+        previous: cloneTaskRecordForObserver(current),
+      }));
+      return true;
+    },
+    () => false,
+  );
 }
 
 export function resetTaskRegistryForTests() {

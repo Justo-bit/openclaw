@@ -10,11 +10,9 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
-import {
-  resolveRegisteredSqliteTranscriptArchiveName,
-  runSqliteTranscriptArchivePublishWorker,
-  type MaterializedSessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { runSqliteTranscriptArchivePublishWorker } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
@@ -40,7 +38,7 @@ export function persistSessionTranscriptArchive(
   }
   ensureSessionTranscriptArchiveSchema(database.db);
   const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(
+  const inserted = executeSqliteQuerySync(
     database.db,
     db
       .insertInto("session_transcript_archives")
@@ -60,6 +58,9 @@ export function persistSessionTranscriptArchive(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
   );
+  if (inserted.numAffectedRows === 1n) {
+    return;
+  }
   const persisted = executeSqliteQueryTakeFirstSync(
     database.db,
     db

@@ -11,6 +11,7 @@ import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -22,7 +23,7 @@ import {
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
-  readPendingSendFailure,
+  readPendingSendStatus,
   resetChatThreadState,
   setExpansionState,
   syncToolCardExpansionState,
@@ -32,6 +33,14 @@ import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
+function messageEntry(key: string, message: unknown): MessageGroup["messages"][number] {
+  const [group] = groupMessages([{ kind: "message", key, message }]);
+  if (group?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
+  return expectDefined(group.messages[0], "Prepared message entry");
+}
+
 describe("assistantGroupCanOwnActiveRunStatus", () => {
   const group = (message: Record<string, unknown>): MessageGroup => ({
     kind: "group",
@@ -39,7 +48,7 @@ describe("assistantGroupCanOwnActiveRunStatus", () => {
     role: "assistant",
     timestamp: 1,
     isStreaming: false,
-    messages: [{ key: "message:1", message }],
+    messages: [messageEntry("message:1", message)],
     visibleContent: "text",
   });
 
@@ -176,8 +185,10 @@ it("invalidates cached custody notices when workspace sync ownership changes", (
   });
   const active = buildCachedChatItems(input);
 
-  expect(waiting.some((item) => item.kind === "notice")).toBe(true);
-  expect(active.some((item) => item.kind === "notice")).toBe(false);
+  expect(waiting.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+    "Received · waiting for workspace sync",
+  ]);
+  expect(active.filter((item) => item.kind === "notice")).toEqual([]);
 });
 
 function queuedSend(
@@ -1450,7 +1461,7 @@ describe("coalesceActivityRuns", () => {
       kind: "group",
       key: "group:assistant:reply",
       role: "assistant",
-      messages: [{ key: "assistant:reply", message: assistantMessage("Done.", 3_500) }],
+      messages: [messageEntry("assistant:reply", assistantMessage("Done.", 3_500))],
       visibleContent: "text",
       timestamp: 3_500,
       isStreaming: false,
@@ -1489,9 +1500,9 @@ describe("coalesceActivityRuns", () => {
       key: `group:assistant:hb-${index}`,
       role: "assistant",
       messages: [
-        {
-          key: `hb-${index}`,
-          message: assistantMessage(
+        messageEntry(
+          `hb-${index}`,
+          assistantMessage(
             [
               {
                 type: "toolCall",
@@ -1504,7 +1515,7 @@ describe("coalesceActivityRuns", () => {
             1_000 * index,
             { runId: `hb-run-${index}` },
           ),
-        },
+        ),
       ],
       visibleContent: "none",
       timestamp: 1_000 * index,
@@ -1539,7 +1550,7 @@ describe("coalesceActivityRuns", () => {
       kind: "group",
       key: "group:user:boundary",
       role: "user",
-      messages: [{ key: "user:boundary", message: userMessage("stop", 4_000) }],
+      messages: [messageEntry("user:boundary", userMessage("stop", 4_000))],
       visibleContent: "text",
       timestamp: 4_000,
       isStreaming: false,
@@ -4274,7 +4285,9 @@ describe("buildCachedChatItems", () => {
 
     expect(
       messageGroups({
-        queue: [{ ...restored, sendAttempts: 0, sendState: "waiting-reconnect" }],
+        queue: [
+          { ...restored, sendAttempts: 0, sendSubmittedAtMs: 10, sendState: "waiting-reconnect" },
+        ],
       }),
     ).toStrictEqual([]);
     for (const sendState of ["waiting-reconnect", "sending"] as const) {
@@ -4402,7 +4415,7 @@ describe("buildCachedChatItems", () => {
           error: "Delivery diagnostic",
         },
       });
-      expect(readPendingSendFailure(message)).toEqual({
+      expect(readPendingSendStatus(message)).toEqual({
         id: "attempted-send-1",
         state: sendState,
         error: "Delivery diagnostic",
@@ -4599,6 +4612,7 @@ describe("buildCachedChatItems", () => {
         }),
         queuedSend("queued-future-turn", "Later request", 2_001, "waiting-reconnect", {
           sendSubmittedAtMs: 2_001,
+          sendAttempts: 1,
         }),
       ],
       toolMessages: [mcpAppResult("mcp-app-queued", "call-queued", 2_002)],
@@ -5036,10 +5050,7 @@ describe("tool expansion state", () => {
       key: "assistant-stable",
       role: "assistant",
       messages: [
-        {
-          key: "assistant-stable",
-          message: { role: "assistant", content: "No tools in this row" },
-        },
+        messageEntry("assistant-stable", { role: "assistant", content: "No tools in this row" }),
       ],
       visibleContent: "text",
       timestamp: 1,
@@ -5067,20 +5078,17 @@ describe("tool expansion state", () => {
       key: "assistant-1",
       role: "assistant",
       messages: [
-        {
-          key: "assistant-1",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "toolcall",
-                id: "call-1",
-                name: "browser.open",
-                arguments: { url: "https://example.com" },
-              },
-            ],
-          },
-        },
+        messageEntry("assistant-1", {
+          role: "assistant",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-1",
+              name: "browser.open",
+              arguments: { url: "https://example.com" },
+            },
+          ],
+        }),
       ],
       visibleContent: "none",
       timestamp: 1,
@@ -5101,14 +5109,11 @@ describe("tool expansion state", () => {
       key: "tool-name-result",
       role: "tool",
       messages: [
-        {
-          key: "tool-name-result",
-          message: {
-            role: "assistant",
-            toolName: "bash",
-            content: "Tool output",
-          },
-        },
+        messageEntry("tool-name-result", {
+          role: "assistant",
+          toolName: "bash",
+          content: "Tool output",
+        }),
       ],
       visibleContent: "text",
       timestamp: 1,
@@ -5228,13 +5233,10 @@ describe("expansion-state render dependencies", () => {
       key,
       role: "assistant",
       messages: [
-        {
-          key,
-          message: {
-            role: "assistant",
-            content: [{ type: "toolcall", id: `call-${key}`, name: "browser.open" }],
-          },
-        },
+        messageEntry(key, {
+          role: "assistant",
+          content: [{ type: "toolcall", id: `call-${key}`, name: "browser.open" }],
+        }),
       ],
       visibleContent: "none",
       timestamp: 1,
@@ -5313,13 +5315,10 @@ describe("expansion-state render dependencies", () => {
       key: "assistant-pruned",
       role: "assistant",
       messages: [
-        {
-          key: "assistant-pruned",
-          message: {
-            role: "assistant",
-            content: [{ type: "toolcall", id: "call-pruned", name: "browser.open" }],
-          },
-        },
+        messageEntry("assistant-pruned", {
+          role: "assistant",
+          content: [{ type: "toolcall", id: "call-pruned", name: "browser.open" }],
+        }),
       ],
       visibleContent: "none",
       timestamp: 1,
@@ -5377,6 +5376,26 @@ describe("user message expansion state", () => {
 });
 
 describe("thread item cache", () => {
+  it("repositions an initial placement prompt when recovery identifies its existing queue row", () => {
+    const queued = queuedSend("initial", "Original request", 10_000, "failed", {
+      sendRunId: "initial",
+      sendAttempts: 1,
+    });
+    const input = createProps({
+      messages: [assistantMessage("Gateway recovery", 2)],
+      queue: [queued],
+    });
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+    expect(roles(buildCachedChatItems({ ...input, initialTurnId: queued.id }))).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
+  });
+
   it("sender provenance refreshes reply display without changing the person", () => {
     resetChatThreadState();
     const alice = userMessage("first", 1, {

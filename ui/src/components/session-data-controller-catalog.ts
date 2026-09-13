@@ -43,6 +43,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   selectedAgentIdForSessions(): string;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
   sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sessionCatalogIdsWithoutVisibleRows(): readonly string[];
   querySelector(selectors: string): Element | null;
 }
 
@@ -64,6 +65,7 @@ export interface SessionCatalogDataOwner {
   synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
   refreshSessionCatalogs(): Promise<void>;
+  sessionCatalogIdsWithoutVisibleRows(): readonly string[];
 }
 
 function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
@@ -71,6 +73,27 @@ function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBro
     return null;
   }
   return sessionCatalogListClient(owner.context?.gateway.snapshot, owner.sessionDataHostConnected);
+}
+
+function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): void {
+  const context = owner.context;
+  if (!context) {
+    return;
+  }
+  const scope = owner.sessionCatalogLive.refreshScope;
+  void context.connectionBootstrap.run(
+    scope,
+    async () => {
+      if (
+        owner.context === context &&
+        owner.sessionCatalogLive.refreshScope === scope &&
+        owner.isSessionDataHostConnected
+      ) {
+        await owner.refreshSessionCatalogs();
+      }
+    },
+    { background: true },
+  );
 }
 
 export function resolveSessionCatalogAgentId(
@@ -133,7 +156,7 @@ export function scheduleSessionCatalogRefresh(
   });
 }
 
-export function requestSessionCatalogRefresh(
+function requestSessionCatalogRefresh(
   owner: SessionCatalogDataOwner,
   queueIfActive: boolean,
 ): void {
@@ -146,7 +169,7 @@ export function requestSessionCatalogRefresh(
       Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
     generation: owner.sessionScopeGeneration,
     queueIfActive,
-    refresh: () => void owner.refreshSessionCatalogs(),
+    refresh: () => refreshSessionCatalogsInBackground(owner),
   });
 }
 
@@ -165,7 +188,7 @@ export function updateSessionCatalogData(owner: SessionCatalogDataOwner, defer =
     scheduleSessionCatalogRefresh(owner);
     return;
   }
-  void owner.refreshSessionCatalogs();
+  refreshSessionCatalogsInBackground(owner);
 }
 
 export function applySessionCatalogPresence(
@@ -202,7 +225,7 @@ export function applySessionCatalogHostEvent(
     owner.sessionCatalogLive.schedule(
       SESSION_CATALOG_CHANGED_REFRESH_MS,
       owner.isSessionDataHostConnected,
-      () => void owner.refreshSessionCatalogs(),
+      () => refreshSessionCatalogsInBackground(owner),
     );
   }
 }
@@ -219,6 +242,7 @@ export function applySessionCatalogContinuation(
   if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
     return;
   }
+  owner.sessionCatalogLive.discoveryPages.clear();
   owner.sessionCatalogs = bindAdoptedCatalogSession(owner.sessionCatalogs, detail);
   owner.requestSessionDataUpdate();
   // Invalidate in-flight polls and load-more merges so a pre-adoption
@@ -254,7 +278,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     pageDepths: owner.sessionCatalogPageDepths,
     connected: () => owner.isSessionDataHostConnected,
     applyFinal: (catalogs, revisedCatalogIds) => {
-      owner.sessionCatalogs = catalogs;
+      owner.sessionCatalogs = owner.sessionCatalogLive.resumeDiscovery(catalogs);
       owner.sessionCatalogRefreshStatus = completePanelRefresh();
       owner.requestSessionDataUpdate();
       for (const catalogId of revisedCatalogIds) {
@@ -265,6 +289,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       }
       owner.sessionCatalogRevision += 1;
     },
+    continueRefresh: () => discoverHiddenSessionCatalogPages(owner),
     applyError: (error) => {
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
@@ -273,13 +298,59 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       );
       owner.requestSessionDataUpdate();
     },
-    refresh: () => void owner.refreshSessionCatalogs(),
+    refresh: () => refreshSessionCatalogsInBackground(owner),
   });
+}
+
+function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
+  const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
+  return owner.sessionCatalogs.flatMap((catalog) => {
+    if (!hiddenIds.has(catalog.id) || catalog.error) {
+      return [];
+    }
+    const hostIds = catalog.hosts
+      .filter((host) => host.nextCursor && !host.error)
+      .map((host) => host.hostId);
+    return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
+  });
+}
+
+async function discoverHiddenSessionCatalogPages(owner: SessionCatalogDataOwner): Promise<boolean> {
+  const pages = hiddenSessionCatalogPages(owner);
+  if (pages.length === 0) {
+    return false;
+  }
+  const generation = owner.sessionScopeGeneration;
+  const client = visibleSessionCatalogClient(owner);
+  if (!client || !owner.isSessionDataHostConnected) {
+    return false;
+  }
+  // Empty pages advance a finite sweep without becoming a visible window that
+  // every poll must replay. Once rows appear, ordinary expanded-page refresh owns them.
+  await Promise.all(
+    pages.map(({ catalogId, hostIds }) => loadMoreSessionCatalog(owner, catalogId, hostIds, true)),
+  );
+  return (
+    generation === owner.sessionScopeGeneration &&
+    client === visibleSessionCatalogClient(owner) &&
+    hiddenSessionCatalogPages(owner).length > 0
+  );
+}
+
+export function invalidateSessionCatalogs(owner: SessionCatalogDataOwner): void {
+  owner.sessionCatalogLive.discoveryPages.clear();
+  owner.sessionCatalogRevision += 1;
+  for (const { id } of owner.sessionCatalogs) {
+    owner.sessionCatalogRevisions.set(id, (owner.sessionCatalogRevisions.get(id) ?? 0) + 1);
+  }
+  requestSessionCatalogRefresh(owner, true);
 }
 
 export async function loadMoreSessionCatalog(
   owner: SessionCatalogDataOwner,
   catalogId: string,
+  hostIds?: readonly string[],
+  discovering = false,
 ): Promise<void> {
   if (owner.loadingMoreSessionCatalogIds.has(catalogId)) {
     return;
@@ -287,7 +358,9 @@ export async function loadMoreSessionCatalog(
   const catalog = owner.sessionCatalogs.find((candidate) => candidate.id === catalogId);
   const cursors = Object.fromEntries(
     (catalog?.hosts ?? []).flatMap((host) =>
-      host.nextCursor ? [[host.hostId, host.nextCursor] as const] : [],
+      host.nextCursor && (!hostIds || hostIds.includes(host.hostId))
+        ? [[host.hostId, host.nextCursor] as const]
+        : [],
     ),
   );
   if (!catalog || Object.keys(cursors).length === 0) {
@@ -319,13 +392,56 @@ export async function loadMoreSessionCatalog(
     }
     const page = result.catalogs.find((candidate) => candidate.id === catalogId);
     const current = owner.sessionCatalogs.find((candidate) => candidate.id === catalogId);
-    if (!page || !current) {
+    if (!current) {
       return;
     }
-    const merged = mergeSessionCatalogPage({ current, page, cursors });
-    for (const hostId of merged.advancedHostIds) {
+    const discoveryPages = owner.sessionCatalogLive.discoveryPages;
+    const merged = mergeSessionCatalogPage({
+      current,
+      page,
+      cursors,
+      previousCursors: new Map(
+        current.hosts.flatMap((host) => {
+          const discovery = discoveryPages.get(sessionCatalogHostKey(catalogId, host.hostId));
+          return discovery ? [[host.hostId, discovery.cursors] as const] : [];
+        }),
+      ),
+    });
+    for (const hostId of merged.repeatedHostIds) {
+      discoveryPages.delete(sessionCatalogHostKey(catalogId, hostId));
+    }
+    for (const [hostId, cursor] of Object.entries(cursors)) {
+      if (!merged.advancedHostIds.includes(hostId)) {
+        continue;
+      }
       const key = sessionCatalogHostKey(catalogId, hostId);
-      owner.sessionCatalogPageDepths.set(key, (owner.sessionCatalogPageDepths.get(key) ?? 0) + 1);
+      const discovery = discoveryPages.get(key);
+      const previous = current.hosts.find((host) => host.hostId === hostId);
+      const nextHost = merged.catalog.hosts.find((host) => host.hostId === hostId);
+      const depth = (discovery?.depth ?? owner.sessionCatalogPageDepths.get(key) ?? 0) + 1;
+      if (
+        discovering &&
+        previous?.sessions.length === 0 &&
+        nextHost?.sessions.length === 0 &&
+        !owner.sessionCatalogPageDepths.has(key)
+      ) {
+        if (nextHost.nextCursor) {
+          const seenCursors = discovery?.cursors ?? new Set<string>();
+          seenCursors.add(cursor);
+          discoveryPages.set(key, {
+            headCursor: discovery?.headCursor ?? cursor,
+            nextCursor: nextHost.nextCursor,
+            depth,
+            cursors: seenCursors,
+          });
+        } else {
+          // Renew the sweep at the next poll: membership can change behind a cursor.
+          discoveryPages.delete(key);
+        }
+      } else {
+        discoveryPages.delete(key);
+        owner.sessionCatalogPageDepths.set(key, depth);
+      }
     }
     owner.sessionCatalogs = owner.sessionCatalogs.map((candidate) =>
       candidate.id === catalogId ? merged.catalog : candidate,

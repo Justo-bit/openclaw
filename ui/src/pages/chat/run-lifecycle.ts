@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { redactToolDetail } from "../../lib/browser-redact.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -194,6 +194,9 @@ export function adoptStartedChatRun(
       requestUpdate: false,
     });
     host.chatRunError = null;
+    if (host.providerPolicyNotice?.runId !== runId) {
+      host.providerPolicyNotice = null;
+    }
   }
   host.chatRunId = runId;
   setChatRunOwner(host, runId);
@@ -212,7 +215,7 @@ export function setChatRunError(
   setChatRunOwner(state, runId);
   state.chatRunError = {
     ...(kind ? { kind } : {}),
-    summary: formatUiExternalText(summary),
+    summary: redactToolDetail(summary.trim(), { preservePaths: true }),
     ...(runId ? { runId } : {}),
   };
 }
@@ -760,6 +763,8 @@ export function reconcileChatRunFromSessionRow(
     clearChatStream: true,
     clearToolStreamForRun: true,
     publishRunStatus: options.publishRunStatus,
+    // Shared rows can finish this run before its persisted reply event arrives.
+    armLocalTerminalReconcile: Boolean(host.chatRunId && row.lastRunId === host.chatRunId),
   });
   return true;
 }

@@ -154,6 +154,37 @@ describe("agent runtime plugin registries", () => {
     );
   });
 
+  it.each([false, true])(
+    "keeps catalog registries exact with broader reusable scope=%s",
+    (broader) => {
+      const reusableRegistry = createEmptyPluginRegistry();
+      reusableRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
+      if (broader) {
+        reusableRegistry.plugins.push(createPluginRecord({ id: "memory-core" }));
+      }
+      const primaryRegistry = createEmptyPluginRegistry();
+      primaryRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
+      hoisted.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+      hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
+      hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
+        config: {},
+        pluginIds: ["catalog-provider"],
+      });
+
+      const registry = loadAgentRuntimePluginRegistryHandle({
+        config: {},
+        basePluginIds: ["catalog-provider"],
+        reusableRegistry,
+        purpose: "model-catalog",
+      });
+
+      expect(registry).toBe(broader ? primaryRegistry : reusableRegistry);
+      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(broader ? 1 : 0);
+      expect(hoisted.adoptRuntimeContextEngineRegistrations).not.toHaveBeenCalled();
+      expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses harness runtimes prepared by the lifecycle batch", () => {
     const configuredHarnessRuntimes = ["codex"];
 
@@ -192,7 +223,6 @@ describe("agent runtime plugin registries", () => {
     if (!imported) {
       expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
         expect.objectContaining({
-          activate: false,
           onlyPluginIds: ["codex", "memory-core"],
         }),
       );
@@ -402,17 +432,18 @@ describe("agent runtime plugin registries", () => {
       selections,
       metadataSnapshot,
     });
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
-      config,
-      activationSourceConfig: config,
-      env,
-      discovery: metadataSnapshot.discovery,
-      installRecords: {},
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-      workspaceDir: "/tmp/workspace",
-      runtimeOptions: { allowGatewaySubagentBinding: true },
-    });
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        activationSourceConfig: config,
+        env,
+        discovery: metadataSnapshot.discovery,
+        installRecords: {},
+        manifestRegistry: metadataSnapshot.manifestRegistry,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+      }),
+    );
   });
 
   it("loads an explicit empty handle when plugins are globally disabled", () => {
@@ -422,14 +453,15 @@ describe("agent runtime plugin registries", () => {
     };
     expect(loadAgentRuntimePluginRegistryHandle(params)).toEqual({ handle: true });
     expect(hoisted.resolveAgentRuntimePluginLoadPlan).not.toHaveBeenCalled();
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
-      activationSourceConfig: params.config,
-      config: params.config,
-      onlyPluginIds: [],
-      runtimeOptions: undefined,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: params.config,
+        config: params.config,
+        onlyPluginIds: [],
+        runtimeOptions: undefined,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("carries low-level reply policy without rebinding the loader's cached registry", async () => {
@@ -553,20 +585,21 @@ describe("agent runtime plugin registries", () => {
       selections: [],
       metadataSnapshot: snapshot,
     });
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith({
-      activate: false,
-      activationSourceConfig: config,
-      channelPluginLoadIntent: "full",
-      config,
-      discovery: snapshot.discovery,
-      env,
-      installRecords: {},
-      manifestRegistry: snapshot.manifestRegistry,
-      onlyPluginIds: ["codex", "memory-core"],
-      preferBuiltPluginArtifacts: true,
-      runtimeOptions: undefined,
-      workspaceDir: snapshot.workspaceDir,
-    });
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: config,
+        channelPluginLoadIntent: "full",
+        config,
+        discovery: snapshot.discovery,
+        env,
+        installRecords: {},
+        manifestRegistry: snapshot.manifestRegistry,
+        onlyPluginIds: ["codex", "memory-core"],
+        preferBuiltPluginArtifacts: true,
+        runtimeOptions: undefined,
+        workspaceDir: snapshot.workspaceDir,
+      }),
+    );
   });
 
   it("owns a scoped registry for direct hosts", async () => {

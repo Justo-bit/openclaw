@@ -17,10 +17,8 @@ import {
   prunePublishedSessionArchivesByRetention,
   publishSessionStateArchives,
 } from "./session-accessor.sqlite-archive-store.js";
-import {
-  materializeSessionStateDeletePlans,
-  type MaterializedSessionStateDeletePlan,
-} from "./session-accessor.sqlite-archive.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -308,11 +306,26 @@ export async function applySessionEntryLifecycleMutation(params: {
           ? [{ entry, sessionKey }]
           : [];
       });
+      const resetSources = projected.upsertedEntries.flatMap(({ resetBoundary, expectedEntry }) =>
+        resetBoundary && expectedEntry?.sessionId ? [expectedEntry.sessionId] : [],
+      );
       return {
         deletedEntries: deletedOwners,
-        ...(projected.deletePlans.length > 0
+        ...(projected.deletePlans.length > 0 || resetSources.length > 0
           ? {
               beforeCommit: async () => {
+                if (resetSources.length > 0) {
+                  const { restoreSessionColdTranscript } =
+                    await import("./session-cold-storage.js");
+                  for (const sessionId of new Set(resetSources)) {
+                    await restoreSessionColdTranscript({
+                      agentId: resolved.agentId,
+                      env: resolved.env,
+                      storePath: params.storePath,
+                      sessionId,
+                    });
+                  }
+                }
                 try {
                   materializedRemovalPlans = await materializeSessionStateDeletePlans(
                     projected.deletePlans,

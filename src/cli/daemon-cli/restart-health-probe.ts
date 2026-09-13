@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -23,7 +24,10 @@ import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { sleep } from "../../utils.js";
-import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  UnavailablePluginHealthSummary,
+} from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
 export type GatewayRestartProbeAuth = {
@@ -37,6 +41,7 @@ export type GatewayReachability = {
   gatewayBootId?: string;
   gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
+  unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
 };
@@ -52,6 +57,7 @@ export async function waitForGatewayHttpReadiness(params: {
   config?: OpenClawConfig;
   deadlineAt: number;
   delayMs: number;
+  probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
 }): Promise<GatewayHttpReadiness> {
@@ -70,7 +76,7 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/healthz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, 3_000),
+          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -79,7 +85,7 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/readyz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, 3_000),
+          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -215,6 +221,27 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
   return errors;
 }
 
+function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
+  const unavailable = asOptionalRecord(asOptionalRecord(health)?.plugins)?.unavailable;
+  if (!Array.isArray(unavailable)) {
+    return [];
+  }
+  return unavailable.flatMap((entry) => {
+    const plugin = asOptionalRecord(entry);
+    const diagnostic = asOptionalRecord(plugin?.diagnostic);
+    if (
+      typeof plugin?.id !== "string" ||
+      plugin.state !== "configured-unavailable" ||
+      diagnostic?.kind !== "plugin-verification" ||
+      typeof diagnostic.reason !== "string" ||
+      typeof diagnostic.detail !== "string"
+    ) {
+      return [];
+    }
+    return [{ id: plugin.id, reason: diagnostic.reason, detail: diagnostic.detail }];
+  });
+}
+
 export async function confirmGatewayReachable(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
@@ -223,6 +250,7 @@ export async function confirmGatewayReachable(params: {
   env?: NodeJS.ProcessEnv;
   allowDeviceIdentityRequired?: boolean;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<GatewayReachability> {
   params.signal?.throwIfAborted();
   const result: GatewayReachability = {
@@ -230,6 +258,7 @@ export async function confirmGatewayReachable(params: {
     gatewayVersion: null,
     gatewayBuildId: undefined,
     activatedPluginErrors: [],
+    unavailablePlugins: [],
     channelProbeErrors: [],
   };
   try {
@@ -239,7 +268,7 @@ export async function confirmGatewayReachable(params: {
     const auth = params.auth ?? context.auth;
     const configuredProbe =
       params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
-    const target = await configuredProbe.resolveWebSocketTarget(params.port);
+    const target = await configuredProbe.resolveWebSocketTarget(params.port, params.signal);
     if (!target) {
       return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
     }
@@ -261,7 +290,7 @@ export async function confirmGatewayReachable(params: {
       requireLocalBackendSharedAuth: authNone,
       deviceIdentity: null,
       sharedStateMode: "read-only",
-      timeoutMs: 3_000,
+      timeoutMs: params.timeoutMs ?? 3_000,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
@@ -271,6 +300,7 @@ export async function confirmGatewayReachable(params: {
     });
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
+    result.unavailablePlugins = readUnavailablePlugins(health);
     result.channelProbeErrors = readChannelProbeErrors(health);
   } catch (error) {
     params.signal?.throwIfAborted();

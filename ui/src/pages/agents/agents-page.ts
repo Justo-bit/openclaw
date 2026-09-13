@@ -924,7 +924,7 @@ class AgentsPage
   }
 
   private reloadConfig() {
-    void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
+    void this.context.runtimeConfig.discardDraft({ reloadOnly: true });
   }
 
   private clearAgentSkills(agentId: string) {
@@ -1234,6 +1234,10 @@ class AgentsPage
     `;
   }
 }
+
+export const header = true;
+export const render = (data: AgentsRouteData | undefined) =>
+  html`<openclaw-agents-page .routeData=${data}></openclaw-agents-page>`;
 
 if (!customElements.get("openclaw-agents-page")) {
   customElements.define("openclaw-agents-page", AgentsPage);

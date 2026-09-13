@@ -213,6 +213,18 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Provider request failures
+
+Anthropic-compatible HTTP failures preserve the HTTP status separately from a
+bounded, redacted response body. JSON error bodies are parsed before diagnostic
+redaction and preview truncation, so a long proxy error does not lose its status
+or upstream rejection reason merely because the console preview is short.
+Oversized or malformed bodies can still be omitted by the diagnostic redactor.
+
+Chat displays recognized request-limit facts, including the allowed and actual
+number of `cache_control` blocks, in both live failures and saved history. Raw
+proxy metadata stays in redacted diagnostics rather than the chat message.
+
 ### Targeted model transport diagnostics
 
 When debugging provider calls, use targeted environment flags instead of raising
@@ -349,6 +361,23 @@ operations lasting at least one second after they return or throw:
   callback and delivery of its settlement. It can include multiple Git commands
   and does not identify a queue holder or every predecessor.
 
+Removal also records the stages reached inside `bodyMs`:
+
+- `preparationMs`: authority and removal-claim checks, repository rebinding, and
+  worktree lock inspection or unlock.
+- `snapshotMs`: snapshot preparation and publication, including provisioned-file
+  capture and snapshot-failure cleanup.
+- `checkoutRemovalMs`: deletion admission checks and physical Git worktree
+  removal through result validation.
+- `bodyFinalizeMs`: branch deletion, prune, empty-parent cleanup, registry
+  finalization, or removal-claim cleanup after failure. This is distinct from
+  `finalizeMs`, which measures the allocation-lease wrapper's final settlement.
+
+Unreached stages are absent; a reached stage can report zero milliseconds.
+Exceptions close the active stage and include claim cleanup in `bodyFinalizeMs`.
+These fields subdivide the admitted body, not individual Git commands or CPU
+work. They use the same completion record and rate budget.
+
 Both records include `durationMs` in integer milliseconds, `callbackEntered`, and
 `outcome` (`returned` or `threw`). Removal that never enters its callback reports
 all elapsed time as `admissionMs` and omits `bodyMs` and `finalizeMs`. Git directory
@@ -402,6 +431,16 @@ integrity check; resumed validation and repair can still run on the opener.
 Correlate the process ID with the log timestamp and current process; PIDs can be
 reused after exit.
 
+`integrityGateMs` covers the initial integrity check through admission
+revalidation and resumption. When the driver measures its synchronous integrity
+and foreign-key callback, `integrityCheckSyncMs` reports that callback's elapsed
+time and `integrityOutsideCheckMs` reports the remaining gate time. The two
+integer fields partition `integrityGateMs`; the remainder includes admission,
+IPC, scheduling, and revalidation, not just a parent queue wait. These are wall
+durations, not CPU time. A reclamation Worker can report this synchronous check
+while its `admissionMode` is `async`. An asynchronous child-process check leaves
+both fields absent because its parent cannot measure the callback itself.
+
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
 emitted after Worker exit and parent admission settlement. It includes the
@@ -413,6 +452,10 @@ time or isolate a validation phase. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available; it contains no
 database path, session identifier, plan content, or raw error.
+Cold-storage operations use the same warning with `reclamationKind` set to
+`cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
+`cold-restore` (restore a transcript). Their writer warnings carry the same Worker
+identity and numbered admission fields.
 
 ### SQLite transaction timing
 
@@ -428,6 +471,18 @@ and before `COMMIT`, including any JavaScript consumer work inside that callback
 It excludes database opening and the separately timed begin and commit steps.
 These elapsed durations do not measure SQL CPU time or establish a causal link
 to a nearby request.
+
+The operation `session.reclamation.commit-settlement` identifies the parent's
+synchronous join after it authorizes a reclamation Worker to commit. Its lock
+wait is separate from the Worker's integrity scan and deletion work. This label
+also applies to cold-storage operations using that commit boundary.
+
+Hot transcript reads identify their purpose in `operation`: `session transcript
+<purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,
+`checkpoint`, `events`, `raw rows`, `storage rows`, or `match`. These fixed labels
+distinguish readers without retaining session IDs or transcript content. Nested
+reads remain part of the outer transaction's timing; older warnings use the
+generic `session transcript hot read` label.
 
 Immediate `BEGIN` warnings also include `beginAdmission`: `nativeAttempts` counts
 actual native `BEGIN IMMEDIATE` calls and `nativeMs` measures those calls;
@@ -605,7 +660,7 @@ event payloads (tool start args, partial/final result payloads, derived
 exec output, and patch summaries):
 
 - Sensitive-value redaction is always enabled.
-- `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
+- `logging.redactPatterns`: list of regex strings that replaces the default string list for log/transcript output. Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply, including when this list is copied or customized. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
 File logs use JSONL; active session transcripts live in the
 [per-agent SQLite database](/reference/database-schemas#database-layout). Matching
@@ -619,6 +674,10 @@ so stored history can correlate with live tool events. This exemption applies
 only to protocol metadata; the same values in arguments, results, or nested
 payloads still pass through redaction.
 
+In the OpenClaw harness, finalized tool-result text is masked after middleware,
+before entering live model context. This also covers exec output and tool errors;
+it preserves media bytes and the original arguments used to execute tools.
+Redaction happens when the result is added, keeping later prompt replay stable.
 Model-visible tool-result text uses narrower assignment matching so source code
 remains intact. Registered secrets and explicit credential forms, including
 structured fields, authorization headers, URL credentials, and known token

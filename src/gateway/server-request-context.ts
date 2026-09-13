@@ -61,6 +61,7 @@ type GatewayRequestContextRuntime = Pick<
   | "nodeRegistry"
   | "workerEnvironmentService"
   | "hostDesktopService"
+  | "gatewayComputerService"
   | "githubPublicationService"
   | "validateAgentRuntimeApprovalAuthority"
   | "terminalSessions"
@@ -135,7 +136,7 @@ type GatewayRequestContextRuntime = Pick<
     readinessEventLoopHealth: Pick<GatewayCoreRuntime["readinessEventLoopHealth"], "snapshot">;
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
-      "notifyPluginMetadataChanged" | "getConfigReloaderHotReloadStatus"
+      "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
     >;
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
@@ -250,15 +251,15 @@ export function createGatewayRequestContext(
         ? []
         : (runtimeState.configReloader.getDeferredChannelReloads?.() ?? []),
     getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
-    gatewayTlsFingerprint: runtime.gatewayTls.enabled
-      ? runtime.gatewayTls.fingerprintSha256
-      : undefined,
+    get gatewayTlsFingerprint() {
+      return runtime.gatewayTls.enabled ? runtime.gatewayTls.fingerprintSha256 : undefined;
+    },
     controlUiSessionPullRequests: runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: runtimeState.sessionViewerPresence,
     sessionCompanion: runtime.sessionCompanion,
     sessionObserver,
     mentionInbox: runtime.mentionInbox,
-    notifyPluginMetadataChanged: runtime.kernel.notifyPluginMetadataChanged,
+    applyPluginLifecycleChange: runtime.kernel.applyPluginLifecycleChange,
     getMcpAppSandboxPort: runtime.transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: runtime.transportBridge.ensureSandboxHostPort,
     get portalService() {
@@ -474,6 +475,9 @@ export function createGatewayRequestContext(
       ? { workerEnvironmentService: runtime.workerEnvironmentService }
       : {}),
     ...(runtime.hostDesktopService ? { hostDesktopService: runtime.hostDesktopService } : {}),
+    ...(runtime.gatewayComputerService
+      ? { gatewayComputerService: runtime.gatewayComputerService }
+      : {}),
     ...(workerSessionPlacementService ? { workerSessionPlacementService } : {}),
     ...(workerPlacementDiskSpaceReader ? { workerPlacementDiskSpaceReader } : {}),
     ...(workerPlacementRunnerAvailabilityReader ? { workerPlacementRunnerAvailabilityReader } : {}),

@@ -34,6 +34,7 @@ import "./chat-clawhub-card.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -91,11 +92,15 @@ function renderInlineToolCards(
   opts: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
+    toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
   },
 ) {
   return html`
     <div class="chat-tools-inline">
       ${toolCards.map((card, index) => {
+        if (opts.toolCardOverrides?.has(card)) {
+          return opts.toolCardOverrides.get(card);
+        }
         const disclosureId = `${opts.messageKey}:toolcard:${index}`;
         const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
         return renderToolCard(card, {
@@ -224,6 +229,7 @@ export function renderGroupedMessage(
     showReasoning: boolean;
     showToolCalls?: boolean;
     runActive?: boolean;
+    asyncQuestions?: AsyncQuestionPresentation;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -233,6 +239,7 @@ export function renderGroupedMessage(
     messageActions?: MessageActionDetails | null;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
+    toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
     onRequestUpdate?: () => void;
     canvasPluginSurfaceUrl?: string | null;
     resourceBasePath?: string;
@@ -263,6 +270,7 @@ export function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
+  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
@@ -348,6 +356,7 @@ export function renderGroupedMessage(
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   if (
     !markdown &&
+    !asyncQuestions &&
     !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
@@ -409,7 +418,10 @@ export function renderGroupedMessage(
     toolMessageLabel,
   );
   const toolMessageIcon = singleToolDisplay
-    ? renderToolIcon(singleToolDisplay.icon, opts.pluginToolIcons?.get(singleToolDisplay.name))
+    ? renderToolIcon(singleToolDisplay.icon, {
+        toolName: singleToolDisplay.name,
+        pluginToolIcons: opts.pluginToolIcons,
+      })
     : icons.zap;
   const assistantViewContent =
     sourceRole === "assistant" && assistantViewBlocks.length > 0
@@ -457,19 +469,31 @@ export function renderGroupedMessage(
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
 
+  if (onlyToolCards && toolCards.every((card) => opts.toolCardOverrides?.get(card) === nothing)) {
+    return nothing;
+  }
+
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   const renderText = () =>
-    jsonResult
-      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
-      : bodyMarkdown
-        ? renderMessageMarkdown(
-            bodyMarkdown,
-            messageKey,
-            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-            markdownRenderOptions,
-            duplicateSuffix,
+    asyncQuestions
+      ? html`<openclaw-chat-async-question
+          .questions=${asyncQuestions}
+          .presentation=${opts.asyncQuestions}
+        ></openclaw-chat-async-question>`
+      : jsonResult
+        ? renderMessageJson(
+            jsonResult,
+            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
           )
-        : nothing;
+        : bodyMarkdown
+          ? renderMessageMarkdown(
+              bodyMarkdown,
+              messageKey,
+              { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+              markdownRenderOptions,
+              duplicateSuffix,
+            )
+          : nothing;
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`

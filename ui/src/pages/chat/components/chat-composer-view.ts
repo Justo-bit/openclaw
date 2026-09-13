@@ -15,6 +15,7 @@ import { insertComposerDictation } from "../composer-dictation.ts";
 import {
   handleChatAttachmentPaste,
   renderAttachmentPreview,
+  renderAttachmentReadStatus,
   renderChatAttachmentInputs,
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
@@ -293,10 +294,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     : nothing;
   const queue = renderChatQueue({
     queue: props.queue,
+    displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
-    onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-    onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+    onQueueRetry:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueRetry : undefined,
+    onQueueSteer:
+      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueSteer : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
@@ -384,6 +388,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               }
               <div class="agent-chat__composer-lede">
                 ${goalComposer.render()} ${renderAttachmentPreview(props)}
+                ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderSelectedHumanMentions(visibleDraft, props.mentions, () => {
                   commitComposerDraft(props, props.getDraft?.() ?? props.draft, []);
                   requestUpdate();
@@ -494,6 +499,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @pointerup=${handleSelect}
                     @compositionstart=${(event: CompositionEvent) => {
                       state.mentionMenu.close();
+                      state.editRevision += 1;
                       state.composerComposing = true;
                       state.composingDraft = {
                         key: draftKey,

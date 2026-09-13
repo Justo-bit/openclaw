@@ -2,7 +2,6 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
@@ -42,6 +41,7 @@ import {
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
@@ -374,17 +374,6 @@ function handleSessionsChangedEvent(
   if (resetsSelectedSession || changesBranchTopology) {
     retirePullRequestRefreshes(state);
   }
-  if (
-    matchesChat &&
-    state.client &&
-    (resetsSession || source?.reason === "command-metadata" || source?.reason === "patch")
-  ) {
-    // Selection commands and model patches can change the persisted profile without changing credentials.
-    invalidateChatMetadataStore(state.client, {
-      agentId: resolveChatAgentId(state) ?? undefined,
-      sessionKey: state.sessionKey,
-    });
-  }
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
@@ -523,6 +512,10 @@ export function handlePageGatewayEvent(
   event: GatewayEventFrame,
   isPresented: ChatPanePresentation = () => true,
 ): void {
+  if (event.event === "models.snapshot") {
+    applyChatModelCatalogSnapshot(state);
+    return;
+  }
   if (event.event === "session.approval") {
     const payload = asNullableRecord(event.payload);
     if (!payload || typeof payload.sessionKey !== "string") {

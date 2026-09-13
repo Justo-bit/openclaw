@@ -17,7 +17,7 @@ import {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
-type InstallRootTransitionFixture = {
+export type InstallRootTransitionFixture = {
   root: string;
   run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
@@ -232,6 +232,9 @@ export function registerRestartOutcomeTests(
       "child" | "health" | "configSnapshot" | "capability"
     > & {
       restart: Mock<() => Promise<{ outcome: "completed" }>>;
+      terminateStale: Mock<
+        typeof import("../../infra/restart-stale-pids.js").terminateStaleGatewayPids
+      >;
       writeJson: Mock;
     };
   },
@@ -324,6 +327,25 @@ export function registerRestartOutcomeTests(
         }),
       ).toBe(expected);
       expect(mocks.child).toHaveBeenCalledOnce();
+      expect(mocks.child.mock.calls[0]?.[0]).toEqual(
+        expect.arrayContaining([
+          path.join(root, "dist", "index.js"),
+          "gateway",
+          "restart",
+          "--json",
+        ]),
+      );
+      if (scenario === "repair retry health") {
+        expect(mocks.terminateStale).toHaveBeenCalledExactlyOnceWith(
+          [4242],
+          expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
+        );
+        expect(mocks.restart).toHaveBeenCalledOnce();
+        expect(mocks.health.mock.lastCall?.[0]).toMatchObject({
+          requireRunningService: true,
+          requirePluginHealth: false,
+        });
+      }
     },
   );
 

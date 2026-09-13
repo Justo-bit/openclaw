@@ -17,14 +17,28 @@ The policy layers that decide which tools a run may call: `tools.profile`, tool 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                                                                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
+| Profile     | Includes                                                                                                                                                                                                                                                                         |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (update only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
+| `full`      | No restriction (same as unset)                                                                                                                                                                                                                                                   |
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+
+The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
+`update.run` action. This lets owners request an OpenClaw update through the
+existing tool without granting configuration reads. Updates use the same Gateway
+handler as `/update` and the Control UI. External-chat updates require current
+owner authorization and `commands.restart`; Control UI updates retain their
+operator authorization.
+
+The `full` profile and an unset profile retain the tool's configuration-read
+actions. In a limited profile, explicitly add `gateway` to `tools.alsoAllow` to
+enable `config.get` and `config.schema.lookup`. If a provider-specific profile is
+also limited, its `alsoAllow` must grant `gateway` too. Existing global, agent,
+provider, conversation, sandbox, and runtime allow/deny restrictions still decide
+whether the tool is available. Subagent and non-owner restrictions still apply.
 
 ## Tool groups
 
@@ -40,13 +54,15 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
-| `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                |
+| `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`                                                                                                                                                                         |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
 `suggest_task` lets an agent propose confirmed follow-up work without starting it. The working directory must be absolute, but does not need to be a Git checkout. Local debugging and non-code tasks are supported. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. **Start in a new session** opens a normal session in that directory and sends the full task prompt. The new session is instructed to ask the user before creating or switching to a worktree if isolation becomes necessary. There is no up-front worktree or execution-destination choice. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `suggest_task`.
 
 The tools are offered only when the initiating operator surface can receive and action Gateway task-suggestion events. Channel sessions and local/embedded TUI sessions do not receive them; channel transports need a portable typed task action before they can safely expose this flow. Suggestions are process-local and disappear when the Gateway restarts. Both tools remain in the `coding` profile and `group:sessions`, so normal `tools.allow` and `tools.deny` policy configures them automatically when the surface supports them.
+
+`pdf` belongs to both `group:media` and `group:openclaw`. Group denies also cover PDF and override an explicit `pdf` allow entry. If an existing configuration should keep PDF access, remove or narrow the conflicting group deny. Group grants do not bypass [PDF model and authentication requirements](/tools/pdf).
 
 ## MCP and plugin tools inside sandbox tool policy
 

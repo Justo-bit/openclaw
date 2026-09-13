@@ -104,7 +104,9 @@ export async function finalizePluginUpdateSummary(params: {
           beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     } catch (error) {
-      await settlePluginInstallTransactions(params.transactionState.transactions, "rollback");
+      await settlePluginInstallTransactions(params.transactionState.transactions, "rollback", {
+        error,
+      });
       throw error;
     }
   }

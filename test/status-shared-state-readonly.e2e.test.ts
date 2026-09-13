@@ -148,7 +148,7 @@ describe("status shared-state ownership", () => {
 
       const logs = instance.logs();
       expect(logs).toContain("Secret owner capability:tts is configured-unavailable");
-      expect(logs).toContain(`Plugin \"${DEGRADED_PLUGIN_ID}\"`);
+      expect(logs).toContain(`Plugin "${DEGRADED_PLUGIN_ID}"`);
       expect(logs).not.toContain("STATUS_E2E_MISSING_SECRET");
     } finally {
       await instance.cleanup();

@@ -59,6 +59,7 @@ import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
+  parseReadableSqliteSessionEntryRows,
   readExactSessionEntryJson,
   readExactSessionEntryRow,
   readExactSessionEntryRowValidated,
@@ -142,7 +143,7 @@ export function readUnchangedLifecycleTargetSnapshot(
 }
 
 export function resolveLifecyclePrimaryEntry(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   target: { canonicalKey: string; storeKeys: string[] },
   options: { allowCanonicalMove?: boolean } = {},
 ): SqliteLifecycleTargetSnapshot[number] | undefined {
@@ -175,7 +176,7 @@ export function resolveLifecyclePrimaryEntry(
 }
 
 export function readLifecycleTargetSnapshot(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   target: { canonicalKey: string; storeKeys: string[] },
   options: { allowCanonicalMove?: boolean } = {},
 ): SqliteLifecycleTargetSnapshot {
@@ -606,7 +607,11 @@ export function writeSessionEntry(
       .values(sessionRow)
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
-          session_key: sessionKey,
+          // Logical nodes can share a physical window. Only creation or a
+          // generation change claims it; metadata updates retain its owner.
+          ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+            ? {}
+            : { session_key: sessionKey }),
           previous_session_id: sessionRow.previous_session_id,
           reason: sessionRow.reason,
           session_scope: sessionRow.session_scope,

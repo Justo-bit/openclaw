@@ -17,7 +17,7 @@ import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-ca
 export {
   isPendingSendMessage,
   persistedMessageEntryId,
-  readPendingSendFailure,
+  readPendingSendStatus,
 } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
@@ -87,7 +87,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount
+        entry.duplicateCount === candidate.duplicateCount &&
+        entry.hasVisibleContent === candidate.hasVisibleContent
       );
     })
   );
@@ -263,6 +264,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.initialTurnId === next.initialTurnId &&
     previous.pendingInputs === next.pendingInputs &&
     previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
     previous.workerSetupPending === next.workerSetupPending &&

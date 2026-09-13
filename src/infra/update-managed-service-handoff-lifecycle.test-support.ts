@@ -39,6 +39,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
   recoveryExitCode?: number;
+  recoveryTimeoutMs?: number;
   recoveryChecksServiceIdentity?: true;
   recoveryHang?: boolean;
   recoveryClockAdvanceMs?: number;
@@ -65,6 +66,7 @@ export type ManagedServiceCommandTiming = {
 export type ManagedServiceManagerBoundaryResult = {
   helperExitCode?: number | null;
   repairEffects?: {
+    packagedReadOnly: boolean;
     firstSpawn: boolean;
     secondSpawn: boolean;
     firstExec: boolean;
@@ -140,6 +142,49 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(sentinel).toBeNull();
   });
 
+  itUnix("accepts a failed unit that retained the parked generation after activation", async () => {
+    // A Gateway main process that exits non-zero during KillMode=mixed stop settles
+    // the unit into ActiveState=failed with the parked identity retained; the exact
+    // parked unit is still verified, so activation must proceed.
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+      updaterExitCode: 0,
+      updaterResult: { status: "ok", mode: "npm" },
+    });
+
+    expect(commands.map((command) => command.split(" ")[1])).toEqual(["show", "stop", "show"]);
+    expect(state).toMatchObject({ parked: true, postExitShows: 1, stopCompleted: true });
+    expect(sentinel).toBeNull();
+  });
+
+  itUnix("restores a failed unit that retained the parked generation", async () => {
+    const { commands, sentinel, state } = await runManagedServiceManagerBoundary("systemd", {
+      cancelAfterPark: true,
+      systemdPostExitStates: [
+        { activeState: "failed", generation: "parked", invocation: "parked", mainPid: "none" },
+      ],
+    });
+    const verbs = commands.map((command) =>
+      command.split(" ").find((part) => ["show", "stop", "reset-failed", "start"].includes(part)),
+    );
+
+    expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
+    expect(state).toMatchObject({ parked: true, restored: true });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: {
+          reason: "managed-service-handoff-cancelled",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+          ]),
+        },
+      },
+    });
+  });
+
   itUnix.each([
     [
       "an inactive replacement generation",
@@ -161,7 +206,15 @@ export function registerManagedSystemdHandoffConvergenceTests(
     ["a replacement main PID", { activeState: "deactivating", mainPid: "replacement" }],
     ["an active service", { activeState: "active", mainPid: "replacement" }],
     ["a restarting service", { activeState: "activating", mainPid: "none" }],
-    ["a failed service", { activeState: "failed", mainPid: "none" }],
+    [
+      "a failed service with a replacement generation",
+      {
+        activeState: "failed",
+        generation: "replacement",
+        invocation: "replacement",
+        mainPid: "none",
+      },
+    ],
     ["an inactive service retaining a main PID", { activeState: "inactive", mainPid: "parent" }],
     ["a replaced service unit", { activeState: "inactive", id: "replacement.service" }],
     ["an unloaded service unit", { activeState: "inactive", loadState: "not-found" }],
@@ -585,13 +638,17 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  return actualSetTimeout(callback, delay, ...args);",
     "};",
     "children.spawn = (command, args, options) => {",
+    "  let timedOut = false;",
     '  if (command === "launchctl") {',
     "    const timeoutMs = options.timeout;",
     "    const startedAtMs = Date.now();",
     `    fs.appendFileSync(${JSON.stringify(params.commandTimingsPath)}, JSON.stringify({ action: args[0], startedAtMs, timeoutMs }) + "\\n");`,
     `    elapsed += Math.min(${params.clockEachCommandMs}, timeoutMs);`,
+    `    timedOut = ${params.clockEachCommandMs} > timeoutMs;`,
     "  }",
-    "  const child = actualSpawn(command, args, options);",
+    // Expired simulated work must not execute the manager's completed side effect.
+    '  const child = timedOut ? actualSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options) : actualSpawn(command, args, options);',
+    '  if (timedOut) child.once("spawn", () => child.kill("SIGKILL"));',
     // Advance only when the exact guarded restart closes, before the helper resumes.
     `  if (command === ${JSON.stringify(params.recoveryCommandArgv[0])} && (args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))} || JSON.stringify(args.slice(-${params.recoveryCommandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv.slice(1)))})) {`,
     `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,

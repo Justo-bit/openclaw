@@ -1,4 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
+import { hasOAuthIdentity } from "./auth-profiles/oauth-shared.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
@@ -21,6 +25,68 @@ export type PreparedModelRuntimeAuthScope = Readonly<{
   profileIds?: readonly string[];
 }>;
 
+/** Inventory follows identified accounts; credential use still follows the current auth owner. */
+export function hasSamePreparedModelCatalogAuth(
+  previous: Pick<PreparedModelCatalogAuth, "authStore" | "credentials"> | undefined,
+  next: Pick<PreparedModelCatalogAuth, "authStore" | "credentials">,
+  includesProvider: (provider: string) => boolean = () => true,
+): boolean {
+  if (!previous?.credentials || !next.credentials) {
+    return false;
+  }
+  const identity = (authStore: AuthProfileStore, credentials: Readonly<AuthStorageData>) => {
+    const profiles = Object.entries(authStore.profiles).filter(([, profile]) =>
+      includesProvider(profile.provider),
+    );
+    const identifiedOAuth = profiles.filter(
+      ([, profile]) =>
+        profile.type === "oauth" && hasOAuthIdentity(profile) && !isOAuthRefreshFence(profile),
+    );
+    return {
+      profiles: Object.fromEntries(
+        profiles.map(([id, profile]) => {
+          if (profile.type !== "oauth" || !identifiedOAuth.some(([key]) => key === id)) {
+            return [id, profile];
+          }
+          const {
+            access: _access,
+            refresh: _refresh,
+            expires: _expires,
+            idToken: _idToken,
+            ...account
+          } = profile;
+          return [id, account];
+        }),
+      ),
+      credentials: Object.fromEntries(
+        Object.entries(credentials)
+          .filter(([provider]) => includesProvider(provider))
+          .map(([provider, credential]) => {
+            if (credential.type !== "oauth") {
+              return [provider, credential];
+            }
+            const profileIds = identifiedOAuth
+              .flatMap(([id, profile]) =>
+                profile.type === "oauth" &&
+                normalizeProviderId(profile.provider) === normalizeProviderId(provider) &&
+                profile.access === credential.access &&
+                profile.refresh === credential.refresh &&
+                profile.expires === credential.expires
+                  ? [id]
+                  : [],
+              )
+              .toSorted();
+            return [provider, profileIds.length ? { profileIds } : credential];
+          }),
+      ),
+    };
+  };
+  return isDeepStrictEqual(
+    identity(previous.authStore, previous.credentials),
+    identity(next.authStore, next.credentials),
+  );
+}
+
 /** Private auth facts owned by an immutable prepared model generation. */
 const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
 const authLabelsBySnapshot = new WeakMap<object, ModelCatalogAuthLabels>();
@@ -29,7 +95,13 @@ const authLoaderBySnapshot = new WeakMap<
   object,
   (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>
 >();
-const authByFullCatalog = new WeakMap<object, PreparedModelCatalogAuth>();
+const authByFullCatalog = new WeakMap<
+  object,
+  {
+    auth: PreparedModelCatalogAuth;
+    readUsage?: (store: AuthProfileStore) => AuthProfileStore;
+  }
+>();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function setPreparedModelRuntimeAuthStore(
@@ -61,12 +133,28 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
 export function setPreparedModelFullCatalogAuth(
   snapshot: object,
   auth: PreparedModelCatalogAuth,
+  readUsage?: (store: AuthProfileStore) => AuthProfileStore,
 ): void {
-  authByFullCatalog.set(snapshot, auth);
+  authByFullCatalog.set(snapshot, {
+    auth,
+    readUsage: readUsage ?? authByFullCatalog.get(snapshot)?.readUsage,
+  });
 }
 
 export function getPreparedModelFullCatalogAuth(snapshot: object) {
-  return authByFullCatalog.get(snapshot);
+  const binding = authByFullCatalog.get(snapshot);
+  if (!binding) {
+    return undefined;
+  }
+  const authStore = binding.readUsage?.(binding.auth.authStore) ?? binding.auth.authStore;
+  return authStore === binding.auth.authStore ? binding.auth : { ...binding.auth, authStore };
+}
+
+export function copyPreparedModelFullCatalogAuth(source: object, target: object): void {
+  const binding = authByFullCatalog.get(source);
+  if (binding) {
+    authByFullCatalog.set(target, binding);
+  }
 }
 
 export function setPreparedModelRuntimeAuthLoader(

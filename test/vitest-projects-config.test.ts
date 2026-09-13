@@ -1,5 +1,7 @@
 // Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
+import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -30,6 +32,9 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.extension-database-workers.config.ts";
+import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
+import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
@@ -37,6 +42,7 @@ import {
   gatewayMethodsIsolatedTestFiles,
   gatewayServerIsolatedTestFiles,
 } from "./vitest/vitest.gateway-server-paths.mjs";
+import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
@@ -58,7 +64,9 @@ const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
   "server-methods/chat.reset-visible-yield.test.ts",
+  "server-methods/health.owner-routing.test.ts",
   "server-methods/system-agent-setup-control-ui.test.ts",
+  "server-methods/users-preferences.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
 ];
@@ -123,13 +131,14 @@ describe("projects vitest config", () => {
     expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
   });
 
-  it("keeps module-mocking Gateway tests isolated in every aggregate", () => {
+  it("keeps Gateway tests needing native process state or module isolation in every aggregate", () => {
     const methodsIsolatedProject = "test/vitest/vitest.gateway-methods-isolated.config.ts";
     const serverIsolatedProject = "test/vitest/vitest.gateway-server-isolated.config.ts";
     const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
     const methodsConfig = requireTestConfig(createGatewayMethodsVitestConfig({}));
     const methodsIsolatedConfig = requireTestConfig(createGatewayMethodsIsolatedVitestConfig({}));
     const serverIsolatedConfig = requireTestConfig(createGatewayServerIsolatedVitestConfig({}));
+    const serverConfig = requireTestConfig(createGatewayServerVitestConfig({}));
     const gatewayFallback = requireTestConfig(createGatewayVitestConfig());
 
     expect(rootVitestProjects).toContain(methodsIsolatedProject);
@@ -137,22 +146,48 @@ describe("projects vitest config", () => {
     expect(agenticShard?.projects).toContain(methodsIsolatedProject);
     expect(agenticShard?.projects).toContain(serverIsolatedProject);
     expect(methodsIsolatedConfig.isolate).toBe(true);
+    expect(methodsIsolatedConfig.pool).toBe("forks");
     expect(normalizeConfigPath(methodsIsolatedConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
+    expect(serverConfig.pool).toBe("forks");
+    expect(serverConfig.isolate).toBe(false);
+    expect(serverConfig.fileParallelism).toBe(false);
     expect(serverIsolatedConfig.isolate).toBe(true);
     expect(serverIsolatedConfig.runner).toBeUndefined();
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
-    expect(methodsConfig.exclude).toContain("server-methods/agent.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/chat.reset-visible-yield.test.ts");
-    expect(methodsConfig.exclude).toContain("server-methods/system-agent-setup-control-ui.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/agent.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
-    expect(gatewayFallback.exclude).toContain("server-methods/chat.reset-visible-yield.test.ts");
-    expect(gatewayFallback.exclude).toContain(
-      "server-methods/system-agent-setup-control-ui.test.ts",
+    const overrideFixture = "src/gateway/server-plugin-subagent-runtime.overrides.test.ts";
+    expect(serverIsolatedConfig.include).toContain(overrideFixture);
+    expect(serverConfig.exclude).toContain("server-plugin-subagent-runtime.overrides.test.ts");
+    expect(gatewayFallback.exclude).toContain(overrideFixture);
+    expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/health.owner-routing.test.ts",
     );
-    expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/board.runtime-boundaries.test.ts",
+    );
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/chat.reset-visible-yield.test.ts",
+    );
+    expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/health.owner-routing.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/board.runtime-boundaries.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/chat.reset-visible-yield.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+    );
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server.sessions.compaction-read-errors.test.ts",
+    );
   });
 
   it("limits isolated Gateway include files to each project's owned tests", () => {
@@ -389,6 +424,68 @@ describe("projects vitest config", () => {
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    const session = requireTestConfig(contractChannelSessionConfig);
+    expect(session.pool).toBe("forks");
+    expect(session.isolate).toBe(testConfig.isolate);
+    expect(session.runner).toBe(testConfig.runner);
+    expect(session.setupFiles).toEqual(testConfig.setupFiles);
+    expect(session.maxWorkers).toBe(testConfig.maxWorkers);
+  });
+
+  it.each([
+    undefined,
+    "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+    "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
+    "src/tasks/task-registry.test.ts",
+  ])("preserves public channel contract command coverage with include filter %s", (filter) => {
+    const includeFile = filter
+      ? patternFiles.writePatternFile("command-include.json", [filter])
+      : undefined;
+    const result = spawnNodeEvalSync(
+      `
+        import assert from "node:assert/strict";
+        import { globSync, readFileSync } from "node:fs";
+        import path from "node:path";
+        import { parseCLI, resolveConfig } from "vitest/node";
+        import { createVitestRunSpecs } from "./scripts/test-projects.test-support.mts";
+        const command = JSON.parse(readFileSync("package.json", "utf8")).scripts["test:contracts:channels"];
+        const argv = command.split(/\\s+/u);
+        const wrapper = argv.indexOf("scripts/test-projects.mts");
+        assert.notEqual(wrapper, -1);
+        const specs = createVitestRunSpecs(argv.slice(wrapper + 1));
+        const matches = [];
+        for (const spec of specs) {
+          assert.equal(spec.includeFilePath, null);
+          const { options } = parseCLI(["vitest", ...spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("run"))]);
+          const resolved = await resolveConfig(options);
+          for (const { projectConfig } of resolved.test.resolvedProjects) {
+            for (const file of globSync(projectConfig.include, { cwd: projectConfig.dir, exclude: projectConfig.exclude })) {
+              const relative = path.relative(process.cwd(), path.resolve(projectConfig.dir, file)).replaceAll("\\\\", "/");
+              matches.push(relative);
+              if (relative.endsWith("/session-binding.registry-backed.contract.test.ts")) {
+                assert.equal(projectConfig.pool, "forks");
+                assert.equal(projectConfig.maxWorkers, 1);
+              }
+            }
+          }
+        }
+        const includeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+        const filters = includeFile ? JSON.parse(readFileSync(includeFile, "utf8")) : null;
+        const expected = globSync("src/channels/plugins/contracts/**/*.test.ts")
+          .map(file => file.replaceAll("\\\\", "/"))
+          .filter(file => !filters || filters.some(filter => path.matchesGlob(file, filter)));
+        assert.deepEqual(matches.toSorted(), expected.toSorted());
+        assert.equal(new Set(matches).size, matches.length);
+      `,
+      {
+        imports: ["tsx"],
+        env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+        timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("gives contract project configs unique names", () => {
@@ -489,6 +586,66 @@ describe("projects vitest config", () => {
     expect(testConfig.fileParallelism).toBe(false);
     expect(testConfig.maxWorkers).toBe(1);
     expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
+  });
+
+  it.each(["logbook", "team-reports", "workboard"])(
+    "runs %s database owners in main-thread hosts across focused and full suites",
+    (pluginId) => {
+      const project = "test/vitest/vitest.extension-database-workers.config.ts";
+      const testConfig = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+      expect(resolveExtensionTestConfig(`extensions/${pluginId}`)).toBe(project);
+      expect(
+        buildVitestRunPlans([`extensions/${pluginId}/src/store.test.ts`]).map(
+          (plan) => plan.config,
+        ),
+      ).toEqual([project]);
+      expect(rootVitestProjects).toContain(project);
+      expect(
+        fullSuiteVitestShards.find((shard) => shard.name === "extensions")?.projects,
+      ).toContain(project);
+      expect(testConfig.pool).toBe("forks");
+      expect(testConfig.isolate).toBe(true);
+      expect(testConfig.include).toEqual([
+        "logbook/**/*.test.ts",
+        "team-reports/**/*.test.ts",
+        "workboard/**/*.test.ts",
+        "imessage/src/approval-reactions.persistence.test.ts",
+      ]);
+      expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+        `${pluginId}/**`,
+      );
+    },
+  );
+
+  it("routes iMessage persistence through its worker owner without moving sibling tests", () => {
+    const file = "extensions/imessage/src/approval-reactions.persistence.test.ts";
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    const siblingProject = "test/vitest/vitest.extension-imessage.config.ts";
+    for (const target of [
+      file,
+      "extensions/imessage",
+      "extensions/imessage/src/*.test.ts",
+      "extensions/imessage/src/approval-reactions.ts",
+    ]) {
+      const plans = buildVitestRunPlans([target]);
+      expect(plans.find((plan) => plan.config === project)?.includePatterns).toContain(file);
+    }
+    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+    for (const sibling of ["approval-reactions.test.ts", "approval-reaction-poller.test.ts"]) {
+      expect(
+        buildVitestRunPlans([`extensions/imessage/src/${sibling}`]).map((plan) => plan.config),
+      ).toEqual([siblingProject]);
+    }
+    const workerConfig = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+    expect(workerConfig.include).toContain("imessage/src/approval-reactions.persistence.test.ts");
+    expect(workerConfig.pool).toBe("forks");
+    expect(workerConfig.isolate).toBe(true);
+    expect(requireTestConfig(createExtensionImessageVitestConfig({})).exclude).toContain(
+      "imessage/src/approval-reactions.persistence.test.ts",
+    );
+    expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+      "imessage/src/approval-reactions.persistence.test.ts",
+    );
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

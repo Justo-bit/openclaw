@@ -25,7 +25,7 @@ import {
   lookupFailedOperationMessage,
   sessionOwnershipLookupFailure,
 } from "../../plugin-sdk/session-visibility-internal.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
@@ -66,6 +66,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import { type AgentWaitResult, waitForAgentRunReply } from "../run-wait.js";
 import { loadSessionEntryByKey } from "../subagents/announce/subagent-announce-delivery.js";
 import {
@@ -79,6 +80,7 @@ import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
@@ -285,21 +287,24 @@ function isRequesterParentOfNativeSubagentSession(params: {
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
+  if (!params.entry || params.acpMeta || params.entry.acp) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
   if (!requester) {
     return false;
   }
-  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+  // spawnedBy is written only by the spawn policy, so it identifies a native
+  // child regardless of key shape: visible children live under persistent
+  // dashboard keys, not subagent keys. parentSessionKey also records ordinary
+  // UI threading and forks, so it only counts for subagent-keyed targets.
+  if (requester === normalizeOptionalString(params.entry.spawnedBy)) {
+    return true;
+  }
+  return (
+    isSubagentSessionKey(params.targetSessionKey) &&
+    requester === normalizeOptionalString(params.entry.parentSessionKey)
+  );
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
@@ -1055,8 +1060,11 @@ export function createSessionsSendTool(opts?: {
             });
           // A scoped grant belongs to one exact session incarnation. Do not create
           // post-return work or durable watches that could follow a reused key.
-          const skipA2AFlow =
-            skipAcpA2AFlow || skipNativeParentA2AFlow || Boolean(expectedSessionId);
+          const skipDelayedA2AFlow = skipAcpA2AFlow || Boolean(expectedSessionId);
+          // Native-parent suppression only covers a reply that already returned inline.
+          // A send is not a registered spawn run, so when the wait expires before the
+          // child finishes, nothing else delivers the late reply: keep that continuation.
+          const skipA2AFlow = skipDelayedA2AFlow || skipNativeParentA2AFlow;
           const startA2AFlow = (
             reply?: Awaited<ReturnType<typeof waitForAgentRunReply>>,
             waitRunId?: string,
@@ -1064,38 +1072,43 @@ export function createSessionsSendTool(opts?: {
             flowDisplayKey = displayKey,
             notifyRequesterOnWaitFailure = false,
           ) => {
-            if (skipA2AFlow) {
+            if (reply === undefined ? skipDelayedA2AFlow : skipA2AFlow) {
               return;
             }
             // This detached flow can outlive the tool request that launched it.
-            // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(
-              () =>
-                runWithoutOwnedSessionTranscriptWrites(() =>
-                  runSessionsSendA2AFlow({
-                    callGateway: gatewayCall,
-                    targetSessionKey: flowTargetSessionKey,
-                    targetAgentId,
-                    displayKey: flowDisplayKey,
-                    message,
-                    announceTimeoutMs,
-                    // Cron runs are isolated jobs; target replies must not become new
-                    // requester turns, but the target-side announce still runs.
-                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                    requesterSessionKey: replyRequesterSessionKey,
-                    requesterAgentId,
-                    requesterChannel,
-                    roundOneReply: reply?.replyText,
-                    sourceReplyDelivered: reply?.sourceReplyDelivered,
-                    waitRunId,
-                    notifyRequesterOnWaitFailure,
-                  }),
-                ),
-              "session:a2a-send",
-            ).catch((err: unknown) => {
-              log.warn("sessions_send announce flow admission failed", {
-                runId: waitRunId ?? "unknown",
-                error: formatErrorMessage(err),
+            // Later turns need their own resource scope without retaining the
+            // completed caller or its prepared-runtime generation.
+            runWithGatewayToolCleanupContext(() => {
+              void runWithGatewayDetachedWorkContinuation(
+                () =>
+                  runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+                    runWithoutOwnedSessionTranscriptWrites(() =>
+                      runSessionsSendA2AFlow({
+                        callGateway: gatewayCall,
+                        targetSessionKey: flowTargetSessionKey,
+                        targetAgentId,
+                        displayKey: flowDisplayKey,
+                        message,
+                        announceTimeoutMs,
+                        // Cron runs are isolated jobs; target replies must not become new
+                        // requester turns, but the target-side announce still runs.
+                        maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                        requesterSessionKey: replyRequesterSessionKey,
+                        requesterAgentId,
+                        requesterChannel,
+                        roundOneReply: reply?.replyText,
+                        sourceReplyDelivered: reply?.sourceReplyDelivered,
+                        waitRunId,
+                        notifyRequesterOnWaitFailure,
+                      }),
+                    ),
+                  ),
+                "session:a2a-send",
+              ).catch((err: unknown) => {
+                log.warn("sessions_send announce flow admission failed", {
+                  runId: waitRunId ?? "unknown",
+                  error: formatErrorMessage(err),
+                });
               });
             });
           };
@@ -1127,6 +1140,10 @@ export function createSessionsSendTool(opts?: {
           // caller never mistakes target admission for announcement delivery.
           const delivery =
             skipA2AFlow || start.targetDisposition === "steered"
+              ? ({ status: "skipped", mode: "announce" } as const)
+              : ({ status: "pending", mode: "announce" } as const);
+          const delayedDelivery =
+            skipDelayedA2AFlow || start.targetDisposition === "steered"
               ? ({ status: "skipped", mode: "announce" } as const)
               : ({ status: "pending", mode: "announce" } as const);
           recordSessionToolActionFact({
@@ -1174,7 +1191,7 @@ export function createSessionsSendTool(opts?: {
                 error: result.error,
                 sentBeforeError: true,
                 sessionKey: displayKey,
-                delivery,
+                delivery: delayedDelivery,
                 ...watchField,
               });
             }
@@ -1185,7 +1202,7 @@ export function createSessionsSendTool(opts?: {
                 status: "accepted",
                 sessionKey: displayKey,
                 targetDisposition: start.targetDisposition,
-                delivery,
+                delivery: delayedDelivery,
                 ...watchField,
               });
             }

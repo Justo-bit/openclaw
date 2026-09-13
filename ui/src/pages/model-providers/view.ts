@@ -1,7 +1,12 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
+import type {
+  FastMode,
+  GatewayAgentRow,
+  ModelAuthStatusResult,
+  ModelsProbeResult,
+} from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -57,6 +62,8 @@ type ModelProvidersViewProps = {
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
+  authStatus?: ModelAuthStatusResult | null;
+  automaticUtilityModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -103,7 +110,6 @@ type ModelProvidersViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
-  onModelPickerOpen: () => void;
   onCatalogRetry: () => void;
   onOpenModelSetup: () => void;
   onConnect: (card: ModelProviderCard) => void;
@@ -159,7 +165,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
       <div class="model-providers__local-cost-detail">
         ${t("modelProviders.localCostDetail", {
           tokens: formatCompactTokenCount(cost.totalTokens),
-          sessions: String(cost.sessionCount),
+          messages: String(cost.messageCount),
         })}
       </div>
     </div>
@@ -338,12 +344,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
                 title=${keyBlocked}
                 @click=${() => props.onOpenKeyEditor(card.id)}
               >
-                ${
-                  card.hasConfigApiKey ||
-                  card.profiles.some((profile) => profile.type === "api_key")
-                    ? t("modelProviders.apiKey.replace")
-                    : t("modelProviders.apiKey.set")
-                }
+                ${t("modelProviders.apiKey.set")}
               </button>
             `
       }
@@ -548,37 +549,6 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       renderSettingsGroup(renderSettingsEmpty(t("modelProviders.disconnected"))),
     );
   }
-  if (props.loading) {
-    return renderSettingsPage(html`
-      <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
-        ${renderDefaultModels({
-          models: props.configuredModels,
-          selection: props.defaultModels,
-          thinkingLevel: props.thinkingLevel,
-          thinkingOverridden: props.thinkingOverridden,
-          fastMode: props.fastMode,
-          fastModeOverridden: props.fastModeOverridden,
-          loading: true,
-          catalogDiscovering: props.catalogDiscovering,
-          catalogDiscoveryError: props.catalogDiscoveryError,
-          canMutate: !configMutationDisabled(props),
-          mutationBlockedReason: props.mutationBlockedReason,
-          busy: props.busy,
-          message: props.messages.defaults,
-          onPrimaryChange: props.onPrimaryChange,
-          onFallbackChange: props.onFallbackChange,
-          onUtilityChange: props.onUtilityChange,
-          onThinkingChange: props.onThinkingChange,
-          onThinkingReset: props.onThinkingReset,
-          onFastModeChange: props.onFastModeChange,
-          onFastModeReset: props.onFastModeReset,
-          onOpen: props.onModelPickerOpen,
-          onCatalogRetry: props.onCatalogRetry,
-        })}
-      </div>
-      ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
-    `);
-  }
   const providerRows = html`
     <div class="model-providers__provider-list">
       ${props.error ? renderSettingsGroup(renderProviderNoticeRow(props.error)) : nothing}
@@ -600,17 +570,21 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       }
     </div>
   `;
-  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
+  const needsModelSetup =
+    !props.loading && !props.configuredModels.some((model) => model.available !== false);
   return renderSettingsPage(html`
     ${needsModelSetup ? renderModelReadiness(props) : nothing}
     <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
       ${renderDefaultModels({
         models: props.configuredModels,
         selection: props.defaultModels,
+        authStatus: props.authStatus,
+        automaticUtilityModel: props.automaticUtilityModel,
         thinkingLevel: props.thinkingLevel,
         thinkingOverridden: props.thinkingOverridden,
         fastMode: props.fastMode,
         fastModeOverridden: props.fastModeOverridden,
+        loading: props.loading,
         catalogDiscovering: props.catalogDiscovering,
         catalogDiscoveryError: props.catalogDiscoveryError,
         canMutate: !configMutationDisabled(props),
@@ -624,44 +598,47 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
         onFastModeReset: props.onFastModeReset,
-        onOpen: props.onModelPickerOpen,
         onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
-    ${renderSettingsSection(
-      {
-        title: t("modelProviders.title"),
-        count: props.cards.length,
-        actions: html`
-          ${
-            props.updatedAt
-              ? html`<span class="model-providers__updated"
-                  >${t("modelProviders.updated", {
-                    time: formatTimeMs(props.updatedAt, {
-                      hour: "numeric",
-                      minute: "2-digit",
-                    }),
-                  })}</span
-                >`
-              : nothing
-          }
-          <openclaw-tooltip
-            .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
-          >
-            <button
-              type="button"
-              class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-              aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
-              ?disabled=${props.refreshing}
-              @click=${() => props.onRefresh()}
-            >
-              ${icons.refresh}
-            </button>
-          </openclaw-tooltip>
-        `,
-      },
-      providerRows,
-    )}
+    ${
+      props.loading
+        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+        : renderSettingsSection(
+            {
+              title: t("modelProviders.title"),
+              count: props.cards.length,
+              actions: html`
+                ${
+                  props.updatedAt
+                    ? html`<span class="model-providers__updated"
+                        >${t("modelProviders.updated", {
+                          time: formatTimeMs(props.updatedAt, {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          }),
+                        })}</span
+                      >`
+                    : nothing
+                }
+                <openclaw-tooltip
+                  .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
+                >
+                  <button
+                    type="button"
+                    class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
+                    aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
+                    ?disabled=${props.refreshing}
+                    @click=${() => props.onRefresh()}
+                  >
+                    ${icons.refresh}
+                  </button>
+                </openclaw-tooltip>
+              `,
+            },
+            providerRows,
+          )
+    }
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${
       props.providerUsageStalled
@@ -703,7 +680,7 @@ export function renderModelProvidersPageShell(props: {
         >
           ${t("modelProviders.login.action")}
         </button>
-        <button class="btn" @click=${props.onOpenModelSetup}>
+        <button class="btn btn--ghost" @click=${props.onOpenModelSetup}>
           ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
         </button>
       `,

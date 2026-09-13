@@ -14,7 +14,7 @@ import {
   type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
@@ -23,7 +23,10 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import {
+  createModelCatalogIdentityKeyResolver,
+  resolveModelCatalogIdentityKey,
+} from "./openai-model-routes.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 export type ModelCatalogAuthChecker = (
@@ -158,10 +161,14 @@ export async function prepareLogicalVisibleModelCatalog(
     }
   }
   const catalogKeys = new Set(params.catalog.map(keyOf));
+  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
+    cfg: params.cfg,
+    policy: params.routePolicy,
+  });
   const projections = new Map<
     ModelCatalogEntry,
     {
-      overrides: ReturnType<typeof resolveConfiguredModelCatalogOverrides>;
+      overrides: ReturnType<typeof resolveOverrides>;
       rows: Map<
         | ModelCatalogRouteProjection["kind"]
         | Extract<ModelCatalogRouteProjection, { kind: "selected" }>["route"],
@@ -172,8 +179,9 @@ export async function prepareLogicalVisibleModelCatalog(
   return () => {
     // Membership and row availability consume this one observation after every await.
     const states = new Map([...readers].map(([key, read]) => [key, read()]));
+    const publicationKeyOf = createModelCatalogIdentityKeyResolver();
     const getEntryState = (entry: ModelCatalogEntry) => {
-      const state = states.get(keyOf(entry));
+      const state = states.get(publicationKeyOf(entry));
       if (!state) {
         throw new Error("Model catalog publication omitted prepared entry state");
       }
@@ -185,11 +193,7 @@ export async function prepareLogicalVisibleModelCatalog(
         let cached = projections.get(entry);
         if (!cached) {
           cached = {
-            overrides: resolveConfiguredModelCatalogOverrides({
-              cfg: params.cfg,
-              entry,
-              policy: params.routePolicy,
-            }),
+            overrides: resolveOverrides(entry),
             rows: new Map(),
           };
           projections.set(entry, cached);
@@ -207,7 +211,7 @@ export async function prepareLogicalVisibleModelCatalog(
         }
         return row;
       });
-      return sortModelCatalogEntries(dedupeByKey(projected, resolveModelCatalogIdentityKey));
+      return sortModelCatalogEntries(dedupeByKey(projected, publicationKeyOf));
     };
     if (params.view === "all") {
       return projectEntries(params.catalog);
@@ -228,12 +232,15 @@ export async function prepareLogicalVisibleModelCatalog(
           view: params.view,
         }),
       ),
-    ).filter((entry) => catalogKeys.has(keyOf(entry)) || configuredKeys.has(keyOf(entry)));
-    const preferredKeys = new Set([...visible, ...retained].map(keyOf));
+    ).filter(
+      (entry) =>
+        catalogKeys.has(publicationKeyOf(entry)) || configuredKeys.has(publicationKeyOf(entry)),
+    );
+    const preferredKeys = new Set([...visible, ...retained].map(publicationKeyOf));
     const preferred: ModelCatalogEntry[] = [];
     const routeBacked = new Set<ModelCatalogEntry>();
     for (const entry of params.catalog) {
-      const key = keyOf(entry);
+      const key = publicationKeyOf(entry);
       const preferredKey = preferredKeys.has(key);
       const wildcardRoute =
         policy.allowAny ||
@@ -259,7 +266,7 @@ export async function prepareLogicalVisibleModelCatalog(
     }
     const kept = visible.filter((entry) => {
       const state = getEntryState(entry);
-      const configured = configuredKeys.has(keyOf(entry));
+      const configured = configuredKeys.has(publicationKeyOf(entry));
       return (
         (state.compatible || configured) &&
         (!state.routeManaged || configured || routeBacked.has(entry))

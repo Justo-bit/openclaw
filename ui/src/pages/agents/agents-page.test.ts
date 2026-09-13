@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
@@ -16,7 +17,6 @@ import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  deferred,
   emitCatalogChanged,
   gateway,
   setPageGateway,
@@ -162,7 +162,7 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("does not stage a default-agent change after a same-client reconnect", async () => {
-    const loading = deferred<void>();
+    const loading = deferred();
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));
@@ -289,11 +289,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith(
-      "models.list",
-      { view: "configured", agentId: "main" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
   });
 
   it("reads separate configured model catalogs when switching default and worker agents", async () => {
@@ -321,19 +317,15 @@ describe("AgentsPage gateway lifecycle", () => {
     page.agentsSelectedId = "main";
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "models.list",
-      { view: "configured", agentId: "main" },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "models.list",
-      { view: "configured", agentId: "worker" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
+      view: "configured",
+      agentId: "main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      view: "configured",
+      agentId: "worker",
+    });
   });
 
   it.each([false, true])(
@@ -354,7 +346,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
       page.loadActivePanelData();
       await waitForFast(() => expect(page.chatModelCatalog[0]?.id).toBe("old"));
-      page.ensureModelCatalog({ refresh: true });
+      emitCatalogChanged(page.context.gateway);
       await waitForFast(() =>
         expect(page.chatModelCatalogStatus.error).toBe(
           hasRows
@@ -406,15 +398,13 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalog).toEqual(workerModels);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "models.list",
-      { view: "configured", agentId: "worker" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      view: "configured",
+      agentId: "worker",
+    });
   });
 
-  it("re-reads a cached model catalog when the picker asks for a refresh", async () => {
+  it("keeps picker opens cached and reloads after a catalog publication", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
     const request = vi
@@ -429,11 +419,14 @@ describe("AgentsPage gateway lifecycle", () => {
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
 
-    // Repeated render work retains this page snapshot; a picker read requests current facts.
     page.ensureModelCatalog();
     expect(request).toHaveBeenCalledTimes(1);
 
     page.ensureModelCatalog({ refresh: true });
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+    expect(request).toHaveBeenCalledTimes(1);
+
+    emitCatalogChanged(page.context.gateway);
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -474,6 +467,11 @@ describe("AgentsPage gateway lifecycle", () => {
         page.loadActivePanelData();
       }
 
+      if (replacement === "publication" || replacement === "gateway source") {
+        expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(1);
+        expect(page.chatModelCatalog).toEqual([]);
+        oldResult.resolve({ models: oldModels });
+      }
       await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
       oldResult.resolve({ models: oldModels });
       await oldResult.promise;
@@ -508,12 +506,10 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "models.list",
-      { view: "configured", agentId: "main" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      view: "configured",
+      agentId: "main",
+    });
   });
 
   it("surfaces a rejected agent-scoped metadata RPC and retries without marking an empty catalog loaded", async () => {
@@ -538,12 +534,10 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalogStatus.error).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "models.list",
-      { view: "configured", agentId: "main" },
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      view: "configured",
+      agentId: "main",
+    });
   });
 
   it("requests the selected agent's implicit default cron job before the first 50 unrelated jobs", async () => {
@@ -971,8 +965,8 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("keeps replacement identity loading active when the old capability settles", async () => {
-    const oldEnsure = deferred<void>();
-    const nextEnsure = deferred<void>();
+    const oldEnsure = deferred();
+    const nextEnsure = deferred();
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));

@@ -1,3 +1,4 @@
+import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 /** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceStagedFiles } from "./service-stage.js";
@@ -97,10 +98,33 @@ export type GatewayServiceUnitInspection = {
   assertReadCurrent?: () => void;
 };
 
+/** Operation-local transport evidence, never serialized or a mutation grant. */
+export type SystemdServiceReadBinding = {
+  readonly unit: string;
+  readonly managerUid: number;
+  readonly destination: string;
+  verify: () => void;
+  query: (
+    args: string[],
+    signatures: string[],
+    deadline: number,
+    inspection?: GatewayServiceUnitInspection,
+  ) => Promise<unknown[] | null>;
+  close: () => Promise<void>;
+};
+
+export type GatewayServiceCommandInspection =
+  | { kind: "absent" | "present" }
+  | { kind: "unavailable"; error: unknown };
+
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
+  systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Carry the command reader's verdict into runtime inspection without repeating it. */
+  commandInspection?: GatewayServiceCommandInspection;
+  onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
   loadForInspection?: GatewayServiceUnitInspection;
@@ -111,7 +135,7 @@ export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-a
 export type GatewayServiceLoadState =
   | { status: "loaded" }
   | { status: "not-loaded" }
-  | { status: "unknown"; detail: string };
+  | { status: "unknown"; detail: string; inspectionReason?: ServiceInspectionReason };
 
 const SERVICE_DEFINITION_ARTIFACTS = {
   "service-directory":
@@ -147,13 +171,14 @@ export type ServiceDefinitionMutationCapability =
       kind: "sealed" | "unknown";
       reason: keyof typeof SERVICE_DEFINITION_REASONS;
       artifact?: ServiceDefinitionMutationArtifact;
+      path?: string;
     };
 
 export function assertServiceDefinitionWritable(capability: ServiceDefinitionMutationCapability) {
   if (capability.kind === "writable") {
     return;
   }
-  // Only allowlisted facts reach callers: paths, native errors, and extra fields can contain secrets.
+  // Native errors and extra fields can contain secrets; only recorded artifact paths are diagnostic.
   const reason = Object.hasOwn(SERVICE_DEFINITION_REASONS, capability.reason)
     ? capability.reason
     : "inspection-failed";
@@ -164,7 +189,10 @@ export function assertServiceDefinitionWritable(capability: ServiceDefinitionMut
   // Update recovery recognizes these prefixes to preserve a protected definition.
   const code =
     capability.kind === "sealed" ? "SERVICE_DEFINITION_SEALED" : "SERVICE_DEFINITION_UNKNOWN";
-  throw new Error(`${code}: [${reason}] The ${artifact} ${SERVICE_DEFINITION_REASONS[reason]}`);
+  const location = capability.path ? ` ${JSON.stringify(capability.path)}` : "";
+  throw new Error(
+    `${code}: [${reason}] The ${artifact}${location} ${SERVICE_DEFINITION_REASONS[reason]}`,
+  );
 }
 
 export type GatewayServiceCommandSnapshot = {
@@ -292,6 +320,7 @@ export function resolveManagedGatewayServiceProcessEnv(
 }
 
 export type GatewayServiceState = {
+  inspectionReason?: ServiceInspectionReason;
   installed: boolean;
   loadState: GatewayServiceLoadState;
   running: boolean;

@@ -61,6 +61,7 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
   const progress = (pane as TestChatPane & { progressCard: SessionProgressCardController })
     .progressCard;
   onTestFinished(() => progress.hostDisconnected());
+  progress.hostConnected();
   const emit = (card: ProgressCard) => {
     const gateway = pane.context.gateway as ApplicationContext["gateway"] & {
       emitTestEvent: (event: GatewayEventFrame) => void;
@@ -92,11 +93,15 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     expect(request).not.toHaveBeenCalled();
 
     await loadChatHistory(state, { deferBranches: true });
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "notes",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "notes",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));
     expect(request).toHaveBeenLastCalledWith("progressCard.get", {

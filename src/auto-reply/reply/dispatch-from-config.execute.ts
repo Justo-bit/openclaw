@@ -16,6 +16,7 @@ import {
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
@@ -150,6 +151,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       // delivery even when this dispatch has already returned.
                       try {
                         await waitForPendingDirectBlockReplyDelivery();
+                        if (
+                          dispatcher.getFailedCounts().block > 0 &&
+                          state.turnLedger.canAttemptFallback()
+                        ) {
+                          await dispatcher.waitForIdle();
+                        }
                       } catch (error) {
                         try {
                           await params.replyOptions?.onQueuedFollowupSettled?.();
@@ -374,6 +381,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     phase: payload.phase,
                     title: payload.title,
                     explanation: payload.explanation,
+                    ...(payload.explanationFormat
+                      ? { explanationFormat: payload.explanationFormat }
+                      : {}),
                     steps,
                     source: payload.source,
                   };
@@ -401,6 +411,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                   await state.sendPlanUpdate({
                     explanation: normalized.explanation,
+                    explanationFormat: normalized.explanationFormat,
                     steps,
                   });
                 },
@@ -447,6 +458,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   }
                 },
                 onBlockReply: (inputPayload, context) => {
+                  setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
                   // A monitor decides notify only after its structured final result.
                   if (state.replyOperationRunState.heartbeat) {
                     return Promise.resolve();
@@ -599,9 +611,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       markInboundDedupeReplayUnsafe();
                       const delivery = state.sendTrackedBlockReply(normalizedPayload);
                       if (delivery.queued) {
-                        // Capture admission's drain; concurrent or aborted waiters must
-                        // not consume another callback's delivery obligation.
-                        const pending = dispatcher.waitForIdle().then(() => undefined);
+                        // This block's receipt owns its settlement. A turn-wide no-send
+                        // verdict is premature while a recovery final can still arrive.
+                        const pending = (delivery.outcome ?? dispatcher.waitForIdle()).then(
+                          () => undefined,
+                        );
                         void pending.catch(() => undefined);
                         state.progressState.pendingDirectBlockReplyDelivery = pending;
                       }

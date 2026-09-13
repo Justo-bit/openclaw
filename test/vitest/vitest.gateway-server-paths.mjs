@@ -1,3 +1,6 @@
+// Plugin integration tests retain Gateway runtime setup outside core source.
+export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway.test.ts"];
+
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
 export const gatewayServerBackedHttpTestFiles = [
   "src/gateway/embeddings-http.test.ts",
@@ -14,14 +17,21 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/agent.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",
   "src/gateway/server-methods/chat.reset-visible-yield.test.ts",
+  // Status uses the host-owned shared SQLite broker.
+  "src/gateway/server-methods/health.owner-routing.test.ts",
   "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+  "src/gateway/server-methods/users-preferences.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
-// Gateway server tests that replace a module the Gateway reaches only through
-// re-exports. These need both a fresh graph and the plain Vitest runner.
+// Gateway server tests that need a private module graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
+  "src/gateway/server-chat.retired-projection.test.ts",
+  "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
+  // Loads the real plugin runtime that neighboring server tests replace with mocks.
+  "src/gateway/server.chat-cli-auth.test.ts",
+  "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
 ];
 

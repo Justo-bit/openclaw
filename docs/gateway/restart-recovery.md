@@ -133,6 +133,10 @@ remain terminal. Recovery startup uses the admitted run's existing deadline,
 including runtime preparation and waiting for session or global capacity. Waiting
 in a healthy queue does not consume separate failed-start attempts.
 
+`sessions.abort` waits for the cancellation's session write before acknowledging
+success. Restarting immediately after that acknowledgment preserves the terminal
+outcome even if the run's finalizer has not finished.
+
 ## Host sleep and process freezes
 
 When a gateway host wakes from sleep, a virtual machine resumes, or the process
@@ -195,6 +199,16 @@ After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
 identity, a 12-probe health settle passes, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
+Startup receives the update's existing per-step `--timeout` budget (1800 seconds
+by default), including migration and listener initialization, followed by the
+12-probe settle window. On the first update from an older release, the old updater
+invokes the newly installed CLI but does not pass that readiness budget. The
+candidate recognizes the existing update marker and, once the managed process is
+running, uses the five-minute startup watchdog instead of the standalone
+60-second deadline. Migration, listener, and health transitions do not reset this
+bound. The old updater's subprocess timeout also remains in force. An exhausted
+wait reports the last observed startup phase. Standalone restart deadlines are
+unchanged.
 Verification facts and measured downtime are retained in the
 [update run report](/cli/update#run-history-and-reports).
 
@@ -316,6 +330,17 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   hard crashes and kills where no shutdown code ran. Stale transcript lock
   files are cleaned up at the same time.
 
+A failed store scan leaves that store eligible for the scheduled retry while
+other stores continue recovery. `openclaw status` and `openclaw doctor` show
+outstanding startup recovery failures from the running Gateway; the warning clears
+when the store scan succeeds.
+
+If an older Gateway left a session running with a dead writer and an unfinished
+recovery cycle, `sessions.recover` reconciles that writer and starts a continuation
+in the same session. It preserves the session key and transcript. A live run or
+cloud worker still prevents this repair. Tombstoned sessions retain their separate
+recovery path into a new session.
+
 ## Automatic resume
 
 A few seconds after startup, the gateway re-dispatches each marked session
@@ -323,6 +348,28 @@ with a synthetic system message telling the agent its previous turn was
 interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
+
+When a recovered turn starts with an eligible channel delivery route, OpenClaw
+sends a resumption notice to that conversation, retaining its account and topic.
+The final reply uses the same delivery route. Transcript-only turns stay private,
+and a turn that has already finished does not receive a late resumption notice.
+A failed notice does not restart or replay the recovered work. Main-session
+resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
+owner are rechecked immediately before the channel send. They are not replayed
+from the outbound queue; terminal-failure notice retries and normal final-reply
+delivery are unchanged.
+
+Telegram renews its typing indicator while the recovered turn runs. Typing stops
+when the turn settles, its recovery owner changes, or the gateway closes, and
+respects `typingMode: "never"`. Other channels can opt in through the guarded
+typing hook; unsupported channels still receive the resumption notice.
+
+Channel plugins opt in with `heartbeat.sendTypingGuarded(...)`. Alongside the
+recovery delivery target, core supplies an `AbortSignal` and an
+`assertPlatformSendAuthorized` callback. Plugins must honor cancellation through
+queued sends and invoke the callback immediately before the platform request,
+after asynchronous preparation. Recovery does not fall back to the unguarded
+`heartbeat.sendTyping(...)` hook.
 
 Startup reconciliation retries transient failures up to three times with
 exponential backoff. Separately, each interrupted main-session cycle has a
@@ -337,6 +384,13 @@ After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
 replacement. `openclaw doctor --fix` can repair a stale aborted flag that
 conflicts with a tombstone, but it does not re-enable that recovery cycle.
+
+If you message the failed session again in a channel, OpenClaw sends a short
+recovery reminder through that channel and logs each rejected message at warn
+level with the session key, recovery reason, and recovery command. Repeated
+reminders are suppressed in a bounded memory cache. Resetting or deleting the
+session, or restarting the Gateway, clears that suppression. Sessions with locked
+model selection instead direct you to **Resume in new session** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
@@ -404,6 +458,11 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot the registry is restored and
 interrupted subagent sessions are resumed with their original task context.
 
+Resumption notices use the requester's outbound channel when one exists.
+Control UI sessions and internal wakes observe recovery through session state;
+they do not enqueue outbound notices. Previously saved internal notice obligations
+are settled when the registry resumes, without sending or replaying the task.
+
 If a parent yielded while waiting for children, recovery first resumes the
 interrupted children. Their saved completion batch follows replacement run IDs,
 so the parent receives its follow-up after the batch settles, including when some
@@ -414,6 +473,13 @@ follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
+Settling a yielded turn's wake leaves its unfinished task and final delivery
+intact. A completed cancellation can also finish wake bookkeeping after its
+task record expires, without recreating the task or repeating cleanup.
+Recovery reconciles an expired cancellation's retained marker before retrying
+its requester wake, preserving the original cleanup record. Live child cancellation
+can wake a waiting requester while normal cleanup reconciliation completes.
+A delayed cancellation callback cannot reopen completed cleanup.
 
 Two safety valves apply:
 

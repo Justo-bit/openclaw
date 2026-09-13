@@ -1905,7 +1905,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("submits runtime-only context through system prompt without visible prompt", async () => {
+  it("submits runtime-only context through the tail carrier without visible prompt", async () => {
     hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
     let seenModelMessages: unknown[] | undefined;
@@ -1963,7 +1963,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
     expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook tail");
-    expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook context");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("dynamic hook tail");
   });
@@ -2061,7 +2061,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
-    expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
+    expect(contextCompiled?.data?.prompt).toContain("runtime bare mention event");
+    expect(contextCompiled?.data?.systemPrompt).not.toContain("runtime bare mention event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).not.toContain(
       "Reply target of current user message:",
@@ -2211,25 +2212,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("uses assembled context as the default precheck authority", async () => {
+  async function runContextAuthorityAttempt(
+    options: { ownsCompaction?: true; promptAuthority?: "preassembly_may_overflow" } = {},
+  ) {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
-
     const result = await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({
+        ...(options.ownsCompaction
+          ? {
+              info: {
+                id: "test-context-engine",
+                name: "Test Context Engine",
+                version: "0.0.1",
+                ownsCompaction: true,
+              },
+            }
+          : {}),
         assemble: async () => ({
           messages: [
             { role: "user", content: "small assembled context", timestamp: 1 },
           ] as AgentMessage[],
           estimatedTokens: 8,
+          ...(options.promptAuthority ? { promptAuthority: options.promptAuthority } : {}),
         }),
       }),
       sessionKey,
       tempPaths,
       sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
+      attemptOverrides: { contextTokenBudget: 500 },
       sessionPrompt: async (session) => {
         sawPrompt = true;
         session.messages = [
@@ -2238,6 +2249,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         ];
       },
     });
+    return { result, sawPrompt, hugeHistory };
+  }
+
+  it("uses assembled context as the default precheck authority", async () => {
+    const { result, sawPrompt } = await runContextAuthorityAttempt();
 
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
@@ -2247,38 +2263,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("defers ordinary admission when the context engine owns compaction", async () => {
-    let sawPrompt = false;
-    const hugeHistory = "large raw history ".repeat(2_000);
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({
-        info: {
-          id: "test-context-engine",
-          name: "Test Context Engine",
-          version: "0.0.1",
-          ownsCompaction: true,
-        },
-        assemble: async () => ({
-          messages: [
-            { role: "user", content: "small assembled context", timestamp: 1 },
-          ] as AgentMessage[],
-          estimatedTokens: 8,
-        }),
-      }),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
-      sessionPrompt: async (session) => {
-        sawPrompt = true;
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
-    });
+    const { result, sawPrompt } = await runContextAuthorityAttempt({ ownsCompaction: true });
 
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
@@ -2375,32 +2360,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("treats preassembly overflow authority as diagnostic before provider submission", async () => {
-    let sawPrompt = false;
-    const hugeHistory = "large raw history ".repeat(2_000);
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({
-        assemble: async () => ({
-          messages: [
-            { role: "user", content: "small assembled context", timestamp: 1 },
-          ] as AgentMessage[],
-          estimatedTokens: 8,
-          promptAuthority: "preassembly_may_overflow",
-        }),
-      }),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
-      sessionPrompt: async (session) => {
-        sawPrompt = true;
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
+    const { result, sawPrompt, hugeHistory } = await runContextAuthorityAttempt({
+      promptAuthority: "preassembly_may_overflow",
     });
 
     expect(sawPrompt).toBe(true);
@@ -2415,38 +2376,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("submits owning context-engine preassembly pressure to the provider once", async () => {
-    let sawPrompt = false;
-    const hugeHistory = "large raw history ".repeat(2_000);
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({
-        info: {
-          id: "test-context-engine",
-          name: "Test Context Engine",
-          version: "0.0.1",
-          ownsCompaction: true,
-        },
-        assemble: async () => ({
-          messages: [
-            { role: "user", content: "small assembled context", timestamp: 1 },
-          ] as AgentMessage[],
-          estimatedTokens: 8,
-          promptAuthority: "preassembly_may_overflow",
-        }),
-      }),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
-      sessionPrompt: async (session) => {
-        sawPrompt = true;
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
+    const { result, sawPrompt, hugeHistory } = await runContextAuthorityAttempt({
+      ownsCompaction: true,
+      promptAuthority: "preassembly_may_overflow",
     });
 
     expect(sawPrompt).toBe(true);

@@ -12,12 +12,18 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { nodeWorkspaceTransferReconcilePath } from "../../worker/node-workspace-transfer-protocol.js";
+import { hashWorkerCredential } from "./credential.js";
 import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
 } from "./node-workspace-transfer-http.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -204,14 +210,17 @@ describe("attachment transfer revocation", () => {
   it.each([
     { boundary: "blob-admitted", revoke: false },
     { boundary: "blob-admitted", revoke: true },
-    { boundary: "before-create-entry", revoke: false },
-    { boundary: "before-create-entry", revoke: true },
-    { boundary: "inside-create-before-open", revoke: false },
-    { boundary: "inside-create-before-open", revoke: true },
-    { boundary: "inside-create-after-open", revoke: false },
-    { boundary: "inside-create-after-open", revoke: true },
-    { boundary: "inside-final-create", revoke: false },
-    { boundary: "inside-final-create", revoke: true },
+    { boundary: "source-open", revoke: false },
+    { boundary: "source-open", revoke: true },
+    { boundary: "before-stage-open", revoke: false },
+    { boundary: "before-stage-open", revoke: true },
+    { boundary: "after-stage-open", revoke: false },
+    { boundary: "after-stage-open", revoke: true },
+    { boundary: "after-publish", revoke: false },
+    { boundary: "after-publish", revoke: true },
+    { boundary: "after-final-publish", revoke: false },
+    { boundary: "after-final-publish", revoke: true },
+    { boundary: "after-publish-replaced", revoke: true },
   ] as const)("$boundary revoked=$revoke", async ({ boundary, revoke }) => {
     const root = await fs.realpath(tempDirs.make("attachment-revocation-"));
     const workspaceDir = path.join(root, "workspace");
@@ -303,39 +312,78 @@ describe("attachment transfer revocation", () => {
         res.destroy(error instanceof Error ? error : new Error(String(error))),
       );
     });
-    const readsAfterRevocation: string[] = [];
+    const sourceAccessAfterRevocation: string[] = [];
     const originalReadFile = fs.readFile.bind(fs);
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const file = typeof args[0] === "string" ? args[0] : "";
       const installing = file.includes(".workspace.workspace-transfer-");
       if (installing && reached && revoke) {
-        readsAfterRevocation.push(file);
+        sourceAccessAfterRevocation.push(file);
       }
-      const data = await originalReadFile(...args);
-      // The real staging read finishes before the installer calls Root.create().
-      if (installing && file.endsWith(fresh) && boundary === "before-create-entry") {
-        crossBoundary();
-      }
-      return data;
+      return await originalReadFile(...args);
     });
+    let copySource: string | undefined;
     const originalOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const creation =
-        args[0] ===
-          path.join(workspaceDir, boundary === "inside-final-create" ? subsequent : fresh) &&
+      const file = typeof args[0] === "string" ? args[0] : "";
+      const sourceRead =
+        file.includes(".workspace.workspace-transfer-") &&
+        typeof args[1] === "number" &&
+        (args[1] &
+          (fsSync.constants.O_CREAT | fsSync.constants.O_WRONLY | fsSync.constants.O_RDWR)) ===
+          0;
+      if (sourceRead) {
+        copySource = file;
+        if (reached && revoke) {
+          sourceAccessAfterRevocation.push(file);
+        }
+      }
+      const privateStage =
+        copySource?.endsWith(path.normalize(fresh)) &&
+        path.dirname(file) === path.join(workspaceDir, directory) &&
+        path.basename(file).startsWith(".fs-safe-") &&
         typeof args[1] === "number" &&
         (args[1] & fsSync.constants.O_CREAT) !== 0;
-      if (creation && boundary === "inside-create-before-open") {
+      if (privateStage && boundary === "before-stage-open") {
         crossBoundary();
       }
       const handle = await originalOpen(...args);
-      if (
-        creation &&
-        (boundary === "inside-create-after-open" || boundary === "inside-final-create")
-      ) {
+      if (sourceRead) {
+        const read = handle.read.bind(handle);
+        vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+          if (reached && revoke) {
+            sourceAccessAfterRevocation.push(file);
+          }
+          return await read(...readArgs);
+        });
+        if (file.endsWith(path.normalize(fresh)) && boundary === "source-open") {
+          crossBoundary();
+        }
+      }
+      if (privateStage && boundary === "after-stage-open") {
         crossBoundary();
       }
       return handle;
+    });
+    const originalLink = fsSync.linkSync.bind(fsSync);
+    vi.spyOn(fsSync, "linkSync").mockImplementation((...args) => {
+      originalLink(...args);
+      const target = path.join(
+        workspaceDir,
+        boundary === "after-final-publish" ? subsequent : fresh,
+      );
+      if (
+        args[1] === target &&
+        (boundary === "after-publish" ||
+          boundary === "after-final-publish" ||
+          boundary === "after-publish-replaced")
+      ) {
+        if (boundary === "after-publish-replaced") {
+          fsSync.unlinkSync(target);
+          fsSync.writeFileSync(target, "later user replacement", { mode: 0o600 });
+        }
+        crossBoundary();
+      }
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -374,20 +422,28 @@ describe("attachment transfer revocation", () => {
           name.startsWith(".workspace.workspace-transfer-"),
         ),
       ).toEqual([]);
+      expect(
+        (await fs.readdir(path.join(workspaceDir, directory))).filter((name) =>
+          name.startsWith(".fs-safe-"),
+        ),
+      ).toEqual([]);
       if (revoke) {
         expect.soft(result).toBe("rejected");
-        expect.soft(readsAfterRevocation).toEqual([]);
-        if (boundary.startsWith("inside-")) {
-          // fs-safe 0.7.0 cannot cancel or identity-roll back an entered create.
+        expect.soft(sourceAccessAfterRevocation).toEqual([]);
+        if (
+          boundary === "after-publish" ||
+          boundary === "after-final-publish" ||
+          boundary === "after-publish-replaced"
+        ) {
           await expect(fs.readFile(path.join(workspaceDir, fresh), "utf8")).resolves.toBe(
-            "private new input",
+            boundary === "after-publish-replaced" ? "later user replacement" : "private new input",
           );
         } else {
           await expect(fs.stat(path.join(workspaceDir, fresh))).rejects.toMatchObject({
             code: "ENOENT",
           });
         }
-        if (boundary === "inside-final-create") {
+        if (boundary === "after-final-publish") {
           await expect(fs.readFile(path.join(workspaceDir, subsequent), "utf8")).resolves.toBe(
             "subsequent private input",
           );
@@ -412,6 +468,315 @@ describe("attachment transfer revocation", () => {
         server.close(() => resolve());
       });
       await service.closeAll();
+    }
+  });
+});
+
+describe("durable credential revocation fencing", () => {
+  const makeService = (root: string) =>
+    createNodeWorkspaceTransferService({
+      temporaryRoot: path.join(root, "transfers"),
+      getOwner: () => ({
+        credential: { ownerEpoch: 1, sessionId: "session" },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+    });
+
+  it("fenceEnvironment aborts capability signals and denies new admissions", async () => {
+    const root = tempDirs.make("workspace-transfer-fence-");
+    const localPath = path.join(root, "source");
+    await fs.mkdir(localPath);
+    const service = makeService(root);
+    await service.initialize();
+    try {
+      const { snapshot, token } = await service.prepareSync({
+        environmentId: "environment",
+        ownerEpoch: 1,
+        sessionId: "session",
+        generation: 1,
+        localPath,
+        isAuthorized: () => true,
+      });
+      const route = {
+        kind: "manifest",
+        direction: "download",
+        environmentId: "environment",
+        manifestRef: snapshot.manifestRef,
+      } as const;
+      const authorization = service.authorize({ route, token });
+      expect(authorization).toBeDefined();
+      if (!authorization) {
+        throw new Error("authorization missing before fence");
+      }
+      const signal = service.authorizationSignal(authorization);
+      expect(signal.aborted).toBe(false);
+
+      service.fenceEnvironment("environment");
+
+      expect(signal.aborted).toBe(true);
+      expect(service.isAuthorizationCurrent(authorization)).toBe(false);
+      expect(service.authorize({ route, token })).toBeUndefined();
+    } finally {
+      await service.closeAll().catch(() => undefined);
+    }
+  });
+
+  it("a fencing revocation stops an in-flight blob response", async () => {
+    const root = tempDirs.make("workspace-transfer-revoke-blob-");
+    const localPath = path.join(root, "source");
+    await fs.mkdir(localPath);
+    // Large enough that the HTTP client cannot buffer the whole body before the fence.
+    const payload = Buffer.alloc(8 * 1024 * 1024, 0x53);
+    await fs.writeFile(path.join(localPath, "secret.txt"), payload);
+    const service = makeService(root);
+    await service.initialize();
+    const { snapshot, token } = await service.prepareSync({
+      environmentId: "environment",
+      ownerEpoch: 1,
+      sessionId: "session",
+      generation: 1,
+      localPath,
+      isAuthorized: () => true,
+    });
+    const entry = snapshot.manifest.entries.find((candidate) => candidate.path === "secret.txt");
+    if (!entry || entry.type !== "file") {
+      throw new Error("snapshot missing proof file");
+    }
+    const callback = createNodeWorkspaceTransferHttpCallback(service);
+    const server = createServer((req, res) => {
+      void handleNodeWorkspaceTransferHttpRequest({
+        req,
+        res,
+        clientIp: "127.0.0.1",
+        callback,
+      }).catch((error: unknown) =>
+        res.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP fixture did not bind");
+    }
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/environment/blobs/${entry.sha256}`,
+        { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
+      );
+      expect(response.status).toBe(200);
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("blob response has no body");
+      }
+      let bytes = 0;
+      // Confirm the stream is live, then fence while most of the body is unconsumed.
+      const first = await reader.read();
+      bytes += first.value?.byteLength ?? 0;
+      service.fenceEnvironment("environment");
+      const drained = (async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            return;
+          }
+          bytes += value.byteLength;
+        }
+      })();
+      await Promise.allSettled([drained]);
+      // The aborted response must not have delivered the whole workspace blob.
+      expect(bytes).toBeLessThan(payload.byteLength);
+      const route = {
+        kind: "blob",
+        direction: "download",
+        environmentId: "environment",
+        sha256: entry.sha256,
+      } as const;
+      expect(service.authorize({ route, token })).toBeUndefined();
+    } finally {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await service.closeAll().catch(() => undefined);
+    }
+  });
+});
+
+describe("durable credential revocation fencing through the real store", () => {
+  it("a permanent store revocation fences an in-flight blob response end to end", async () => {
+    const root = tempDirs.make("workspace-transfer-store-fence-");
+    const localPath = path.join(root, "source");
+    await fs.mkdir(localPath);
+    const payload = Buffer.alloc(8 * 1024 * 1024, 0x53);
+    await fs.writeFile(path.join(localPath, "secret.txt"), payload);
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const environmentId = "worker-store-fence";
+    const sessionId = "session-store-fence";
+    store.createIntent({
+      environmentId,
+      providerId: "fake-provider",
+      profileId: "test-profile",
+      profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
+      provisionOperationId: `provision:${environmentId}`,
+    });
+    store.transition({ environmentId, from: "requested", to: "provisioning" });
+    const bootstrapping = store.transition({
+      environmentId,
+      from: "provisioning",
+      to: "bootstrapping",
+      patch: {
+        leaseId: "lease-store-fence",
+        sshEndpoint: {
+          host: "worker.example.test",
+          port: 2222,
+          fallbackPorts: [22],
+          user: "openclaw",
+          hostKey: ["ssh-ed25519", "AAAA"].join(" "),
+          keyRef: { source: "file", provider: "worker-keys", id: "/static-development-key" },
+        },
+      },
+    });
+    store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: {
+        bootstrapReceipt: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.7.1",
+          protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
+        },
+        credential: {
+          credentialHash: hashWorkerCredential(["worker", "store-fence", "bootstrap"].join("-")),
+          sessionId: null,
+          rpcSetVersion: 1,
+          expiresAtMs: 11_000,
+        },
+      },
+    });
+    const attached = store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: {
+        attachedSessionIds: [sessionId],
+        credential: {
+          credentialHash: hashWorkerCredential(["worker", "store-fence", sessionId].join("-")),
+          sessionId,
+          rpcSetVersion: 1,
+          expiresAtMs: 11_000,
+        },
+      },
+    });
+    const ownerEpoch = attached.ownerEpoch;
+
+    const service = createNodeWorkspaceTransferService({
+      temporaryRoot: path.join(root, "transfers"),
+      getOwner: (id) => store.getTransferOwner(id),
+    });
+    await service.initialize();
+    // Real wiring, exactly as gateway startup installs it: store revocations fence the
+    // transfer service; rotation-style revocations without the flag never do.
+    const unsubscribe = store.onCredentialRevoked((id) => {
+      service.fenceEnvironment(id);
+    });
+
+    const { snapshot, token } = await service.prepareSync({
+      environmentId,
+      ownerEpoch,
+      sessionId,
+      generation: ownerEpoch,
+      localPath,
+      isAuthorized: () => true,
+    });
+    const entry = snapshot.manifest.entries.find((candidate) => candidate.path === "secret.txt");
+    if (!entry || entry.type !== "file") {
+      throw new Error("snapshot missing proof file");
+    }
+    const route = {
+      kind: "blob",
+      direction: "download",
+      environmentId,
+      sha256: entry.sha256,
+    } as const;
+    const authorization = service.authorize({ route, token });
+    expect(authorization).toBeDefined();
+
+    const callback = createNodeWorkspaceTransferHttpCallback(service);
+    const server = createServer((req, res) => {
+      void handleNodeWorkspaceTransferHttpRequest({
+        req,
+        res,
+        clientIp: "127.0.0.1",
+        callback,
+      }).catch((error: unknown) =>
+        res.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP fixture did not bind");
+    }
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/${environmentId}/blobs/${entry.sha256}`,
+        { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
+      );
+      expect(response.status).toBe(200);
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("blob response has no body");
+      }
+      let bytes = 0;
+      const first = await reader.read();
+      bytes += first.value?.byteLength ?? 0;
+
+      // Permanent revocation through the real store drives the fence end to end.
+      store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
+
+      const drained = (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+              return;
+            }
+            bytes += value.byteLength;
+          }
+        } catch {
+          // The fenced response is destroyed mid-body; the client read may reject.
+        }
+      })();
+      await Promise.allSettled([drained]);
+      expect(bytes).toBeLessThan(payload.byteLength);
+      expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
+      expect(service.authorize({ route, token })).toBeUndefined();
+    } finally {
+      unsubscribe();
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await service.closeAll().catch(() => undefined);
+      closeOpenClawStateDatabaseForTest();
     }
   });
 });

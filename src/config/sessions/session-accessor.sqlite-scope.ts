@@ -1,6 +1,5 @@
 // Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
 // Runtime feature code imports the session accessor barrel instead of this module.
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -14,7 +13,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { runQueuedStoreWrite, type StoreWriterTiming } from "../../shared/store-writer-queue.js";
+import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -26,7 +25,12 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../../state/openclaw-agent-write-admission.js";
 import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
+import { resolveSessionArtifactDirectory } from "./paths.js";
 import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
@@ -39,7 +43,6 @@ import type {
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
@@ -59,6 +62,7 @@ type SessionSqliteDatabase = Pick<
   | "session_progress_cards"
   | "session_suggestions"
   | "session_transcript_archives"
+  | "session_transcript_cold_archives"
   | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
@@ -221,6 +225,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   fn: () => Promise<T>,
   operation: SqliteSessionWriteOperation,
   diagnostics?: SqliteSessionWriteDiagnostics,
+  writer: "foreground" | "worker" = "foreground",
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
@@ -257,13 +262,9 @@ export async function runExclusiveSqliteSessionWrite<T>(
       : {}),
   });
   try {
-    const result = await runQueuedStoreWrite({
-      queues: SQLITE_SESSION_WRITER_QUEUES,
-      storePath,
-      label: "runExclusiveSqliteSessionWrite",
-      fn,
-      timing,
-    });
+    const result = await (writer === "worker"
+      ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing)
+      : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing));
     const completedAt = performance.now();
     if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn("slow SQLite session write", {
@@ -292,6 +293,7 @@ export function resolveSqliteScope(
     SessionAccessScope,
     "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
   >,
+  targetCache?: SessionSqliteTargetResolutionCache,
 ): ResolvedSqliteScope {
   const parsedAgentId = parseAgentSessionKey(scope.sessionKey)?.agentId;
   const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
@@ -303,11 +305,15 @@ export function resolveSqliteScope(
     : scope.storePath;
   const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
   const storeTarget = effectiveStorePath
-    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, {
-        agentId: effectiveAgentId,
-        defaultAgentId: scope.defaultAgentId,
-        ...(scope.env ? { env: scope.env } : {}),
-      })
+    ? resolveCachedSqliteStoreTarget(
+        {
+          agentId: effectiveAgentId,
+          defaultAgentId: scope.defaultAgentId,
+          env: scope.env,
+          storePath: effectiveStorePath,
+        },
+        targetCache,
+      )
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId: effectiveAgentId,
@@ -461,11 +467,7 @@ export function resolveSqliteTranscriptArchiveDirectory(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
 ): string {
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
-  const databaseDir = path.dirname(databasePath);
-  if (path.basename(databaseDir) !== "agent") {
-    return databaseDir;
-  }
-  return path.join(path.dirname(databaseDir), "sessions");
+  return resolveSessionArtifactDirectory(databasePath);
 }
 
 export function resolveSqliteTranscriptScope(
@@ -553,7 +555,7 @@ export function readSqliteTranscriptStoreBatches<T>(
 
 export function toDatabaseOptions(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "databaseAgentId" | "env" | "path">,
-): OpenClawAgentDatabaseOptions {
+): OpenClawAgentDatabaseOptions & { agentId: string } {
   return {
     agentId: scope.databaseAgentId ?? scope.agentId,
     ...(scope.env ? { env: scope.env } : {}),

@@ -29,6 +29,10 @@ import {
 } from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -55,6 +59,7 @@ import {
   buildEmbeddedExtensionFactoriesMock,
   buildAgentRuntimePlanMock,
   buildEmbeddedSystemPromptMock,
+  resolveBootstrapContextForRunMock,
   contextEngineCompactMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
@@ -932,11 +937,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           token: "subscription-token",
           expires: Date.now() + 60_000,
         },
-        "openai:platform": {
-          type: "api_key",
-          provider: "openai",
-          key: "platform-key",
-        },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
       },
       order: { openai: ["openai:subscription", "openai:platform"] },
     });
@@ -996,11 +997,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
-        "openai:broken": {
-          type: "api_key",
-          provider: "openai",
-          key: "broken-profile-key",
-        },
+        "openai:broken": createApiKeyCredential("openai", "broken-profile-key"),
       },
       order: { openai: ["openai:broken"] },
     });
@@ -1066,11 +1063,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
-        "openai:platform": {
-          type: "api_key",
-          provider: "openai",
-          key: "platform-key",
-        },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
       },
       order: { openai: ["openai:platform"] },
     });
@@ -1291,6 +1284,128 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         nativeCommandGuidanceLines: ["Subagent compact command guidance."],
       }),
     );
+  });
+
+  it("threads the aggregate bootstrap-truncation notice into the compaction prompt when the budget omits a later file", async () => {
+    // Two valid bootstrap files; only the first is admitted into context, so the
+    // second is fully omitted with no per-file inline marker. The aggregate
+    // budget chain must surface the canonical partial-context notice.
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(100), missing: false },
+        { name: "IDENTITY.md", path: "/ws/IDENTITY.md", content: "b".repeat(100), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(100) }],
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapTruncationNotice: expect.stringContaining("Treat Project Context as partial"),
+      }),
+    );
+  });
+
+  it("omits the bootstrap-truncation notice when the budget admits every file", async () => {
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(10), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(10) }],
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapTruncationNotice: undefined,
+      }),
+    );
+  });
+
+  it("delivers a real render of the bootstrap-truncation notice to the compaction session when the aggregate budget omits a later file", async () => {
+    // End-to-end proof: drive the real prepared-compaction owner
+    // (buildPreparedCompactionRuntime) through compactEmbeddedAgentSessionDirect
+    // with the real buildEmbeddedSystemPrompt renderer (not the "" mock), inject a
+    // real aggregate-exhaustion bootstrap result, and assert the notice survives
+    // into the actual prompt text delivered to the session via
+    // applySystemPromptToSession -> setBaseSystemPrompt.
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(100), missing: false },
+        { name: "IDENTITY.md", path: "/ws/IDENTITY.md", content: "b".repeat(100), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(100) }],
+    });
+    const actualSystemPrompt =
+      await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
+    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+      actualSystemPrompt.buildEmbeddedSystemPrompt(params),
+    );
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    const createdSession = (await createAgentSessionMock.mock.results[0]?.value) as {
+      session: {
+        agent: { state: { systemPrompt?: string } };
+        setBaseSystemPrompt: Mock;
+      };
+    };
+    const deliveredPrompt = createdSession.session.agent.state.systemPrompt ?? "";
+
+    // The real owner computed the notice and the real renderer embedded it in the
+    // prompt text that compaction delivered to the session.
+    expect(deliveredPrompt).toContain("## Bootstrap Context Notice");
+    expect(deliveredPrompt).toContain("Treat Project Context as partial");
+    expect(createdSession.session.setBaseSystemPrompt).toHaveBeenCalledWith(deliveredPrompt);
+  });
+
+  it("delivers a real render with no bootstrap-truncation notice to the compaction session when the budget admits every file", async () => {
+    resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        { name: "AGENTS.md", path: "/ws/AGENTS.md", content: "a".repeat(10), missing: false },
+      ],
+      contextFiles: [{ path: "/ws/AGENTS.md", content: "a".repeat(10) }],
+    });
+    const actualSystemPrompt =
+      await vi.importActual<typeof import("./system-prompt.js")>("./system-prompt.js");
+    buildEmbeddedSystemPromptMock.mockImplementation((params) =>
+      actualSystemPrompt.buildEmbeddedSystemPrompt(params),
+    );
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+    });
+
+    const createdSession = (await createAgentSessionMock.mock.results[0]?.value) as {
+      session: {
+        agent: { state: { systemPrompt?: string } };
+        setBaseSystemPrompt: Mock;
+      };
+    };
+    const deliveredPrompt = createdSession.session.agent.state.systemPrompt ?? "";
+
+    expect(deliveredPrompt).not.toContain("## Bootstrap Context Notice");
+    expect(deliveredPrompt).not.toContain("Treat Project Context as partial");
   });
 
   it("uses ACP prompt surface and guidance for compacted ACP prompt rebuilds", async () => {
@@ -1696,7 +1811,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     } as never;
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: preparedModelRuntime,
-      release: vi.fn(),
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
     });
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       {
@@ -2813,9 +2928,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("materializes subscription-auth OpenAI compaction while preserving logical context", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
     mockResolvedModel({ contextWindow: 1_000_000 });
-    ensureAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {
+    ensureAuthProfileStoreMock.mockReturnValue(
+      createAuthProfileStoreFixture({
         "openai:work": {
           type: "oauth",
           provider: "openai",
@@ -2823,8 +2937,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           refresh: "test-refresh",
           expires: Date.now() + 60_000,
         },
-      },
-    });
+      }),
+    );
     getApiKeyForModelMock.mockImplementation(async (params?: { profileId?: string }) => ({
       apiKey: "test-oauth",
       mode: "oauth",
@@ -3392,41 +3506,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(compactTesting.containsRealConversationMessages(messages)).toBe(false);
   });
 
-  it("registers the Ollama api provider before compaction", () => {
-    const streamFn = vi.fn();
-    registerProviderStreamForModelMock.mockReturnValue(streamFn);
-
-    const result = compactTesting.resolveCompactionProviderStream({
-      effectiveModel: {
-        provider: "ollama",
-        api: "ollama",
-        id: "qwen3:8b",
-        input: ["text"],
-        baseUrl: "http://127.0.0.1:11434",
-        headers: { Authorization: "Bearer ollama-cloud" },
-      } as never,
-      config: undefined,
-      agentDir: TEST_WORKSPACE_DIR,
-      effectiveWorkspace: TEST_WORKSPACE_DIR,
-      apiRegistry: {} as never,
-    });
-
-    expect(result).toBe(streamFn);
-    const streamRegistration = mockCallArg(registerProviderStreamForModelMock) as Record<
-      string,
-      unknown
-    >;
-    expectRecordFields(streamRegistration, {
-      agentDir: TEST_WORKSPACE_DIR,
-      workspaceDir: TEST_WORKSPACE_DIR,
-    });
-    expectRecordFields(streamRegistration.model, {
-      provider: "ollama",
-      api: "ollama",
-      id: "qwen3:8b",
-    });
-  });
-
   it("carries the prepared provider reconciler into direct compaction", async () => {
     mockResolvedModel();
     const reconcile = vi.fn(async () => undefined);
@@ -3810,7 +3889,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const parent = new AsyncWorkScope();
     const admissionStarted = createDeferred();
     const releaseAdmission = createDeferred();
-    const releaseLease = vi.fn();
+    const releaseLease = vi.fn(async () => {});
     const defaultAcquire = expectDefined(
       acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
       "default prepared runtime acquisition mock",
@@ -3822,7 +3901,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       admissionStarted.resolve(undefined);
       await releaseAdmission.promise;
       const lease = await defaultAcquire(input);
-      return { ...lease, release: releaseLease };
+      return { ...lease, [Symbol.asyncDispose]: releaseLease };
     }) as never);
 
     const pending = parent.run(() =>
@@ -4619,16 +4698,11 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("passes resolved OpenAI runtime context to context-engine compaction", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
-    ensureAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:p1": {
-          type: "api_key",
-          provider: "openai",
-          key: "platform-key",
-        },
-      },
-    });
+    ensureAuthProfileStoreMock.mockReturnValue(
+      createAuthProfileStoreFixture({
+        "openai:p1": createApiKeyCredential("openai", "platform-key"),
+      }),
+    );
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
@@ -4882,8 +4956,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
       order: { openai: ["openai:subscription"] },
     });
-    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
-    shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
@@ -4903,7 +4975,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           models: {
             providers: {
               openai: {
-                auth: "api-key",
                 apiKey: "literal-key",
                 models: [{ id: "gpt-5.5", contextWindow: 350_000 }],
               },
@@ -4950,8 +5021,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       order: { openai: ["openai:subscription"] },
     };
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
-    shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
     getApiKeyForModelMock.mockImplementation(async (authParams = {}) => {
       if (authParams.profileId === "openai:subscription") {
         throw new Error("subscription credential resolution failed");
@@ -4997,15 +5066,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           models: {
             providers: {
               openai: {
-                auth: "api-key",
                 apiKey: "literal-key",
                 models: [{ id: "gpt-5.5" }],
               },
-            },
-          },
-          agents: {
-            defaults: {
-              models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
             },
           },
         },

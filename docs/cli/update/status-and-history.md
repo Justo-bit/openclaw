@@ -23,7 +23,10 @@ openclaw update status --timeout 10
 | Flag                  | Default | Description                         |
 | --------------------- | ------- | ----------------------------------- |
 | `--json`              | `false` | Print machine-readable status JSON. |
-| `--timeout <seconds>` | `3`     | Timeout for checks.                 |
+| `--timeout <seconds>` | `300`   | Timeout for checks.                 |
+
+Explicit timeouts replace the default. Local installation discovery keeps its
+own inspection budget.
 
 For extended-stable package installs, status performs the same public selector
 and exact-package verification as foreground update. It can report
@@ -35,8 +38,10 @@ include `registry.reason` (`selector_missing`, `selector_query_failed`,
 
 Every admitted update has a durable `runId`, including updates requested from
 chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
-and updates refused after admission keep a skipped or failed record with their
-reason. CLI invocations rejected before admission leave state untouched. The same ID follows
+on profiles with an existing runtime database and updates refused after admission
+keep a skipped or failed record with their reason. A fresh-profile dry-run leaves
+the database absent and records no run. CLI invocations rejected before admission
+leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
@@ -45,7 +50,7 @@ a run ID.
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
 
-`openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
+An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
 If history cannot be read or classified, status still shows update availability
 and runtime findings. Human output explains that run status is unavailable;
@@ -86,6 +91,25 @@ Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
 
+Failed steps include bounded `failureFacts` when the updater observed a specific
+check, Doctor finding, package-manager error, service inspection reason, or plugin
+failure. Each fact names the check and reason code, with an optional affected
+config key, plugin ID, and one diagnostic line of at most 200 characters. These
+facts survive the run ledger and appear in the local summary and the reviewed
+GitHub failure report. Secrets and private paths are redacted before recording;
+public reports include recognized error causes instead of arbitrary command or
+user text, and show config key families instead of operator-defined names. Only
+catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
+remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
+and report size limits still apply.
+
+Failed finalization steps record their reason code before failure reporting starts.
+Standalone finalization also records the package or Git install kind. For package
+installs it records that package rollback is unnecessary because finalization does
+not replace the core package; this does not claim that Doctor left config or state
+unchanged, or that Gateway health was verified. Failure reports include the failing
+step's first recognized diagnostic line when no process exit code was recorded.
+
 Recoverable maintenance failures appear as recorded warnings even when the update
 succeeds. Each warning names the skipped work, the cause, and a repair command.
 Doctor also shows warnings from the latest run as historical observations: a later
@@ -96,6 +120,16 @@ A foreground updater publishes its final result after required finalization work
 and its local executor have settled. A late ownership or release failure returns
 an error instead of publishing an earlier success. Existing terminal history is
 not overwritten.
+
+Activation has an enclosing deadline derived from the update's existing phase
+budget. If it expires, the updater cancels owned work and waits within that budget
+for its child processes to settle, then records `update-activation-timeout` as a
+failed outcome. A child that has not stopped retains its ownership and recovery
+state. Inspect `openclaw update status` and `openclaw doctor`, and wait for the
+owning updater and its children to stop before running `openclaw update repair`.
+The timeout does not authorize rollback or removal of retained update state.
+If migration or pending recovery prevents a safe history write, the updater
+reports the timeout and preserves that state for its owning runtime to reconcile.
 
 Successful installation verification does not imply that obsolete package backups
 were deleted. If the package owner confirms that only obsolete-backup cleanup is

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
@@ -15,10 +16,11 @@ import {
   reconcilePluginPackageUpdateConfig,
 } from "./plugin-package-update.js";
 import type { PluginChannelSyncResult } from "./update-channel.js";
-import type {
-  PluginUpdateIntegrityDriftParams,
-  PluginUpdateLogger,
-  PluginUpdateOutcome,
+import {
+  isPluginInstallRecordUpdateSource,
+  type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateLogger,
+  type PluginUpdateOutcome,
 } from "./update-source.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "./update.js";
 
@@ -73,7 +75,16 @@ async function convergePluginReleaseCohortWithLease(
   let config = sync.config;
   let changed = sync.changed;
   let npmChanged = false;
-  const installOwners = Object.keys(config.plugins?.installs ?? {});
+  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+    config,
+    installRecords: config.plugins?.installs ?? {},
+    env: params.env,
+  });
+  const installOwners = Object.entries(config.plugins?.installs ?? {})
+    .filter(
+      ([id, record]) => isPluginInstallRecordUpdateSource(record) && !sourceBundledIds.has(id),
+    )
+    .map(([id]) => id);
   // Without prior package owners there is no retired child policy to reconcile.
   const beforeIndex = installOwners.length
     ? withPluginCache(createPluginCache(), () =>
@@ -116,7 +127,7 @@ async function convergePluginReleaseCohortWithLease(
       versionBoundPluginIds: params.versionBoundPluginIds,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
-      disableOnFailure: true,
+      retainOnUnavailable: true,
       logger: params.logger,
       onIntegrityDrift: params.onIntegrityDrift,
       onCapabilityConsent: params.onCapabilityConsent,
@@ -144,7 +155,7 @@ async function convergePluginReleaseCohortWithLease(
     versionBoundPluginIds: params.versionBoundPluginIds,
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
-    disableOnFailure: true,
+    retainOnUnavailable: true,
     logger: params.logger,
     onIntegrityDrift: params.onIntegrityDrift,
     onCapabilityConsent: params.onCapabilityConsent,
@@ -190,7 +201,9 @@ async function convergePluginReleaseCohortWithLease(
     missingPayloads,
     repairedMissingPayloadIds,
     repairOutcomes,
-    updateOutcomes: update.outcomes,
+    updateOutcomes: update.outcomes.filter(
+      (outcome) => outcome.status !== "skipped" || !repairedMissingPayloadIds.has(outcome.pluginId),
+    ),
     remainingMissingPayloads: await collectMissingPluginInstallPayloads({
       records: config.plugins?.installs ?? {},
       config,

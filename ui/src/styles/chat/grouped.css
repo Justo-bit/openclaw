@@ -185,7 +185,7 @@
 }
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
-.chat-group-footer.chat-group-footer--send-failure {
+.chat-group-footer.chat-group-footer--send-status {
   opacity: 1;
   pointer-events: auto;
 }
@@ -426,7 +426,8 @@
   stroke-linejoin: round;
 }
 
-.chat-send-status[data-send-state="unconfirmed"] {
+.chat-send-status[data-send-state="unconfirmed"],
+.chat-send-status[data-send-state="waiting-reconnect"] {
   color: var(--warn);
 }
 
@@ -653,13 +654,13 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Keep the image and initials fallback in one stable grid item. display: contents
+/* Keep the image and its fallback in one stable grid item. display: contents
    can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
   display: grid;
 }
 
-.chat-avatar-slot > .chat-avatar--sender-initials {
+.chat-avatar-slot > :not(img) {
   display: none;
 }
 
@@ -667,7 +668,7 @@ img.chat-avatar.user {
   display: none;
 }
 
-.chat-avatar-slot.is-fallback > .chat-avatar--sender-initials {
+.chat-avatar-slot.is-fallback > :not(img) {
   display: grid;
 }
 
@@ -691,11 +692,6 @@ img.chat-avatar.user {
 img.chat-avatar {
   object-fit: cover;
   object-position: center;
-}
-
-img.chat-avatar.chat-avatar--logo {
-  object-fit: contain;
-  padding: 2px;
 }
 
 /* Minimal Bubble Design - dynamic width based on content */

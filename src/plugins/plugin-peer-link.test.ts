@@ -1,8 +1,10 @@
 // Covers plugin peer linking for development installs.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   linkOpenClawPeerDependencies,
@@ -15,6 +17,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -62,7 +65,7 @@ describe("plugin peer links", () => {
         const warnings: string[] = [];
         const guarded = {
           logger: { warn: (message: string) => warnings.push(message) },
-          beforePersistentEffect: () => {
+          beforePersistentApply: () => {
             if (!current) {
               current = true;
               throw failure;
@@ -108,6 +111,54 @@ describe("plugin peer links", () => {
     );
   });
 
+  it("awaits registered peer preparation before checking synchronous apply authority", async () => {
+    const root = makeTempDir();
+    const extensionsDir = path.join(root, "extensions");
+    const packageDir = path.join(extensionsDir, "peer-plugin");
+    const linkPath = path.join(packageDir, "node_modules", "openclaw");
+    const oldHost = path.join(root, "old-host");
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.mkdirSync(oldHost);
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
+    );
+    fs.symlinkSync(oldHost, linkPath, "junction");
+    const prepared = createDeferred();
+    const release = createDeferred();
+    let preparationEntered = false;
+    const refusal = new Error("registered peer apply authority revoked");
+    const beforePersistentApply = vi.fn(() => {
+      throw refusal;
+    });
+    const operation = reconcileRegisteredOpenClawHostLinks({
+      extensionsDir,
+      installRecords: { "peer-plugin": { source: "npm", installPath: packageDir } },
+      mode: "repair",
+      beforePersistentEffect: async () => {
+        preparationEntered = true;
+        prepared.resolve();
+        await release.promise;
+      },
+      beforePersistentApply,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await Promise.race([prepared.promise, operation]);
+      expect(preparationEntered).toBe(true);
+      expect(beforePersistentApply).not.toHaveBeenCalled();
+      expect(fs.readlinkSync(linkPath)).toBe(oldHost);
+    } finally {
+      release.resolve();
+      await operation;
+    }
+    expect(await operation).toBe(refusal);
+    expect(beforePersistentApply).toHaveBeenCalledOnce();
+    expect(fs.readlinkSync(linkPath)).toBe(oldHost);
+  });
+
   it.each(["symlink", "directory"] as const)(
     "stops before replacement on a one-shot refusal after removing the old %s",
     async (existingKind) => {
@@ -120,11 +171,12 @@ describe("plugin peer links", () => {
         const oldHost = path.join(root, "old-host");
         fs.mkdirSync(oldHost);
         fs.symlinkSync(oldHost, linkPath, "junction");
-        const unlink = fsPromises.unlink.bind(fsPromises);
-        vi.spyOn(fsPromises, "unlink").mockImplementation(async (target) => {
-          await unlink(target);
+        const unlink = fs.unlinkSync.bind(fs);
+        vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+          unlink(target);
           current = false;
         });
+        syncBuiltinESMExports();
       } else {
         fs.mkdirSync(linkPath);
         fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
@@ -141,7 +193,7 @@ describe("plugin peer links", () => {
           installedDir: packageDir,
           peerDependencies: { openclaw: "*" },
           logger: { warn: (message) => warnings.push(message) },
-          beforePersistentEffect: () => {
+          beforePersistentApply: () => {
             if (!current) {
               current = true;
               throw failure;
@@ -159,13 +211,16 @@ describe("plugin peer links", () => {
     const packageDir = makeTempDir();
     fs.mkdirSync(path.join(packageDir, "node_modules"));
     const failure = new Error("peer link write denied");
-    vi.spyOn(fsPromises, "symlink").mockRejectedValueOnce(failure);
+    vi.spyOn(fs, "symlinkSync").mockImplementationOnce(() => {
+      throw failure;
+    });
+    syncBuiltinESMExports();
     const warnings: string[] = [];
 
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
       peerDependencies: { openclaw: "*" },
-      beforePersistentEffect: () => {},
+      beforePersistentApply: () => {},
       logger: { warn: (message) => warnings.push(message) },
     });
 

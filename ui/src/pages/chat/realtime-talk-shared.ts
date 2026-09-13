@@ -22,6 +22,8 @@ export type RealtimeTalkTranscript = {
   role: "user" | "assistant";
   text: string;
   final: boolean;
+  /** Literal fragments append; complete snapshots replace without inferred turn boundaries. */
+  textMode?: "verbatim" | "snapshot";
   itemId?: string;
   order?: number;
 };

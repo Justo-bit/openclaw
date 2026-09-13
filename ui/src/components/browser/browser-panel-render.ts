@@ -99,7 +99,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
           : nothing
       }
       ${
-        embedded
+        embedded && !controller.host.fixedTab
           ? html`<button
               class="bp-icon"
               type="button"
@@ -147,6 +147,7 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
         type="text"
         spellcheck="false"
         autocomplete="off"
+        ?disabled=${Boolean(controller.host.fixedTab && !controller.activeTargetId)}
         placeholder=${t("browser.urlPlaceholder")}
         .value=${controller.urlDraft}
         @focus=${(event: FocusEvent) => {
@@ -318,11 +319,13 @@ function renderViewportContent(controller: BrowserPanelController) {
       icon: icons.globe,
       heading: t("chat.sidePanel.browser"),
       description: t("browser.notRunning"),
-      action: html`
-        <button class="bp-btn" type="button" @click=${() => void controller.startBrowserNow()}>
-          ${t("browser.start")}
-        </button>
-      `,
+      action: controller.host.fixedTab
+        ? nothing
+        : html`
+            <button class="bp-btn" type="button" @click=${() => void controller.startBrowserNow()}>
+              ${t("browser.start")}
+            </button>
+          `,
     });
   }
   if (!controller.view && controller.unavailableTabText) {
@@ -364,7 +367,7 @@ function renderViewportContent(controller: BrowserPanelController) {
   `;
 }
 
-function renderViewport(controller: BrowserPanelController) {
+function renderViewport(controller: BrowserPanelController, rendersTabStrip: boolean) {
   return html`
     <wa-tab-panel
       id="browser-tab-panel"
@@ -372,7 +375,9 @@ function renderViewport(controller: BrowserPanelController) {
       name=${controller.activeTargetId ?? "browser"}
       active
       aria-labelledby=${
-        controller.activeTargetId ? `browser-tab-${controller.activeTargetId}` : nothing
+        rendersTabStrip && controller.activeTargetId
+          ? `browser-tab-${controller.activeTargetId}`
+          : nothing
       }
       tabindex="0"
       @wheel=${(event: WheelEvent) => controller.handleWheel(event)}
@@ -398,8 +403,11 @@ export function renderBrowserPanelChrome(
   onClose: () => void,
   resizer: TemplateResult | typeof nothing,
   embedded = false,
+  tabsInHeader = false,
 ) {
   const style = embedded ? nothing : dock === "bottom" ? `height:${height}px` : `width:${width}px`;
+  const rendersTabStrip =
+    !controller.host.fixedTab && (!embedded || (!tabsInHeader && controller.tabs.length > 0));
   return html`
     <section
       class="bp bp--${embedded ? "embedded" : dock}"
@@ -408,12 +416,12 @@ export function renderBrowserPanelChrome(
     >
       ${embedded ? nothing : resizer}
       ${
-        embedded && controller.tabs.length === 0
-          ? nothing
-          : html`<header class="rail-header bp-header">
+        rendersTabStrip
+          ? html`<header class="rail-header bp-header">
               ${renderTabStrip(controller, embedded)}
               ${embedded ? nothing : renderHeaderActions(controller, dock, onDockChange, onClose)}
             </header>`
+          : nothing
       }
       ${renderToolbar(controller, embedded)} ${renderAnnotateBar(controller)}
       ${
@@ -423,7 +431,7 @@ export function renderBrowserPanelChrome(
             ? html`<div class="bp-note" role="status">${controller.noticeText}</div>`
             : nothing
       }
-      ${renderViewport(controller)}
+      ${renderViewport(controller, rendersTabStrip)}
     </section>
   `;
 }

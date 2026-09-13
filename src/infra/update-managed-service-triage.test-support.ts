@@ -17,6 +17,10 @@ import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "./triage-runtime.test-support.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
@@ -258,6 +262,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
   );
   const log = path.join(root, "handoff.log");
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
+  const updateLeaseDatabaseIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
   const paramsFile = path.join(root, "handoff.json");
   const helperFile = path.join(root, "handoff.cjs");
   await fs.writeFile(helperFile, await stagedHandoffScript(root));
@@ -296,6 +303,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     commandArgv[0] = startup.command;
   }
   const env = startup?.env ?? childEnv;
+  const handoffTimeoutMs = 30_000;
   await fs.writeFile(
     paramsFile,
     JSON.stringify({
@@ -309,8 +317,9 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,
       parentStartIdentity: String(getFileLockProcessStartTime(parentPid)),
-      parentExitTimeoutMs: 30_000,
-      parentExitDeadlineAt: Date.now() + 30_000,
+      parentExitTimeoutMs: handoffTimeoutMs,
+      parentExitDeadlineAt: Date.now() + handoffTimeoutMs,
+      recoveryTimeoutMs: handoffTimeoutMs,
       cwd: root,
       commandArgv,
       commandLabel: "synthetic",
@@ -319,7 +328,8 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
       metaPath,
       stateDatabasePath: path.join(root, "state.sqlite"),
       nodeSqliteLocation: path.join(root, "state.sqlite"),
-      updateLeaseDatabasePath: databasePath,
+      updateLeaseDatabasePath: updateLeaseDatabaseIdentity.databasePath,
+      updateLeaseDatabaseIdentity,
       updateLeaseKey: installRoot,
       updateLeaseOwner: root,
       sensitivePaths: runtimeFiles,

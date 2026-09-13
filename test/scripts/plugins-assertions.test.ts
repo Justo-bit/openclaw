@@ -18,6 +18,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -68,32 +69,18 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
   );
 }
 
-function writeFixtureServerShims(binDir: string, pidPath: string): void {
+function writeFixtureServerShims(
+  binDir: string,
+  pidPath: string,
+  termAction: "exit 0" | ":" = "exit 0",
+): void {
   mkdirSync(binDir, { recursive: true });
   writeFileSync(
     path.join(binDir, "node"),
     [
       "#!/bin/bash",
       'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
-      "trap 'exit 0' TERM",
-      "while true; do /bin/sleep 1; done",
-      "",
-    ].join("\n"),
-  );
-  writeFileSync(path.join(binDir, "sleep"), "#!/bin/bash\nexit 0\n");
-  chmodSync(path.join(binDir, "node"), 0o755);
-  chmodSync(path.join(binDir, "sleep"), 0o755);
-  writeFileSync(pidPath, "");
-}
-
-function writeStubbornFixtureServerShims(binDir: string, pidPath: string): void {
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(
-    path.join(binDir, "node"),
-    [
-      "#!/bin/bash",
-      'printf "%s\\n" "$$" >"$OPENCLAW_TEST_FIXTURE_SERVER_PID"',
-      "trap ':' TERM",
+      `trap '${termAction}' TERM`,
       "while true; do /bin/sleep 1; done",
       "",
     ].join("\n"),
@@ -523,28 +510,19 @@ done
       mkdirSync(fixtureDir);
       writeFixtureServerShims(binDir, pidPath);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -565,32 +543,23 @@ done
       const fixtureDir = path.join(root, "fixture");
       const pidPath = path.join(root, "server.pid");
       mkdirSync(fixtureDir);
-      writeStubbornFixtureServerShims(binDir, pidPath);
+      writeFixtureServerShims(binDir, pidPath, ":");
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `( start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `( start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)} )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
-            OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "0.05",
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "0.05",
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -604,30 +573,19 @@ done
   });
 
   it("rejects invalid fixture stop attempts before cleanup polling", () => {
-    const result = spawnSync(
-      "/bin/bash",
+    const result = runPluginsSweepShell(
       [
-        "-c",
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "openclaw_plugins_signal_fixture_process() { echo signal; }",
-          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-          "set +e",
-          "openclaw_plugins_stop_fixture_process 12345",
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x",
-        },
-      },
+        "set -euo pipefail",
+        "source scripts/e2e/lib/plugins/fixtures.sh",
+        "openclaw_plugins_signal_fixture_process() { echo signal; }",
+        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+        "set +e",
+        "openclaw_plugins_stop_fixture_process 12345",
+        'status="$?"',
+        "set -e",
+        'exit "$status"',
+      ].join("\n"),
+      { OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2x" },
     );
 
     expect(result.status).toBe(2);
@@ -637,30 +595,21 @@ done
   });
 
   it("rejects invalid fixture stop intervals before cleanup polling", () => {
-    const result = spawnSync(
-      "/bin/bash",
+    const result = runPluginsSweepShell(
       [
-        "-c",
-        [
-          "set -euo pipefail",
-          "source scripts/e2e/lib/plugins/fixtures.sh",
-          "openclaw_plugins_signal_fixture_process() { echo signal; }",
-          "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
-          "set +e",
-          "openclaw_plugins_stop_fixture_process 12345",
-          'status="$?"',
-          "set -e",
-          'exit "$status"',
-        ].join("\n"),
-      ],
+        "set -euo pipefail",
+        "source scripts/e2e/lib/plugins/fixtures.sh",
+        "openclaw_plugins_signal_fixture_process() { echo signal; }",
+        "openclaw_plugins_fixture_process_alive() { echo probe; return 1; }",
+        "set +e",
+        "openclaw_plugins_stop_fixture_process 12345",
+        'status="$?"',
+        "set -e",
+        'exit "$status"',
+      ].join("\n"),
       {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
-          OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
-        },
+        OPENCLAW_PLUGINS_FIXTURE_STOP_ATTEMPTS: "2",
+        OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS: "soon",
       },
     );
 
@@ -678,29 +627,20 @@ done
       mkdirSync(fixtureDir);
       writeCrashingFixtureServerShim(binDir);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-            'status="$?"',
-            "set -e",
-            'printf "status=%s\\n" "$status"',
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
+          'status="$?"',
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -773,8 +713,9 @@ fs.renameSync = (source, destination) => {
 };
 `,
     );
+    const nodeExecPath = resolveTestNodeExecPath();
     const child = spawn(
-      process.execPath,
+      nodeExecPath,
       [
         "--import",
         pathToFileURL(preload).href,
@@ -1453,28 +1394,19 @@ fs.renameSync = (source, destination) => {
       );
       chmodSync(path.join(binDir, "node"), 0o755);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "set +e",
-            `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
-            'status="$?"',
-            "set -e",
-            'exit "$status"',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "set +e",
+          `start_npm_fixture_registry fixture-pkg 1.0.0 ${shellQuote(path.join(root, "fixture.tgz"))} ${shellQuote(fixtureDir)}`,
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1496,31 +1428,22 @@ fs.renameSync = (source, destination) => {
       mkdirSync(tmpDir);
       writeFixtureServerShims(binDir, pidPath);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
-            'status="$?"',
-            "set -e",
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          `( set -e; trap 'printf caller-cleanup > ${shellQuote(cleanupPath)}' EXIT; run_plugins_clawhub_scenario )`,
+          'status="$?"',
+          "set -e",
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          OPENCLAW_TEST_FIXTURE_SERVER_PID: pidPath,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1547,31 +1470,22 @@ fs.renameSync = (source, destination) => {
       );
       chmodSync(path.join(binDir, "node"), 0o755);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            "run_plugins_clawhub_scenario",
-            'status="$?"',
-            "set -e",
-            'exit "$status"',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          "run_plugins_clawhub_scenario",
+          'status="$?"',
+          "set -e",
+          'exit "$status"',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "64kb",
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 
@@ -1591,32 +1505,23 @@ fs.renameSync = (source, destination) => {
       mkdirSync(tmpDir);
       writeCrashingFixtureServerShim(binDir);
 
-      const result = spawnSync(
-        "/bin/bash",
+      const result = runPluginsSweepShell(
         [
-          "-c",
-          [
-            "set -euo pipefail",
-            "source scripts/e2e/lib/plugins/fixtures.sh",
-            "source scripts/e2e/lib/plugins/clawhub.sh",
-            "set +e",
-            "run_plugins_clawhub_scenario",
-            'status="$?"',
-            "set -e",
-            'printf "status=%s\\n" "$status"',
-            '[ "$status" != "0" ]',
-          ].join("\n"),
-        ],
+          "set -euo pipefail",
+          "source scripts/e2e/lib/plugins/fixtures.sh",
+          "source scripts/e2e/lib/plugins/clawhub.sh",
+          "set +e",
+          "run_plugins_clawhub_scenario",
+          'status="$?"',
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[ "$status" != "0" ]',
+        ].join("\n"),
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
-            OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
-            OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
-            PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
-          },
+          OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "80",
+          OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB: "0",
+          OPENCLAW_PLUGINS_TMP_DIR: tmpDir,
+          PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
         },
       );
 

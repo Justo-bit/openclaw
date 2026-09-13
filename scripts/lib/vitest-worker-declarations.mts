@@ -1,6 +1,10 @@
 // Declaration paths are shared metadata; only the runner imports their build values.
 export const runtimeProcessDeclarationEntries = {
+  "extensions/memory-core/manager-cpu-entrypoints":
+    "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
+  "extensions/document-extract/document-extractor-worker-entrypoint":
+    "extensions/document-extract/document-extractor-worker-entrypoint.ts",
   "extensions/memory-core/manager-search-knn-entrypoint":
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
@@ -10,6 +14,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
+  "cli/update-cli/update-command-executor-native-runtime.test-support":
+    "src/cli/update-cli/update-command-executor-native-runtime.test-support.ts",
   "commands/doctor-config-runtime.test-support":
     "src/commands/doctor-config-runtime.test-support.ts",
   "test-support/channel-ingress-gateway-restart-entrypoint":

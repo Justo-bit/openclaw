@@ -92,6 +92,9 @@ After connecting, chat waits for account-scoped recovery before accepting or sen
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
 resolve that turn with its **Retry** or **Check delivery** action first.
+If the initial message is waiting for recovery, its chat shows a loading placeholder
+until the message can be restored, rather than the empty new-chat welcome screen.
+Recovery notices appear below the composer and clear when the blocking condition resolves.
 
 If the connection drops before a send is acknowledged, reconnect checks the transcript and
 the session's active or last run ID for delivery proof. A matching run confirms receipt even
@@ -132,6 +135,12 @@ cleanup follows verified delivery or discard and accounts for retained recovery 
 If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
 available rather than overwriting newer input. Do not clear browser site data
 while you still have saved messages or attachment drafts to recover.
+
+If the browser closes its draft database connection, the next storage operation
+opens a fresh connection automatically. A recovery error without any loaded entries
+appears as **Saved messages could not be loaded**; it does not mean that messages
+have lost their destinations or that browser storage is full. Reload to retry if
+the error persists, keeping site data intact.
 
 First opens and reloads without usable warm state show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a

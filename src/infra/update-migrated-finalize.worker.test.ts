@@ -8,6 +8,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../config/materialize.j
 const mocks = vi.hoisted(() => ({
   finish: vi.fn(),
   close: vi.fn(),
+  fence: { assertCurrent: vi.fn() },
 }));
 
 vi.mock("../cli/daemon-cli.js", () => ({ finishUpdateRun: vi.fn() }));
@@ -17,6 +18,10 @@ vi.mock("../cli/runtime-cleanup-scope.js", () => ({
 }));
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
   withDelegatedUpdateCommandExecutor: vi.fn(),
+  withUpdateCommandExecutor: async (
+    _runId: string,
+    operation: (executor: { enter: () => Promise<typeof mocks.fence> }) => Promise<unknown>,
+  ) => await operation({ enter: async () => mocks.fence }),
 }));
 vi.mock("../cli/update-cli/update-command-post-update.js", () => ({ finishUpdate: mocks.finish }));
 vi.mock("../cli/update-cli/update-command-result.js", () => ({
@@ -29,7 +34,7 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
 vi.mock("../cli/update-cli/update-command-windows-task.js", () => ({
   createWindowsTaskAutoStartRecovery: vi.fn(),
 }));
-vi.mock("../state/openclaw-state-db.js", () => ({ closeOpenClawStateDatabase: mocks.close }));
+vi.mock("../state/openclaw-state-db.js", () => ({ closeOpenClawStateDatabaseAsync: mocks.close }));
 vi.mock("./update-requester-authority.js", () => ({
   createManagedUpdateRequesterAuthority: vi.fn(),
 }));
@@ -76,7 +81,7 @@ it("binds migrated worker finalization to its local candidate runtime", async ()
       channel: "stable",
       downgradeRisk: false,
       shouldRestart: false,
-      opts: { json: true, run: { runId: "candidate-run", env: {} } },
+      opts: { json: true, run: { runId: "candidate-run", env: {}, activationTimeoutMs: 1_000 } },
       controlPlaneUpdateSentinelMeta: null,
       preUpdatePluginInstallRecords: {},
       startedAt: 1,
@@ -97,10 +102,22 @@ it("binds migrated worker finalization to its local candidate runtime", async ()
   await import("./update-migrated-finalize.worker.js");
   await completed.promise;
 
-  expect(mocks.finish).toHaveBeenCalledExactlyOnceWith(input.params, { candidateRuntime: true });
+  expect(mocks.finish).toHaveBeenCalledExactlyOnceWith(
+    {
+      ...input.params,
+      opts: { ...input.params.opts, run: { ...input.params.opts.run, executorFence: mocks.fence } },
+    },
+    { candidateRuntime: true },
+  );
+  expect(mocks.fence.assertCurrent).toHaveBeenCalled();
   expect(write).toHaveBeenCalledExactlyOnceWith(
     input.resultPath,
-    JSON.stringify({ result: input.params.result, exitCode: 0, terminalRunId: "candidate-run" }),
+    JSON.stringify({
+      result: input.params.result,
+      exitCode: 0,
+      terminalRunId: "candidate-run",
+      executorDelegation: "pid-start-v1",
+    }),
     { mode: 0o600 },
   );
 });

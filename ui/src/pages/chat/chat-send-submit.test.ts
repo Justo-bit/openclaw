@@ -546,6 +546,7 @@ describe("human mention submission", () => {
       chatMessage: "@Alex please review",
       chatMentions: [{ profileId: "profile-first", start: 0, end: 5 }],
       chatLoading: true,
+      currentSessionId: "existing-conversation",
       requestHandlers: {
         "chat.history": () => history.promise,
         "chat.send": { status: "started" },
@@ -553,8 +554,12 @@ describe("human mention submission", () => {
     });
     const sending = handleSendChat(host);
     await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
+        signal: expect.any(AbortSignal),
+      }),
     );
+    expect(host.chatMessage).toBe("");
+    host.chatMessage = "@Alex please review";
     host.chatMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
     history.resolve({
       messages: [],
@@ -890,7 +895,8 @@ describe("handleSendChat session ownership", () => {
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
       expect(host.chatQueue).toEqual([]);
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
-      expect(host.chatError).toContain("connection");
+      expect(host.chatError).toBeUndefined();
+      expect(host.lastError).toBeNull();
       readiness.mockReturnValue(true);
       await handleSendChat(host);
       expect(findChatSendPayload(host)).toMatchObject({
@@ -1022,6 +1028,8 @@ describe("handleSendChat session ownership", () => {
         connected,
         chatMessage: "keep this later draft",
         chatAttachments: [attachment],
+        lastError: "Earlier request failed",
+        chatError: "Earlier request failed",
         requestHandlers: { "chat.send": { status: "started" } },
         hasPendingInitialTurn: () => true,
       });
@@ -1031,7 +1039,8 @@ describe("handleSendChat session ownership", () => {
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
       expect(host.chatQueue).toEqual([]);
       expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
-      expect(host.chatError).toContain("initial message");
+      expect(host.chatError).toBe("Earlier request failed");
+      expect(host.lastError).toBe("Earlier request failed");
     },
   );
 

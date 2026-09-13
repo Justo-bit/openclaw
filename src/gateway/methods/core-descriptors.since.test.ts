@@ -185,6 +185,7 @@ describe("core gateway method release trains", () => {
         .toSorted(),
     ).toEqual(TRAIN_2026_8_METHODS.toSorted());
     for (const method of [
+      "canvas.document.preview",
       "canvas.document.view",
       "plugins.controlUi.list",
       "plugins.controlUi.reload",
@@ -193,6 +194,7 @@ describe("core gateway method release trains", () => {
       "update.runs.get",
       "update.runs.list",
       "update.report",
+      "plugins.reload",
     ]) {
       expect(methods.find((candidate) => candidate.name === method)?.since).toBe("2026.9");
     }

@@ -33,6 +33,7 @@ import {
   renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
@@ -50,6 +51,8 @@ import {
 } from "./components/chat-thread-interactions.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import { selectChatInputDisplay } from "./history-merge.ts";
+import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 export type ChatProps = Omit<
@@ -77,6 +80,7 @@ export type ChatProps = Omit<
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
+    providerPolicyNotice?: ProviderPolicyNotice | null;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;
@@ -141,14 +145,6 @@ export function renderChat(props: ChatProps) {
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
-  const showModelSetupSplash =
-    props.modelSetupRequired === true &&
-    props.messages.length === 0 &&
-    (pendingInputs?.page.items.length ?? 0) === 0 &&
-    props.toolMessages.length === 0 &&
-    props.streamSegments.length === 0 &&
-    !props.stream &&
-    props.queue.length === 0;
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
         requestVersion === undefined
@@ -182,6 +178,7 @@ export function renderChat(props: ChatProps) {
         loading: props.loading && !placementStartup,
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
+        initialTurnId: props.placementStartup?.initialTurn?.id,
         pendingInputs: pendingInputs?.page.items,
         runActive: props.runActive === true,
         runWorking,
@@ -228,6 +225,11 @@ export function renderChat(props: ChatProps) {
   // placement initial turn, whose retry action belongs to startup.
   const defaultComposer = renderChatComposer({
     ...props,
+    displayQueue: selectChatInputDisplay(
+      props.messages,
+      props.queue,
+      pendingInputs?.page.items ?? [],
+    ).queue,
     anchoredNotices: renderChatComposerNotices(props),
     onRequestUpdate: requestUpdate,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
@@ -239,9 +241,9 @@ export function renderChat(props: ChatProps) {
       sessionKey: props.sessionKey,
       agentId: props.currentAgentId,
       draft: props.draft,
-      canSend: props.canSend,
+      canSend: props.canSend && !props.submitDisabledReason,
       sending: props.sending,
-      disabledReason: props.disabledReason,
+      disabledReason: props.submitDisabledReason ?? props.disabledReason,
       setDraft: props.onDraftChange,
       send: async () => props.onSend(),
       abort: props.onAbort,
@@ -340,7 +342,14 @@ export function renderChat(props: ChatProps) {
         ) {
           return;
         }
-        if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
+        if (
+          event.key === "Escape" &&
+          props.replyTarget &&
+          !event.defaultPrevented &&
+          !event.isComposing &&
+          event.keyCode !== 229 &&
+          !getChatComposerState(props.paneId).composerComposing
+        ) {
           event.preventDefault();
           props.onClearReply?.();
           return;
@@ -452,7 +461,7 @@ export function renderChat(props: ChatProps) {
                     .agentId=${props.currentAgentId}
                     .presented=${props.presented ?? true}
                   ></openclaw-plugin-contributions>
-                  ${showModelSetupSplash ? nothing : chatColumnFooter}
+                  ${chatColumnFooter}
                 </div>
               </div>
             </div>

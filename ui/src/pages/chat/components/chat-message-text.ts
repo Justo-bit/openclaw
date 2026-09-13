@@ -1,14 +1,12 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
+import { Directive, directive } from "lit/directive.js";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
-import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
 // The new-session preview shares text presentation without loading transcript actions or tools.
@@ -72,23 +70,6 @@ export function renderMessageJson(
   </details>`;
 }
 
-/** Keep internal oversized-history markers out of every user-visible text surface. */
-export function resolveMessageDisplayMarkdown(
-  message: unknown,
-  normalizedMessage: NormalizedMessage,
-): string {
-  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
-  if (metadata?.truncated === true && metadata.reason === "oversized") {
-    return t("chat.messages.tooLargeToDisplay");
-  }
-  const markdown = normalizedMessage.content
-    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
-    .join("\n");
-  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-    ? stripThinkingTags(markdown)
-    : markdown;
-}
-
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
 const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
 const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
@@ -117,12 +98,11 @@ function userMessageOverflowRef(expanded: boolean) {
       if (!disclosure || !toggle) {
         return;
       }
-      const overflowing = expanded || element.scrollHeight > element.clientHeight + 1;
-      disclosure.classList.toggle("has-overflow", overflowing);
-      toggle.hidden = !overflowing;
+      toggle.hidden = !expanded && element.scrollHeight <= element.clientHeight + 1;
     };
     // Lit resolves refs while siblings are still committing. Measure after the
-    // toggle exists so wrapped text can reveal its own disclosure control.
+    // toggle exists; it renders visible so collapsing never shifts row height,
+    // and only content that fits the clamp hides it.
     queueMicrotask(update);
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(update);
@@ -151,6 +131,7 @@ export function renderMessageMarkdown(
   const recovered = recoverFullMessage && disclosure?.expanded;
   const text = renderMarkdownText(
     recovered ? (disclosure.markdown ?? markdown) : markdown,
+    messageKey,
     opts.isStreaming,
     recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
     duplicateSuffix,
@@ -183,18 +164,17 @@ export function renderMessageMarkdown(
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
+    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
         ${text}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
-        ?hidden=${!expanded}
-        aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
       >
+        ${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         ${expanded ? icons.chevronUp : icons.chevronDown}
       </button>
     </div>
@@ -208,8 +188,43 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
+class MarkdownPartsDirective extends Directive {
+  private messageKey: string | undefined;
+  private source = "";
+  private stableHtml = "";
+  private fragments: string[] = [];
+  private generation = {};
+
+  render(messageKey: string, source: string, [stableHtml, tailHtml]: readonly [string, string]) {
+    if (
+      this.messageKey !== messageKey ||
+      !source.startsWith(this.source) ||
+      !stableHtml.startsWith(this.stableHtml)
+    ) {
+      this.fragments = [];
+      this.stableHtml = "";
+      this.generation = {};
+    }
+    if (stableHtml.length > this.stableHtml.length) {
+      this.fragments.push(stableHtml.slice(this.stableHtml.length));
+    }
+    this.messageKey = messageKey;
+    this.source = source;
+    this.stableHtml = stableHtml;
+    // Canonical HTML proves continuity; live DOM also contains the reader's
+    // control choices and Markdown enhancements, which must stay on its nodes.
+    return keyed(
+      this.generation,
+      html`${this.fragments.map((fragment) => unsafeHTML(fragment))}${unsafeHTML(tailHtml)}`,
+    );
+  }
+}
+
+const markdownParts = directive(MarkdownPartsDirective);
+
 function renderMarkdownText(
   markdown: string,
+  messageKey: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
@@ -222,9 +237,7 @@ function renderMarkdownText(
     const terminalPart = parts[1].trim() ? 1 : 0;
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
-  // Separate Lit parts preserve completed code controls and diagrams while the
-  // streaming tail changes; the Markdown splitter still owns container boundaries.
-  const content = parts.map((part) => unsafeHTML(part));
+  const content = markdownParts(messageKey, markdown, parts);
   return html` <div class="chat-text" dir="${detectTextDirection(markdown)}">${content}</div> `;
 }
 

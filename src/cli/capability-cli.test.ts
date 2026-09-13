@@ -110,7 +110,9 @@ const mocks = vi.hoisted(() => ({
   >(async () => []),
   releaseSimpleCompletion: vi.fn(),
   acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
-    release: () => mocks.releaseSimpleCompletion(),
+    async [Symbol.asyncDispose]() {
+      mocks.releaseSimpleCompletion();
+    },
     selection: {
       provider: "openai",
       modelId: "gpt-5.4",
@@ -328,10 +330,11 @@ vi.mock("./command-secret-targets.js", () => ({
 }));
 
 // Account-secret snapshot preparation is covered by dedicated
-// model.account-secrets.* tests; keep this command-wiring suite on the
-// pre-existing mocked world instead of loading the real secrets runtime.
-vi.mock("./capability-cli/model-local-secrets.js", () => ({
-  prepareLocalModelRunAccountSecrets: vi.fn(async () => {}),
+// model.account-secrets.* and local-runners.account-secrets tests; keep this
+// command-wiring suite on the pre-existing mocked world instead of loading the
+// real secrets runtime.
+vi.mock("./capability-cli/local-account-secrets.js", () => ({
+  prepareLocalCapabilityAccountSecrets: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -1359,7 +1362,9 @@ describe("capability cli", () => {
 
   it("adds minimal instructions only for openai local model probes", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "openai",
         modelId: "gpt-5.5",
@@ -1538,7 +1543,9 @@ describe("capability cli", () => {
 
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
     mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      release: () => mocks.releaseSimpleCompletion(),
+      async [Symbol.asyncDispose]() {
+        mocks.releaseSimpleCompletion();
+      },
       selection: {
         provider: "codex",
         modelId: "gpt-5.4",
@@ -3376,6 +3383,56 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("audio.transcription");
   });
 
+  it.each([
+    { root: "infer", json: true },
+    { root: "infer", json: false },
+    { root: "capability", json: true },
+    { root: "capability", json: false },
+  ])("reports actual audio attribution for $root with json=$json", async ({ root, json }) => {
+    const result = {
+      text: "meeting notes",
+      provider: "fixture-asr",
+      model: "fixture-actual-model",
+    };
+    mocks.transcribeAudioFile.mockResolvedValueOnce(result);
+
+    await runCap(
+      root,
+      "audio",
+      "transcribe",
+      "--file",
+      "memo.m4a",
+      "--model",
+      "openai/whisper-1",
+      ...(json ? ["--json"] : []),
+    );
+
+    if (json) {
+      expect(firstJsonOutput()).toEqual({
+        ok: true,
+        capability: "audio.transcribe",
+        transport: "local",
+        provider: result.provider,
+        model: result.model,
+        attempts: [],
+        outputs: [
+          { path: path.resolve("memo.m4a"), text: result.text, kind: "audio.transcription" },
+        ],
+      });
+    } else {
+      expect(mocks.runtime.log.mock.calls.at(-1)?.[0]).toBe(
+        [
+          "audio.transcribe via local",
+          "provider: fixture-asr",
+          "model: fixture-actual-model",
+          "outputs: 1",
+          path.resolve("memo.m4a"),
+          result.text,
+        ].join("\n"),
+      );
+    }
+  });
+
   it("resolves command SecretRefs before local audio transcription", async () => {
     const rawConfig = { models: { providers: { openai: { apiKey: "raw-ref" } } } };
     const resolvedConfig = { models: { providers: { openai: { apiKey: "resolved-key" } } } };
@@ -3792,6 +3849,7 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it.each(["local", "gateway"] as const)(

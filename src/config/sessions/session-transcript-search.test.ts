@@ -9,15 +9,22 @@ import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { TranscriptEvent } from "./session-accessor.js";
+import { readSessionTranscriptWatermark, type TranscriptEvent } from "./session-accessor.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceTranscriptEvents,
 } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   listSessionsNeedingTranscriptIndexReconcile,
   SYNC_REBUILD_MAX_BYTES,
@@ -26,7 +33,10 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import {
+  readSessionTranscriptSearchVersion,
+  searchSessionTranscripts,
+} from "./session-transcript-search.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -123,14 +133,57 @@ describe("searchSessionTranscripts", () => {
         { message: { role: "user", content: [{ type: "text", text: "readonly search needle" }] } },
       );
       const databasePath = storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: env() });
+      const scope = { agentId, env: env(), sessionId: "session-1", sessionKey, storePath };
+      const version = readSessionTranscriptSearchVersion(scope);
       closeOpenClawAgentDatabasesForTest();
 
+      expect(readSessionTranscriptSearchVersion(scope)).toBe(version);
       expect(
         searchSessionTranscripts({ agentId, env: env(), query: "needle", storePath }).hits,
       ).toEqual([expect.objectContaining({ sessionKey, sessionId: "session-1" })]);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
     },
   );
+
+  it("changes search identity when an incognito database is recreated", async () => {
+    const scope = transcriptScope("session-1", "agent:main:dashboard:incognito-search");
+    const events: TranscriptEvent[] = [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "message-1",
+        parentId: null,
+        message: { role: "assistant", content: [{ type: "text", text: "incognito needle" }] },
+      },
+    ];
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      await replaceTranscriptEvents(scope, events);
+      const version = readSessionTranscriptSearchVersion(scope);
+      const watermark = readSessionTranscriptWatermark(scope);
+      expect(version).not.toBeNull();
+      expect(readSessionTranscriptSearchVersion(scope)).toBe(version);
+      closeOpenClawAgentDatabasesForTest();
+      expect(readSessionTranscriptSearchVersion(scope)).toBeNull();
+      await replaceTranscriptEvents(scope, events);
+      const database = openOpenClawAgentDatabase({
+        agentId: scope.agentId,
+        env: scope.env,
+        path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+      });
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+          .updateTable("transcript_rewrite_watermarks")
+          .set({ generation: watermark.generation! })
+          .where("session_id", "=", scope.sessionId),
+      );
+      expect(readSessionTranscriptWatermark(scope)).toEqual(watermark);
+      expect(readSessionTranscriptSearchVersion(scope)).not.toBe(version);
+    } finally {
+      now.mockRestore();
+    }
+  });
 
   it("scopes omitted filters to a logical namespace in a shared database", async () => {
     const storePath = path.join(paths.tempDir, "shared.sqlite");
@@ -179,8 +232,63 @@ describe("searchSessionTranscripts", () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: env() });
 
     expect(search("missing")).toEqual({ hits: [], indexing: false, truncated: false });
+    expect(
+      readSessionTranscriptSearchVersion({ agentId: "main", env: env(), sessionId: "missing" }),
+    ).toBeNull();
     expect(fs.existsSync(databasePath)).toBe(false);
     expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+  });
+
+  it("reports archived search exclusions within the requested scope and searches again after restore", async () => {
+    const sessionKey = "agent:main:archived";
+    const scope = transcriptScope("old", sessionKey);
+    await appendUserMessage("old", sessionKey, "archived needle");
+    await replaceSessionEntry(scope, { sessionId: "current", updatedAt: Date.now() });
+    const options = { agentId: "main", env: env() };
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 1, transcript_updated_at: 1 })
+          .where("session_id", "=", scope.sessionId),
+      );
+    }, options);
+    const hotVersion = readSessionTranscriptSearchVersion(scope);
+    const watermark = readSessionTranscriptWatermark(scope);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: {
+            store: resolveOpenClawAgentSqlitePath(options),
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    const coldVersion = readSessionTranscriptSearchVersion(scope);
+    expect(coldVersion).not.toBe(hotVersion);
+    expect(readSessionTranscriptWatermark(scope)).toEqual(watermark);
+    expect(search("needle", { sessionKeys: [sessionKey] })).toEqual({
+      hits: [],
+      indexing: false,
+      truncated: false,
+      archivedTranscriptsExcluded: 1,
+    });
+    expect(search("needle", { sessionKeys: ["agent:main:other"] })).not.toHaveProperty(
+      "archivedTranscriptsExcluded",
+    );
+    await restoreSessionColdTranscript(scope);
+    expect(readSessionTranscriptSearchVersion(scope)).not.toBe(coldVersion);
+    expect(readSessionTranscriptWatermark(scope)).toEqual(watermark);
+    expect(search("needle", { sessionKeys: [sessionKey] })).toMatchObject({
+      hits: [expect.objectContaining({ sessionId: "old", sessionKey })],
+      indexing: false,
+    });
+    expect(search("needle", { sessionKeys: [sessionKey] })).not.toHaveProperty(
+      "archivedTranscriptsExcluded",
+    );
   });
 
   it("indexes appended messages synchronously and returns bounded hits", async () => {
@@ -235,6 +343,34 @@ describe("searchSessionTranscripts", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it("filters role and generation before selecting the most recent matching messages", async () => {
+    const sessionKey = "agent:main:main";
+    await appendAssistantMessage("current", sessionKey, "needle oldest");
+    await appendAssistantMessage("current", sessionKey, `needle latest ${"context ".repeat(30)}`);
+    for (let index = 0; index < 28; index += 1) {
+      await appendUserMessage("current", sessionKey, "needle user");
+    }
+    await appendAssistantMessage("other-generation", sessionKey, "needle other generation");
+
+    expect(
+      searchSessionTranscripts({
+        agentId: "main",
+        env: env(),
+        query: "needle",
+        sessionKeys: [sessionKey],
+        sessionId: "current",
+        role: "assistant",
+        order: "recent",
+        limit: 1,
+      }),
+    ).toMatchObject({
+      hits: [
+        { sessionId: "current", role: "assistant", snippet: expect.stringContaining("latest") },
+      ],
+      truncated: true,
+    });
+  });
+
   it("rejects empty and oversized queries", () => {
     expect(() => search("   ")).toThrow(/query must not be empty/);
     expect(() => search("x".repeat(4097))).toThrow(/must not exceed/);
@@ -279,8 +415,13 @@ describe("searchSessionTranscripts", () => {
     expect(isSessionTranscriptIndexReconcileRunning({ agentId: "main", env: env() })).toBe(true);
     expect(search("obsolete")).toMatchObject({ hits: [], indexing: true });
     expect(search("replacement")).toMatchObject({ hits: [], indexing: true });
+    const scope = transcriptScope("session-1", "agent:main:main");
+    const pendingVersion = readSessionTranscriptSearchVersion(scope);
+    const pendingWatermark = readSessionTranscriptWatermark(scope);
 
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", env: env() });
+    expect(readSessionTranscriptSearchVersion(scope)).not.toBe(pendingVersion);
+    expect(readSessionTranscriptWatermark(scope)).toEqual(pendingWatermark);
 
     expect(search("obsolete").hits).toHaveLength(0);
     const result = search("replacement");
@@ -367,6 +508,7 @@ describe("searchSessionTranscripts", () => {
     const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
 
     expect(pending()).toEqual([]);
+    expect(search("indexed").indexing).toBe(false);
 
     executeSqliteQuerySync(
       db,
@@ -376,6 +518,8 @@ describe("searchSessionTranscripts", () => {
         .where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
+    await waitForSearchReconcile("indexed");
 
     executeSqliteQuerySync(
       db,
@@ -385,12 +529,15 @@ describe("searchSessionTranscripts", () => {
         .where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
+    await waitForSearchReconcile("indexed");
 
     executeSqliteQuerySync(
       db,
       kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
     );
     expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
   });
 
   it("sweeps orphaned index rows during reconcile", async () => {

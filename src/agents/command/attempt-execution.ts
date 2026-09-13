@@ -620,6 +620,7 @@ export function runAgentAttempt(params: {
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   assistantErrorTranscript?: RunEmbeddedAgentInternalParams["assistantErrorTranscript"];
+  authProfileFailurePolicy?: RunEmbeddedAgentInternalParams["authProfileFailurePolicy"];
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
@@ -880,18 +881,21 @@ export function runAgentAttempt(params: {
     harnessRuntime: agentHarnessPolicy.runtime,
     allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   });
-  const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
-        cliExecutionProvider,
-        authProfileProvider: params.authProfileProvider,
-        config: params.cfg,
-        agentDir: params.agentDir,
-        selected: harnessAuthSelection,
-      })
-    : undefined;
-  const authProfileId = allowCliAuthProfileForwarding
-    ? cliAuthProfileId
-    : runtimeAuthPlan.forwardedAuthProfileId;
+  // Explicit pins keep synchronous validation; automatic selection needs the admitted binding.
+  const cliAuthNeedsSessionBinding =
+    allowCliAuthProfileForwarding &&
+    !isRawModelRun &&
+    (!harnessAuthSelection.authProfileId || harnessAuthSelection.authProfileIdSource === "auto");
+  const authProfileId =
+    allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
+      ? resolveCliExecutionAuthProfileId({
+          cliExecutionProvider,
+          authProfileProvider: params.authProfileProvider,
+          config: params.cfg,
+          agentDir: params.agentDir,
+          selected: harnessAuthSelection,
+        })
+      : runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -930,8 +934,18 @@ export function runAgentAttempt(params: {
             throw createAgentRunSupersededAbortError();
           }
         }
-        const diagnosticOwner = params.deferredLifecycle?.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+        const cliAuthProfileId = cliAuthNeedsSessionBinding
+          ? resolveCliExecutionAuthProfileId({
+              cliExecutionProvider,
+              authProfileProvider: params.authProfileProvider,
+              config: params.cfg,
+              agentDir: params.agentDir,
+              selected: harnessAuthSelection,
+              sessionBinding: cliSessionBinding,
+            })
+          : authProfileId;
+        const diagnosticOwner = params.deferredLifecycle?.handoffToCli();
         const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
         const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
           ? resizeExecApprovalContinuationPrompt({
@@ -1106,7 +1120,11 @@ export function runAgentAttempt(params: {
                     return Boolean(claimed);
                   },
                   restoreCliSessionFork: async () => {
-                    const restored = await restoreCliSessionForkInStore(forkStoreParams);
+                    // Restoring the fork is current-owner cleanup, including after cancellation.
+                    const restored = await restoreCliSessionForkInStore({
+                      ...forkStoreParams,
+                      assertCommitAllowed: assertSettlementCurrent,
+                    });
                     if (restored) {
                       params.sessionEntry = restored;
                     }
@@ -1123,7 +1141,7 @@ export function runAgentAttempt(params: {
                   },
                 }
               : {}),
-            authProfileId,
+            authProfileId: cliAuthProfileId,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             // Image discovery must use the original turn, before retry/history decoration.
@@ -1251,6 +1269,7 @@ export function runAgentAttempt(params: {
             shouldClearFailedCliSessionBinding({
               error: err,
               binding: failedCliSessionBinding,
+              bindingReplacedDuringRun: failedCliSessionId !== activeCliSessionBinding?.sessionId,
               hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                 params.sessionKey,
                 mediaTaskIdsBefore,
@@ -1405,6 +1424,7 @@ export function runAgentAttempt(params: {
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     assistantErrorTranscript: params.assistantErrorTranscript,
+    authProfileFailurePolicy: params.authProfileFailurePolicy,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,

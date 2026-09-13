@@ -1,5 +1,8 @@
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
@@ -8,6 +11,7 @@ import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
 import {
   createManagedRuntimeEnvBase,
+  hashConfigRaw,
   replaceEnvSnapshot,
   resolveManagedRuntimeEnvBaseline,
   restoreEnvChangesIfUnchanged,
@@ -23,6 +27,8 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
+import { logConfigWarningsOnce } from "./io.warnings.js";
+import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -116,20 +122,65 @@ export function getRuntimeConfig(options?: {
   return loadConfig(options);
 }
 
-/** Revalidate disk policy at a synchronous effect boundary without observing or repairing state. */
-export function readCurrentConfigForPolicyCheck(params: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-}): OpenClawConfig {
+function createCurrentConfigReader(params: { configPath?: string; env?: NodeJS.ProcessEnv }) {
   return createConfigIO({
     configPath: params.configPath,
-    env: cloneEnvWithPlatformSemantics(params.env),
+    env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
     observe: false,
     pluginValidation: "core-only",
     shellEnvFallback: "defer",
     suppressFutureVersionWarning: true,
     logger: { warn: () => {}, error: () => {} },
-  }).loadConfig({ skipSuspiciousRecovery: true });
+  });
+}
+
+/** Inspection may degrade location selection; it never admits invalid config for state repairs. */
+export function readCurrentConfigForResolution(
+  params: { config?: OpenClawConfig; configPath?: string; env?: NodeJS.ProcessEnv } = {},
+): {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
+} {
+  if (params.config) {
+    return { config: params.config, env: params.env ?? process.env, configDiagnostics: null };
+  }
+  const io = createCurrentConfigReader(params);
+  let config: OpenClawConfig | undefined;
+  try {
+    const loaded = io.loadConfig({ skipSuspiciousRecovery: true });
+    if (fs.existsSync(io.configPath)) {
+      config = loaded;
+    }
+  } catch {
+    // Directory inspection preserves access even when the config cannot be loaded.
+  }
+  const issues = config
+    ? []
+    : [
+        {
+          path: io.configPath,
+          message: "Config unavailable; using environment and default agent directory settings.",
+        },
+      ];
+  logConfigWarningsOnce({
+    configPath: `${io.configPath}#directory-resolution`,
+    warnings: issues,
+    logger: console,
+  });
+  return {
+    config: config ?? {},
+    env: io.env,
+    configDiagnostics: config ? null : { path: io.configPath, issues },
+  };
+}
+
+/** Revalidate disk policy at a synchronous effect boundary without observing or repairing state. */
+export function readCurrentConfigForPolicyCheck(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): OpenClawConfig {
+  return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
 export async function readBestEffortConfig(options?: {
@@ -412,6 +463,7 @@ async function finalizeCommittedConfigWrite(params: {
   } = params;
   let canonicalSourceConfig = params.nextCfg;
   let canonicalRuntimeConfig = params.nextCfg;
+  let canonicalPersistedHash = writeResult.persistedHash;
   let envBeforeCanonicalRead = snapshotEnv(io.env);
   let envAfterCanonicalRead: Record<string, string | undefined>;
   let canonicalReadFailure: ConfigRuntimeRefreshError | null = null;
@@ -432,6 +484,10 @@ async function finalizeCommittedConfigWrite(params: {
       if (freshSnapshot.exists && freshSnapshot.valid) {
         canonicalSourceConfig = freshSnapshot.sourceConfig;
         canonicalRuntimeConfig = freshSnapshot.config;
+        canonicalPersistedHash = expectDefined(
+          freshSnapshot.hash,
+          "canonical config snapshot hash",
+        );
       } else {
         // An invalid or vanished reread means a concurrent edit beat us to the
         // file; runtime keeps the just-written config, but that divergence must
@@ -453,12 +509,12 @@ async function finalizeCommittedConfigWrite(params: {
     }
     if (!stableEnvGeneration) {
       canonicalReadFailure = new ConfigRuntimeRefreshError(
-        `Config was written to ${io.configPath}, but the active config environment changed during every canonical reread`,
+        "the active config environment changed during every canonical reread",
       );
     }
   } catch (error) {
     canonicalReadFailure = new ConfigRuntimeRefreshError(
-      `Config was written to ${io.configPath}, but the canonical reread failed: ${formatErrorMessage(error)}`,
+      `canonical reread failed: ${formatErrorMessage(error)}`,
       { cause: error },
     );
   } finally {
@@ -491,7 +547,7 @@ async function finalizeCommittedConfigWrite(params: {
           configPath: io.configPath,
           sourceConfig: canonicalSourceConfig,
           runtimeConfig: notificationRuntimeConfig,
-          persistedHash: writeResult.persistedHash,
+          persistedHash: canonicalPersistedHash,
           afterWrite: options.afterWrite,
           runtimeRefresh: options.runtimeRefresh,
           ...(notificationPreparedCandidates.size > 0
@@ -520,12 +576,10 @@ async function finalizeCommittedConfigWrite(params: {
       preflightResult: params.runtimePreflightResult,
       deferRuntimeActivation,
       createRefreshError: (detail, cause) =>
-        new ConfigRuntimeRefreshError(
-          `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
-          { cause },
-        ),
+        new ConfigRuntimeRefreshError(`runtime snapshot refresh failed: ${detail}`, { cause }),
     });
   } catch (error) {
+    let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
     try {
       const rolledBackConfig = await rollbackConfigFileWriteIfUnchanged({
         configPath: io.configPath,
@@ -534,7 +588,16 @@ async function finalizeCommittedConfigWrite(params: {
         fsModule: fs,
         assertCurrent: params.assertPostCommitCurrent,
       });
+      rollbackStatus = rolledBackConfig ? "restored" : "not-restored";
       if (rolledBackConfig) {
+        params.assertPostCommitCurrent?.();
+        recordUpdateDoctorConfigWrite(
+          io.configPath,
+          writeResult.persistedHash,
+          hashConfigRaw(baseSnapshot.raw),
+          writeResult.persistedConfig,
+          JSON.stringify(isRecord(baseSnapshot.parsed) ? baseSnapshot.parsed : {}),
+        );
         restoreEnvChangesIfUnchanged({
           env: io.env,
           before: envBeforeCanonicalRead,
@@ -543,12 +606,21 @@ async function finalizeCommittedConfigWrite(params: {
         params.rollbackWriteEffects?.();
       }
     } catch (rollbackError) {
-      throw new ConfigRuntimeRefreshError(
-        `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
-        { cause: error },
-      );
+      throw new ConfigWritePostCommitError({
+        configPath: io.configPath,
+        rollbackStatus,
+        cause: new AggregateError(
+          [error, rollbackError],
+          `${formatErrorMessage(error)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+          { cause: rollbackError },
+        ),
+      });
     }
-    throw error;
+    throw new ConfigWritePostCommitError({
+      configPath: io.configPath,
+      rollbackStatus,
+      cause: error,
+    });
   }
   return writeResult;
 }

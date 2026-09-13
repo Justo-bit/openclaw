@@ -43,6 +43,7 @@ import {
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
+  type TranscriptEvent,
 } from "./session-accessor.js";
 import type {
   SessionLifecycleRevisionExpectation,
@@ -195,11 +196,11 @@ type SessionConversationTranscriptTarget = {
   sqliteScope?: SqliteSessionFileMarker;
 };
 
-function parseRecentConversationText(
-  line: string,
+function extractRecentConversationText(
+  event: TranscriptEvent,
   options: ReadRecentSessionConversationTextOptions = {},
 ): SessionRecentConversationText | undefined {
-  const parsed = JSON.parse(line) as {
+  const parsed = event as {
     id?: unknown;
     message?: unknown;
   };
@@ -279,26 +280,29 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
       sessionId: scope.sessionId,
       storePath: scope.storePath,
     };
-    const recent: SessionRecentConversationText[] = [];
-    for (let offset = 0; recent.length < limit; offset += pageSize) {
-      const page = readSessionTranscriptMessageEventPage(readScope, {
-        maxMessages: pageSize,
-        offset,
-      });
-      if (page.events.length === 0) {
-        break;
-      }
-      for (const event of page.events.toReversed()) {
-        const entry = parseRecentConversationText(JSON.stringify(event.event), options);
-        if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-          recent.push(entry);
-          if (recent.length >= limit) {
-            break;
+    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+    return await readRestoredSessionTranscript(readScope, () => {
+      const recent: SessionRecentConversationText[] = [];
+      for (let offset = 0; recent.length < limit; offset += pageSize) {
+        const page = readSessionTranscriptMessageEventPage(readScope, {
+          maxMessages: pageSize,
+          offset,
+        });
+        if (page.events.length === 0) {
+          break;
+        }
+        for (const event of page.events.toReversed()) {
+          const entry = extractRecentConversationText(event.event, options);
+          if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
+            recent.push(entry);
+            if (recent.length >= limit) {
+              break;
+            }
           }
         }
       }
-    }
-    return recent.toReversed();
+      return recent.toReversed();
+    });
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       return [];
@@ -362,18 +366,15 @@ export async function readLatestAssistantTextFromSessionTranscript(
       }
     | undefined,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  if (target && typeof target === "object") {
-    return readLatestTranscriptAssistantText(target);
+  const sqliteScope =
+    target && typeof target === "object" ? target : parseSqliteSessionFileMarker(target);
+  if (sqliteScope) {
+    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+    return readRestoredSessionTranscript(sqliteScope, () =>
+      readLatestTranscriptAssistantText(sqliteScope),
+    );
   }
-  const sessionFile = target;
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (sqliteMarker) {
-    return readLatestTranscriptAssistantText({
-      agentId: sqliteMarker.agentId,
-      sessionId: sqliteMarker.sessionId,
-      storePath: sqliteMarker.storePath,
-    });
-  }
+  const sessionFile = typeof target === "string" ? target : undefined;
   if (!sessionFile?.trim()) {
     return undefined;
   }
