@@ -200,6 +200,7 @@ export async function convergePostCoreUpdatePlugins(params: {
             root: params.root,
             pluginUpdate: producedPluginUpdate,
             freshDoctorRequired: false,
+            assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,

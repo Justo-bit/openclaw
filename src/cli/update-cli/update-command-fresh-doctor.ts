@@ -116,11 +116,14 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   nodeRunner?: string;
   entryPath?: string;
   onWarnings?: (warnings: string[]) => void;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  params.assertCurrent?.();
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {
     throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
   }
+  params.assertCurrent?.();
   const args = [
     entryPath,
     "doctor",
@@ -134,6 +137,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null = null;
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
+  params.assertCurrent?.();
   try {
     result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
       cwd: params.root,
@@ -155,6 +159,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       },
     });
   } catch (error) {
+    params.assertCurrent?.();
     doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
     if (isRecord(error)) {
       result = error;
@@ -264,16 +269,29 @@ export async function completePostCorePluginUpdate(params: {
   nodeRunner?: string;
   beforeDoctor?: () => Promise<void>;
   onWarnings?: (warnings: string[]) => void;
+  assertCurrent?: () => void;
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
 }> {
+  // Preserve the first refused assertion; Doctor error handling cannot retry it.
+  let authorityFailed = false;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      authorityFailed = true;
+      throw error;
+    }
+  };
+  assertCurrent();
   let pluginUpdate = params.pluginUpdate;
   let entryPath: string | undefined;
   let freshConfigValid: boolean | undefined;
   if (pluginUpdate.status !== "error") {
     try {
       entryPath = await resolveGatewayInstallEntrypoint(params.root);
+      assertCurrent();
       if (!entryPath) {
         throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
       }
@@ -281,11 +299,17 @@ export async function completePostCorePluginUpdate(params: {
         await params.beforeDoctor?.();
         await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
+          assertCurrent,
           entryPath,
           phase: "post-plugin",
         });
       }
     } catch (err) {
+      if (authorityFailed) {
+        throw err;
+      }
+      // Lost updater authority must not become an advisory that starts more children.
+      assertCurrent();
       pluginUpdate = createPostPluginDoctorExecutionFailure(
         params.pluginUpdate,
         String(err),
@@ -295,11 +319,13 @@ export async function completePostCorePluginUpdate(params: {
     }
   }
 
+  assertCurrent();
   // Only the target runtime may write state after a version switch: observing
   // config here could migrate its database back to the parent's newer schema.
   const configSnapshot = await withNormalConfigValidation(() =>
     readConfigFileSnapshot({ observe: false }),
   );
+  assertCurrent();
   if (entryPath) {
     let checkTimeoutMs = params.timeoutMs;
     if (checkTimeoutMs === undefined) {
@@ -309,6 +335,7 @@ export async function completePostCorePluginUpdate(params: {
         { stateDir: resolveStateDir(env), config: configSnapshot.sourceConfig, env },
         { includeUnconfiguredAgents: false },
       );
+      assertCurrent();
       checkTimeoutMs = resolveAggregateSqliteInspectionTimeoutMs(
         "post-plugin checks",
         await readUpdateStateDatabaseSizes(
@@ -317,6 +344,7 @@ export async function completePostCorePluginUpdate(params: {
         ),
       );
     }
+    assertCurrent();
     // No authored file is a valid unconfigured install, not an invalid config.
     // Existing files still need the target schema; every install needs readiness.
     freshConfigValid =
@@ -326,6 +354,7 @@ export async function completePostCorePluginUpdate(params: {
         entryPath,
         timeoutMs: checkTimeoutMs,
       }));
+    assertCurrent();
     if (freshConfigValid) {
       pluginUpdate = await applyPostPluginUpdateReadiness({
         root: params.root,
@@ -336,6 +365,7 @@ export async function completePostCorePluginUpdate(params: {
       });
     }
   }
+  assertCurrent();
   // Strict validity belongs to the target runtime even when no plugin changed.
   // The parent may retain the previous schema; its snapshot is best-effort context.
   pluginUpdate = applyPostPluginConfigValidation(
