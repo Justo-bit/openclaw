@@ -9,7 +9,10 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createNonExitingRuntimeEnv,
+  mockPublishedModelRuntimeForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   listSessionEntries,
@@ -2772,35 +2775,26 @@ describe("createTelegramBot", () => {
           },
         ];
         if (!outcomeText) {
-          const { createModelRuntimeChoiceOwnerFixture } =
-            await import("../../../src/agents/model-runtime-choice.test-support.js");
-          const { setPreparedModelRuntimeAuthStore } =
-            await import("../../../src/agents/prepared-model-runtime-auth.js");
-          const publishedCatalog = await import("../../../src/agents/prepared-model-catalog.js");
-          const owner = createModelRuntimeChoiceOwnerFixture(
+          await mockPublishedModelRuntimeForTest({
             config,
-            () => true,
-            { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
-            {
+            isCurrent: () => true,
+            facts: { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
+            paths: {
               agentDir: telegramTestState.agentDir(),
               workspaceDir: telegramTestState.workspaceDir,
             },
-          );
-          setPreparedModelRuntimeAuthStore(owner, {
-            version: 1,
-            profiles: {
-              "team:prod": { type: "api_key", provider: "openai", key: "synthetic-openai" },
-              "anthropic:fixture": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "synthetic-anthropic",
+            authStore: {
+              version: 1,
+              profiles: {
+                "team:prod": { type: "api_key", provider: "openai", key: "synthetic-openai" },
+                "anthropic:fixture": {
+                  type: "api_key",
+                  provider: "anthropic",
+                  key: "synthetic-anthropic",
+                },
               },
             },
           });
-          const lookup = vi
-            .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-            .mockReturnValue(owner);
-          onTestFinished(() => lookup.mockRestore());
         }
         vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
           byProvider: new Map([
@@ -2914,9 +2908,6 @@ describe("createTelegramBot", () => {
         },
       ],
     });
-    const { createModelRuntimeChoiceOwnerFixture } =
-      await import("../../../src/agents/model-runtime-choice.test-support.js");
-    const publishedCatalog = await import("../../../src/agents/prepared-model-catalog.js");
     const { createEmptyPluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime");
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push({
@@ -2938,21 +2929,19 @@ describe("createTelegramBot", () => {
       name: "Big Pickle",
       nativeRuntime: "acp-opencode",
     };
-    const owner = createModelRuntimeChoiceOwnerFixture(
+    await mockPublishedModelRuntimeForTest({
       config,
-      () => true,
-      {
+      isCurrent: () => true,
+      facts: {
         pluginRegistry: registry,
         modelCatalog: { entries: [nativeEntry], routeVariants: [nativeEntry] },
       },
-      { agentDir: telegramTestState.agentDir(), workspaceDir: telegramTestState.workspaceDir },
-    );
-    const { setPreparedModelRuntimeAuthStore } =
-      await import("../../../src/agents/prepared-model-runtime-auth.js");
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
-    const lookup = vi
-      .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(owner);
+      paths: {
+        agentDir: telegramTestState.agentDir(),
+        workspaceDir: telegramTestState.workspaceDir,
+      },
+      authStore: { version: 1, profiles: {} },
+    });
     const modelRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
     const apply = vi.spyOn(modelRuntime, "applySessionModelSelection");
     try {
@@ -2984,7 +2973,6 @@ describe("createTelegramBot", () => {
       });
     } finally {
       apply.mockRestore();
-      lookup.mockRestore();
     }
   });
 
@@ -2996,19 +2984,15 @@ describe("createTelegramBot", () => {
         "fixture/model": { agentRuntime: { id: "openclaw" } },
       },
     });
-    const { createModelRuntimeChoiceOwnerFixture } =
-      await import("../../../src/agents/model-runtime-choice.test-support.js");
-    const publishedCatalog = await import("../../../src/agents/prepared-model-catalog.js");
-    const owner = createModelRuntimeChoiceOwnerFixture(
+    await mockPublishedModelRuntimeForTest({
       config,
-      () => true,
-      {},
-      { agentDir: telegramTestState.agentDir(), workspaceDir: telegramTestState.workspaceDir },
-    );
-    const lookup = vi
-      .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(owner);
-    onTestFinished(() => lookup.mockRestore());
+      isCurrent: () => true,
+      facts: {},
+      paths: {
+        agentDir: telegramTestState.agentDir(),
+        workspaceDir: telegramTestState.workspaceDir,
+      },
+    });
     const route = resolveTelegramConversationRoute({
       cfg: config,
       accountId: "default",
@@ -3114,11 +3098,6 @@ describe("createTelegramBot", () => {
       },
     };
     const authorizationConfig = { ...freshConfig };
-    const { createModelRuntimeChoiceOwnerFixture } =
-      await import("../../../src/agents/model-runtime-choice.test-support.js");
-    const { setPreparedModelRuntimeAuthStore } =
-      await import("../../../src/agents/prepared-model-runtime-auth.js");
-    const publishedCatalog = await import("../../../src/agents/prepared-model-catalog.js");
     const modelCatalog = [
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
       {
@@ -3130,23 +3109,26 @@ describe("createTelegramBot", () => {
       },
       { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     ];
-    const owner = createModelRuntimeChoiceOwnerFixture(
-      freshConfig,
-      () => true,
-      { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
-      { agentDir: telegramTestState.agentDir(), workspaceDir: telegramTestState.workspaceDir },
-    );
-    setPreparedModelRuntimeAuthStore(owner, {
-      version: 1,
-      profiles: {
-        "openai:fixture": { type: "api_key", provider: "openai", key: "synthetic-openai" },
-        "anthropic:fixture": { type: "api_key", provider: "anthropic", key: "synthetic-anthropic" },
+    await mockPublishedModelRuntimeForTest({
+      config: freshConfig,
+      isCurrent: () => true,
+      facts: { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
+      paths: {
+        agentDir: telegramTestState.agentDir(),
+        workspaceDir: telegramTestState.workspaceDir,
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:fixture": { type: "api_key", provider: "openai", key: "synthetic-openai" },
+          "anthropic:fixture": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "synthetic-anthropic",
+          },
+        },
       },
     });
-    const lookup = vi
-      .spyOn(publishedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(owner);
-    onTestFinished(() => lookup.mockRestore());
 
     // Bot created with startup config; loadConfig now returns fresh config
     loadConfig.mockReturnValue(freshConfig);
