@@ -1,10 +1,9 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -12,10 +11,11 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
 vi.mock("./prepared-model-catalog.js", () => ({
@@ -47,6 +47,7 @@ function publish(
   facts: Partial<
     Pick<
       PreparedModelRuntimeSnapshot,
+      | "authModes"
       | "modelCatalog"
       | "configuredRuntimeModels"
       | "pluginRegistry"
@@ -56,36 +57,7 @@ function publish(
     >
   > = {},
 ) {
-  const entry = { provider: "fixture", id: "model", name: "Model" };
-  const owner: PreparedModelRuntimeSnapshot = {
-    config,
-    observationConfig: config,
-    catalogOwner: { agentId: "main", workspaceDir: facts.workspaceDir ?? "/tmp/runtime-choice" },
-    agentId: "main",
-    agentDir: "/tmp/runtime-choice/agent",
-    workspaceDir: "/tmp/runtime-choice",
-    activeProjectKeys: [],
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    isCurrent,
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [entry], routeVariants: [entry] },
-    configuredRuntimeModels: [],
-    inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}, {
-      providerMetadataOwners: facts.metadataSnapshot?.owners,
-    }),
-    createStores() {
-      const authStorage = AuthStorage.inMemory({});
-      return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-    },
-    ...facts,
-  };
-  setPreparedModelRuntimeAuthStore(owner, {
-    version: 1,
-    profiles: {
-      "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-credential" },
-    },
-  });
+  const owner = createModelRuntimeChoiceOwnerFixture(config, isCurrent, facts);
   published.owner = owner;
   return owner;
 }
@@ -923,6 +895,94 @@ describe("prepared model support admission", () => {
 });
 
 describe("published runtime choice", () => {
+  it("selects the published native owner without an explicit runtime and rejects stale publication", async () => {
+    let current = true;
+    const runtime = "native-fixture";
+    const entry = { provider: "fixture", id: "model", name: "Model", nativeRuntime: runtime };
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: runtime,
+      source: "test",
+      harness: {
+        id: runtime,
+        label: "Native fixture",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = publish(() => current, cfg, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    });
+    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    const choice = await preparePublishedModelRuntimeChoice({ ...request, runtimeId: undefined });
+    expect(choice).toMatchObject({ kind: "ready", runtimeId: runtime });
+    if (choice.kind !== "ready") {
+      throw new Error("Expected native runtime selection");
+    }
+    expect(choice.validate()).toBeUndefined();
+    current = false;
+    expect(choice.validate()).toContain("not available");
+  });
+
+  afterEach(() => cliBackendsTesting.resetDepsForTest());
+  it.each(["model", "off-catalog"])(
+    "retains compatible runtime preference through %s selection",
+    async (model) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "fixture-cli",
+            modelProvider: "fixture",
+            pluginId: "fixture-cli",
+            config: { command: "fixture-cli" },
+          },
+        ],
+      });
+      const config: OpenClawConfig = {
+        ...cfg,
+        plugins: { enabled: true },
+        models: {
+          providers: {
+            fixture: {
+              api: "openai-completions",
+              baseUrl: "https://models.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+      };
+      publish(() => true, config, { authModes: { "fixture-cli": "api_key" } });
+      for (const preferredRuntimeId of ["fixture-cli", "openclaw", "missing-runtime"]) {
+        const choice = await preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg: config,
+          model,
+          runtimeId: undefined,
+          preferredRuntimeId,
+        });
+        expect(choice).toMatchObject({
+          kind: "ready",
+          runtimeId: preferredRuntimeId === "missing-runtime" ? "openclaw" : preferredRuntimeId,
+        });
+        if (choice.kind !== "ready") {
+          throw new Error("Expected compatible selection");
+        }
+        expect(choice.validate()).toBeUndefined();
+      }
+      expect(
+        await preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg: config,
+          model,
+          runtimeId: "openclaw",
+          preferredRuntimeId: "fixture-cli",
+        }),
+      ).toMatchObject({ kind: "ready", runtimeId: "openclaw" });
+    },
+  );
+
   beforeEach(() => {
     published.owner = undefined;
   });

@@ -1,5 +1,6 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderKey,
@@ -128,7 +129,7 @@ export async function prepareModelSelectionRuntime(params: {
         authProfileOverrideSource: "user" as const,
       }
     : params.sessionEntry;
-  const runtime = resolveModelRuntimeDirective(params);
+  let runtime = resolveModelRuntimeDirective(params);
   if (runtime.kind === "invalid") {
     return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
   }
@@ -141,18 +142,23 @@ export async function prepareModelSelectionRuntime(params: {
     };
   }
   let validateRuntimeSelection: (() => string | undefined) | undefined;
-  if (runtime.kind === "set") {
+  if (runtime.kind === "set" || !params.rawRuntime) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
     const choice = await preparePublishedModelRuntimeChoice({
       ...params,
       sessionEntry,
-      runtimeId: runtime.runtime,
+      runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
+      preferredRuntimeId:
+        runtime.kind === "unchanged"
+          ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
+          : undefined,
     });
     if (choice.kind === "unavailable") {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };
     }
     validateRuntimeSelection = choice.validate;
+    runtime = { kind: "set", runtime: choice.runtimeId };
   }
   const runtimeEntry = { ...sessionEntry };
   applyModelRuntimeDirective(runtimeEntry, runtime);

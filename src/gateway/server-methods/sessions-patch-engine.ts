@@ -49,10 +49,7 @@ import {
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
-import {
-  prepareSessionPatchRuntimeSelection,
-  refreshSessionPatchQueuedSelection,
-} from "./sessions-patch-model-selection.js";
+import * as modelSelection from "./sessions-patch-model-selection.js";
 import type {
   GroupAdmissionResult,
   GroupMutationOperation,
@@ -461,13 +458,15 @@ export async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push(projected);
                           continue;
                         }
-                        const runtimeSelection = await prepareSessionPatchRuntimeSelection({
-                          cfg,
-                          agentId: target.targetAgentId,
-                          patch: target.fullPatch,
-                          entry: projected.entry,
-                          placement: { context: params.context, sessionKey: primaryKey },
-                        });
+                        const runtimeSelection =
+                          await modelSelection.prepareSessionPatchRuntimeSelection({
+                            cfg,
+                            agentId: target.targetAgentId,
+                            patch: target.fullPatch,
+                            entry: projected.entry,
+                            catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                            placement: { context: params.context, sessionKey: primaryKey },
+                          });
                         if (!runtimeSelection.ok) {
                           projectedOutcomes.push(runtimeSelection);
                           continue;
@@ -646,8 +645,8 @@ export async function executeSessionPatchMutations(params: {
                   for (const [groupIndex, target] of group.entries()) {
                     const outcome = groupOutcomes[groupIndex]!;
                     outcomes[target.index] = outcome;
-                    if (outcome.ok && outcome.applied && "agentRuntime" in target.fullPatch) {
-                      refreshSessionPatchQueuedSelection({
+                    if (outcome.ok && outcome.applied) {
+                      modelSelection.refreshSessionPatchQueuedSelection({
                         cfg,
                         entry: outcome.entry,
                         patch: target.fullPatch,
