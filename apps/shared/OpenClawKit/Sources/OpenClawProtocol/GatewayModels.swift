@@ -1055,6 +1055,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let workspace: String?
     public let modelvalue: AnyCodable?
     public var model: String? { modelvalue?.value as? String }
+    public let agentruntime: String?
     public let emoji: String?
     public let avatar: String?
 
@@ -1063,6 +1064,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         modelvalue: AnyCodable?,
+        agentruntime: String? = nil,
         emoji: String? = nil,
         avatar: String? = nil)
     {
@@ -1070,6 +1072,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         self.name = name
         self.workspace = workspace
         self.modelvalue = modelvalue
+        self.agentruntime = agentruntime
         self.emoji = emoji
         self.avatar = avatar
     }
@@ -1079,6 +1082,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         model: String? = nil,
+        agentruntime: String? = nil,
         emoji: String? = nil,
         avatar: String? = nil)
     {
@@ -1087,6 +1091,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
             name: name,
             workspace: workspace,
             modelvalue: model.map { AnyCodable($0) },
+            agentruntime: agentruntime,
             emoji: emoji,
             avatar: avatar)
     }
@@ -1096,6 +1101,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case name
         case workspace
         case modelvalue = "model"
+        case agentruntime = "agentRuntime"
         case emoji
         case avatar
     }
@@ -1108,6 +1114,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         self.modelvalue = container.contains(.modelvalue)
             ? try container.decode(AnyCodable.self, forKey: .modelvalue)
             : nil
+        self.agentruntime = try container.decodeIfPresent(String.self, forKey: .agentruntime)
         self.emoji = try container.decodeIfPresent(String.self, forKey: .emoji)
         self.avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
     }
@@ -1118,6 +1125,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(workspace, forKey: .workspace)
         try container.encodeIfPresent(modelvalue, forKey: .modelvalue)
+        try container.encodeIfPresent(agentruntime, forKey: .agentruntime)
         try container.encodeIfPresent(emoji, forKey: .emoji)
         try container.encodeIfPresent(avatar, forKey: .avatar)
     }

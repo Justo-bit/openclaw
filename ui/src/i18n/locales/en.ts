@@ -2424,9 +2424,20 @@ export const en: TranslationMap & {
       testingButton: "Testing…",
     },
     nativeDiscovery: {},
+    nativeModels: {
+      title: "Use an installed agent",
+      body: "Choose a model from an installed agent. It keeps its own sign-in and tools. Use saves your choice without running the setup test.",
+      choose: "Choose a model",
+      use: "Use",
+      saving: "Saving…",
+      loading: "Checking installed agents…",
+      empty:
+        "No models are available from installed agents. Sign in through your agent, then open the picker again.",
+      signIn: "Sign in through the installed agent, then check again.",
+    },
     empty: {
       title: "Recommended installs",
-      intro: "No existing AI access was detected. Install one of these tools, then check again.",
+      intro: "Install an assistant or local model service, then check again.",
     },
     unavailable: {
       title: "Found, but needs attention",
