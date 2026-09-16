@@ -34,7 +34,7 @@ export function createModelRuntimeChoiceOwnerFixture(
     activeProjectKeys: [],
     authModes: facts.authModes ?? {},
     pluginRegistry: facts.pluginRegistry,
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    metadataSnapshot: facts.metadataSnapshot ?? createPluginMetadataSnapshotFixture(),
     isCurrent,
     allowGatewaySubagentBinding: false,
     modelCatalog: facts.modelCatalog ?? { entries: [entry], routeVariants: [entry] },
