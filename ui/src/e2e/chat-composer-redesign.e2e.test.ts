@@ -8,6 +8,7 @@ import {
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -91,6 +92,7 @@ suite.define(() => {
           }
           await page.locator('[data-chat-model-select="true"]').click();
           const option = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
+          await revealChatModelOption(option);
           await expect.poll(() => option.isVisible()).toBe(true);
           if (blocked) {
             await expect.poll(() => option.getAttribute("data-chat-model-setup")).toBe("true");
@@ -987,6 +989,7 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
+      await revealChatModelOption(composer.locator('[data-chat-model-option="openai/gpt-5.5"]'));
       await captureMobileState(
         "mobile-composer-model-open.png",
         composer.locator('.chat-controls__model-picker wa-popup [part="popup"]'),

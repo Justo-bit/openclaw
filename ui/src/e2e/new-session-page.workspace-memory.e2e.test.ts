@@ -3,6 +3,7 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   MOVED_WORKSPACE,
   NEW_SESSION_MODEL_CATALOG,
@@ -260,7 +261,9 @@ suite.define(() => {
         await page.evaluate(() => window.innerWidth),
       );
       await expect.poll(pickerOpen).toBe(true);
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       // Model selection commits immediately and closes the model popover.
       await expect.poll(pickerOpen).toBe(false);
       await expect
@@ -297,6 +300,9 @@ suite.define(() => {
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await revealChatModelOption(firstModel);
+      await revealChatModelOption(secondModel);
+      await modelSelect.focus();
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
       // Finish the picker's opening scale before recording its baseline. The top
@@ -433,7 +439,7 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
       await effortSelect.click();
 
       await expect
@@ -487,7 +493,9 @@ suite.define(() => {
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
@@ -716,7 +724,9 @@ suite.define(() => {
         const newSession = page.locator("openclaw-new-session-page");
         const modelSelect = newSession.locator('[data-chat-model-select="true"]');
         await modelSelect.click();
-        await newSession.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await selectChatModelOption(
+          newSession.locator('[data-chat-model-option="openai/gpt-5.5"]'),
+        );
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
@@ -803,7 +813,9 @@ suite.define(() => {
       const newSession = page.locator("openclaw-new-session-page");
       const modelSelect = newSession.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
@@ -893,7 +905,9 @@ suite.define(() => {
 
       const newSession = page.locator("openclaw-new-session-page");
       await newSession.locator('[data-chat-model-select="true"]').click();
-      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,

@@ -33,7 +33,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { registerTelegramModelPickerCases } from "./bot.model-picker.test-cases.js";
+import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,

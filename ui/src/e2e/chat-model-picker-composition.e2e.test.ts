@@ -80,21 +80,21 @@ suite.define(() => {
           await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
           await trigger.click();
+          await page.mouse.move(0, 0);
           const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
             for (const toggle of await picker.locator("[data-chat-model-provider-toggle]").all()) {
-              await toggle.click();
+              await toggle.focus();
+              await toggle.press("Enter");
             }
           }
           await search.fill(query);
           await search.focus();
-          const highlighted = await search.getAttribute("aria-activedescendant");
-          expect(highlighted).toBeTruthy();
-
           // This exercises browser event ownership, not a native OS IME candidate window.
-          const prevented = await search.evaluate(
+          const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
             (input, args) => {
+              const highlightedBefore = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
                 key: args.key,
                 isComposing: args.composition === "active",
@@ -104,16 +104,22 @@ suite.define(() => {
                 composed: true,
               });
               input.dispatchEvent(event);
-              return event.defaultPrevented;
+              return {
+                prevented: event.defaultPrevented,
+                highlightedBefore,
+                highlightedAfter: input.getAttribute("aria-activedescendant"),
+              };
             },
             { key, composition },
           );
+
+          expect(highlightedBefore).toBeTruthy();
 
           if (composition !== "none") {
             expect.soft(prevented).toBe(false);
             expect.soft(await picker.getAttribute("open")).not.toBeNull();
             expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlighted);
+            expect.soft(highlightedAfter).toBe(highlightedBefore);
             expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
           } else {
             expect(prevented).toBe(true);
@@ -129,7 +135,7 @@ suite.define(() => {
                 await search.press("Escape");
                 expect(await picker.getAttribute("open")).toBeNull();
               } else {
-                expect(await search.getAttribute("aria-activedescendant")).not.toBe(highlighted);
+                expect(highlightedAfter).not.toBe(highlightedBefore);
               }
             }
           }

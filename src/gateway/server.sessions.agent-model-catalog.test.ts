@@ -18,6 +18,17 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+// Prepared runtime eligibility is covered by the native choice owner tests.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "fixture-harness",
+    validate: () => undefined,
+  })),
+}));
+
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
