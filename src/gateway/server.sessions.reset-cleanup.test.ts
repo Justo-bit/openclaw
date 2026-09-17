@@ -40,30 +40,13 @@ import {
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
-type ResetAcpState = {
-  backend?: string;
-  agent?: string;
-  runtimeSessionName?: string;
-  identity?: {
-    state?: string;
-    acpxRecordId?: string;
-    acpxSessionId?: string;
-  };
-  mode?: string;
-  runtimeOptions?: {
-    runtimeMode?: string;
-    timeoutSeconds?: number;
-  };
-  cwd?: string;
-  state?: string;
-};
 type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function expectResetAcpState(acp: ResetAcpState | undefined) {
+function expectResetAcpState(acp: SessionAcpMeta | undefined) {
   expect(acp?.backend).toBe("acpx");
   expect(acp?.agent).toBe("codex");
   expect(acp?.runtimeSessionName).toBe("runtime:reset");
@@ -625,7 +608,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   await writeSingleLineSession(dir, "sess-archive-race", "hello");
   await writeSessionStore({
     entries: {
-      [sessionKey]: sessionStoreEntry("sess-archive-race"),
+      [sessionKey]: sessionStoreEntry("sess-archive-race", { lifecycleRevision: "before-reset" }),
     },
   });
   const { promise: hookReleased, resolve: releaseHook } = createDeferred();
@@ -647,6 +630,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     key: sessionKey,
     archived: true,
     expectedSessionId: "sess-archive-race",
+    expectedLifecycleRevision: "before-reset",
   });
   releaseHook();
 

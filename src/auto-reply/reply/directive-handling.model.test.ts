@@ -36,6 +36,10 @@ const pluginPolicyMock = vi.hoisted(() => ({
   >(),
 }));
 
+function readAuthProfileStoreForTest() {
+  return { version: 1, profiles: authProfilesStoreMock.profiles };
+}
+
 function defaultModelsCommandReply() {
   return {
     text: [
@@ -72,10 +76,6 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {
       authProfilesStoreMock.profiles = {};
@@ -84,9 +84,9 @@ vi.mock("../../agents/auth-profiles.js", () => {
       mode: "scoped",
       allowKeychainPrompt: false,
     }),
-    ensureAuthProfileStore: store,
-    ensureAuthProfileStoreWithoutExternalProfiles: store,
-    getRuntimeAuthProfileStoreSnapshot: store,
+    ensureAuthProfileStore: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
+    getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
     isProfileInCooldown: () => false,
     listProfilesForProvider: (_store: unknown, provider: string) =>
       Object.entries(authProfilesStoreMock.profiles)
@@ -208,40 +208,30 @@ vi.mock("../../agents/model-catalog-auth-labels.js", () => {
 });
 
 vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
   return {
     ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
-    getRuntimeAuthProfileStoreSnapshot: store,
+    getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
     hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
   };
 });
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
   return {
-    ensureAuthProfileStore: store,
-    ensureAuthProfileStoreForLocalUpdate: store,
-    loadAuthProfileStore: store,
-    loadAuthProfileStoreForRuntime: store,
-    loadAuthProfileStoreForSecretsRuntime: store,
-    loadAuthProfileStoreWithoutExternalProfiles: store,
+    ensureAuthProfileStore: readAuthProfileStoreForTest,
+    ensureAuthProfileStoreForLocalUpdate: readAuthProfileStoreForTest,
+    loadAuthProfileStore: readAuthProfileStoreForTest,
+    loadAuthProfileStoreForRuntime: readAuthProfileStoreForTest,
+    loadAuthProfileStoreForSecretsRuntime: readAuthProfileStoreForTest,
+    loadAuthProfileStoreWithoutExternalProfiles: readAuthProfileStoreForTest,
     saveAuthProfileStore: vi.fn(),
-    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) =>
+      update(readAuthProfileStoreForTest()),
+    ),
   };
 });
 
 vi.mock("../../agents/model-auth.js", () => {
-  const store = () => ({
-    version: 1,
-    profiles: authProfilesStoreMock.profiles,
-  });
   const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
     Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
   return {
@@ -253,7 +243,7 @@ vi.mock("../../agents/model-auth.js", () => {
       },
       syntheticAuthProviderRefs: [],
     }),
-    ensureAuthProfileStore: store,
+    ensureAuthProfileStore: readAuthProfileStoreForTest,
     hasRuntimeAvailableProviderAuth: ({
       provider,
       env,
@@ -530,16 +520,8 @@ vi.mock("./queue.js", () => ({
 const TEST_AGENT_DIR = "/tmp/agent";
 const OPENAI_DATE_PROFILE_ID = "20251001";
 
-type ApiKeyProfile = { type: "api_key"; provider: string; key: string };
-type OAuthProfileForTest = {
-  type: "oauth";
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-};
-type TokenProfileForTest = { type: "token"; provider: string; token: string };
-type AuthProfileForTest = ApiKeyProfile | OAuthProfileForTest | TokenProfileForTest;
+type AuthProfileForTest = (typeof authProfilesStoreMock.profiles)[string];
+type ApiKeyProfile = Extract<AuthProfileForTest, { type: "api_key" }>;
 
 function baseAliasIndex(): ModelAliasIndex {
   return { byAlias: new Map(), byKey: new Map() };

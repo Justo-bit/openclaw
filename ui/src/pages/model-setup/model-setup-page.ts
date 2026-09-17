@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -21,22 +20,17 @@ import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
   FirstRunSetup,
-  type ModelSetupConnection,
   type ModelSetupRouteData,
 } from "./first-run-setup.ts";
 import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
-import {
-  captureModelSetupResult,
-  formatModelSetupError,
-  type ModelSetupTaskResult,
-} from "./model-setup-task-result.ts";
+import { formatModelSetupError } from "./model-setup-task-result.ts";
 import {
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
   preparedModelActivation,
 } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.ts";
-import { createModelSetupVerifyTask, detectModelSetup } from "./rpc.ts";
+import { createModelSetupDetectTask, createModelSetupVerifyTask } from "./rpc.ts";
 import {
   activationTargetId,
   initialWizardValue,
@@ -161,30 +155,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
   });
 
-  private readonly detectTask = new Task<
-    readonly [GatewayBrowserClient | null, string | null, object | null],
-    ModelSetupTaskResult<SystemAgentSetupDetectResult> & {
-      agentId: string | null;
-      hello: ModelSetupConnection["hello"];
-      token: object;
-    }
-  >(this, {
-    autoRun: false,
-    args: () => [null, null, null],
-    task: async ([client, agentId, token], { signal }) => {
-      if (!client || !token) {
-        return initialState;
-      }
-      const hello = this.context.gateway.snapshot.hello;
-      return {
-        ...(await captureModelSetupResult(client, () =>
-          detectModelSetup(client, agentId ?? undefined, signal),
-        )),
-        agentId,
-        hello,
-        token,
-      };
-    },
+  private readonly detectTask = createModelSetupDetectTask(this, {
+    getHello: () => this.context.gateway.snapshot.hello,
     onComplete: (outcome) => {
       if (
         this.context.gateway.snapshot.client !== outcome.client ||

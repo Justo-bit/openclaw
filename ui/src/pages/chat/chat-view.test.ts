@@ -50,6 +50,8 @@ import {
   createChatProps,
   createPasteEvent,
   createTestTranscript,
+  getComposerTextarea,
+  requireElement,
   stubAnimationFrames,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -666,22 +668,6 @@ function getThinkingReasoningValueLabel(container: Element): string {
       "[data-chat-thinking-preview-index]:not([hidden])",
   );
   return preview?.textContent?.trim() ?? "";
-}
-
-function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
-}
-
-function getComposerTextarea(container: Element): HTMLTextAreaElement {
-  return requireElement(
-    container,
-    ".agent-chat__composer-combobox > textarea",
-    "composer textarea",
-  ) as HTMLTextAreaElement;
 }
 
 function createDragEvent(type: string, types = ["Files"]): Event {

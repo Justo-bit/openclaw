@@ -143,6 +143,18 @@ export type ModelProviderRowMessage = {
   warning?: string;
 };
 
+export function modelProviderConfigBusy(context: ApplicationContext): boolean {
+  const runtimeState = context.runtimeConfig.state;
+  const update = context.overlays.snapshot;
+  return (
+    runtimeState.configLoading ||
+    runtimeState.configSaving ||
+    runtimeState.configApplying ||
+    update.updateRunning ||
+    update.updateReconciliationPending
+  );
+}
+
 export type ModelProviderConfigMutation = {
   key: string;
   raw: Record<string, unknown>;

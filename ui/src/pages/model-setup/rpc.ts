@@ -5,8 +5,46 @@ import type {
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
+import type { ModelSetupConnection } from "./first-run-setup.ts";
 import { captureModelSetupResult, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import { MODEL_SETUP_DETECT_TIMEOUT_MS, MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
+
+type ModelSetupDetectTaskResult = ModelSetupTaskResult<SystemAgentSetupDetectResult> & {
+  agentId: string | null;
+  hello: ModelSetupConnection["hello"];
+  token: object;
+};
+
+export function createModelSetupDetectTask(
+  host: ReactiveControllerHost,
+  options: {
+    getHello: () => ModelSetupConnection["hello"];
+    onComplete: (outcome: ModelSetupDetectTaskResult) => void;
+  },
+) {
+  return new Task<
+    readonly [GatewayBrowserClient | null, string | null, object | null],
+    ModelSetupDetectTaskResult
+  >(host, {
+    autoRun: false,
+    args: () => [null, null, null],
+    task: async ([client, agentId, token], { signal }) => {
+      if (!client || !token) {
+        return initialState;
+      }
+      const hello = options.getHello();
+      return {
+        ...(await captureModelSetupResult(client, () =>
+          detectModelSetup(client, agentId ?? undefined, signal),
+        )),
+        agentId,
+        hello,
+        token,
+      };
+    },
+    onComplete: options.onComplete,
+  });
+}
 
 export function detectModelSetup(
   client: GatewayBrowserClient,

@@ -33,6 +33,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { registerTelegramModelPickerCases } from "./bot.model-picker.test-cases.js";
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
@@ -2834,195 +2835,17 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("renders model callback lists with configured display names", async () => {
-    const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
-    buildModelsProviderDataMock.mockResolvedValueOnce({
-      byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
-      providers: ["openai"],
-      resolvedDefault: { provider: "openai", model: "gpt-5" },
-      modelCatalog: [],
-      modelNames: new Map<string, string>([
-        ["openai/gpt-4.1", "GPT 4.1 Bridge"],
-        ["openai/gpt-5", "GPT Five Bridge"],
-      ]),
-    });
-
-    const config = makeModelPickerConfig(storePath, {
-      defaultModel: "openai/gpt-5",
-      omitModels: true,
-    });
-
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: "cbq-model-display-names-1",
-        data: "mdl_list_openai_1",
-        message: { message_id: 23 },
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(firstEditMessageTextArg(2)).toContain(
-      "Selecting a model also applies its configured runtime.",
-    );
-    const params = firstEditMessageTextArg(3);
-    const inlineKeyboard = (
-      params as {
-        reply_markup?: {
-          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
-        };
-      }
-    ).reply_markup?.inline_keyboard;
-
-    expect(inlineKeyboard).toStrictEqual([
-      [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
-      [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
-      [{ text: "<< Back", callback_data: "mdl_back" }],
-    ]);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
-  });
-
-  it("persists the native runtime selected through the Telegram picker", async () => {
-    const storePath = createTelegramTestStorePath("native-model-only");
-    const config = makeModelPickerConfig(storePath, { omitModels: true });
-    const nativeEntry = {
-      provider: "acp-opencode",
-      id: "big-pickle",
-      name: "Big Pickle",
-      nativeRuntime: "acp-opencode",
-    };
-    vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
-      byProvider: new Map([["acp-opencode", new Set(["big-pickle"])]]),
-      providers: ["acp-opencode"],
-      resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
-      modelNames: new Map(),
-      modelCatalog: [nativeEntry],
-    });
-    const { createEmptyPluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime");
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "acpx",
-      source: "test",
-      harness: {
-        id: "acp-opencode",
-        label: "OpenCode",
-        authBootstrap: "harness",
-        supports: ({ requestedRuntime }) => ({ supported: requestedRuntime === "acp-opencode" }),
-        async runAttempt() {
-          throw new Error("Model selection must not execute inference");
-        },
-      },
-    });
-    await mockPublishedModelRuntimeForTest({
-      config,
-      isCurrent: () => true,
-      facts: {
-        pluginRegistry: registry,
-        modelCatalog: { entries: [nativeEntry], routeVariants: [nativeEntry] },
-      },
-      paths: {
-        agentDir: telegramTestState.agentDir(),
-        workspaceDir: telegramTestState.workspaceDir,
-      },
-      authStore: { version: 1, profiles: {} },
-    });
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({ token: "tok", config });
-    await getTelegramCallbackHandlerForTests()(
-      createTelegramCallbackContext({
-        id: "native-model-only",
-        data: "mdl_sel_acp-opencode/big-pickle",
-        message: { message_id: 17 },
-      }),
-    );
-    expect(readOnlySessionEntry(storePath)).toMatchObject({
-      providerOverride: "acp-opencode",
-      modelOverride: "big-pickle",
-      agentRuntimeOverride: "acp-opencode",
-    });
-  });
-
-  it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
-    const storePath = createTelegramTestStorePath("model-html");
-    const config = makeModelPickerConfig(storePath, {
-      models: {
-        "anthropic/claude-opus-4-6": {},
-        "fixture/model": { agentRuntime: { id: "openclaw" } },
-      },
-    });
-    await mockPublishedModelRuntimeForTest({
-      config,
-      isCurrent: () => true,
-      facts: {},
-      paths: {
-        agentDir: telegramTestState.agentDir(),
-        workspaceDir: telegramTestState.workspaceDir,
-      },
-    });
-    const route = resolveTelegramConversationRoute({
-      cfg: config,
-      accountId: "default",
-      chatId: 1234,
-      isGroup: false,
-      threadSpec: { scope: "none" },
-      senderId: 9,
-    }).route;
-    const sessionKey = resolveTelegramConversationBaseSessionKey({
-      cfg: config,
-      route,
-      chatId: 1234,
-      isGroup: false,
-      senderId: 9,
-    });
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "model-html",
-        updatedAt: 1,
-        agentRuntimeOverride: "openclaw",
-      },
-    });
-
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: "cbq-model-html-1",
-        data: "mdl_sel_fixture/model",
-        message: { message_id: 17 },
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const editCall = mockCall(editMessageTextSpy, 0, "edit message text");
-    expect(editCall[0]).toBe(1234);
-    expect(editCall[1]).toBe(17);
-    expect(editCall[2]).toBe(
-      `${CHECK_MARK_EMOJI} Model changed to <b>fixture/model</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b>. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
-    );
-    expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
-
-    const entry = readOnlySessionEntry(storePath);
-    expect(entry?.providerOverride).toBe("fixture");
-    expect(entry?.modelOverride).toBe("model");
-    expect(entry?.modelOverrideSource).toBe("user");
-    expect(entry?.agentRuntimeOverride).toBe("openclaw");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+  registerTelegramModelPickerCases({
+    createTelegramTestStorePath,
+    makeModelPickerConfig,
+    loadConfig,
+    createTelegramBot: (options) => createTelegramBot(options),
+    getTelegramCallbackHandlerForTests,
+    getTelegramTestState: () => telegramTestState,
+    readOnlySessionEntry,
+    firstEditMessageTextArg,
+    firstEditMessageTextCall: () => mockCall(editMessageTextSpy, 0, "edit message text"),
+    harness: { telegramBotDepsForTest, replySpy, editMessageTextSpy, answerCallbackQuerySpy },
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {

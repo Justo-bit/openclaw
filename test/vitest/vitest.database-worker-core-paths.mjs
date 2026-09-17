@@ -2,6 +2,8 @@
 export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/acp-native-approval-effect.process.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
+  "src/state/agent-provenance.test.ts",
+  "src/commands/agents.commands.list.worker.test.ts",
   "src/state/openclaw-agent-worker-store.test.ts",
   "src/sessions/session-state-events.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",

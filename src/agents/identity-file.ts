@@ -253,6 +253,42 @@ export function mergeIdentityMarkdownContent(
   return nextLines.join("\n").replace(/\n*$/, "\n");
 }
 
+export async function buildIdentityMarkdownForWrite(params: {
+  readWorkspaceFileContent: (workspaceDir: string, name: string) => Promise<string | undefined>;
+  workspaceDir: string;
+  identity: IdentityConfig;
+  fallbackWorkspaceDir?: string;
+  preferFallbackWorkspaceContent?: boolean;
+}): Promise<string> {
+  let baseContent: string | undefined;
+  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
+    baseContent = await params.readWorkspaceFileContent(
+      params.fallbackWorkspaceDir,
+      DEFAULT_IDENTITY_FILENAME,
+    );
+    if (baseContent === undefined) {
+      baseContent = await params.readWorkspaceFileContent(
+        params.workspaceDir,
+        DEFAULT_IDENTITY_FILENAME,
+      );
+    }
+  } else {
+    baseContent = await params.readWorkspaceFileContent(
+      params.workspaceDir,
+      DEFAULT_IDENTITY_FILENAME,
+    );
+    if (baseContent === undefined && params.fallbackWorkspaceDir) {
+      baseContent = await params.readWorkspaceFileContent(
+        params.fallbackWorkspaceDir,
+        DEFAULT_IDENTITY_FILENAME,
+      );
+    }
+  }
+
+  return mergeIdentityMarkdownContent(baseContent, params.identity);
+}
+
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
     const resolvedPath = fs.realpathSync(identityPath);

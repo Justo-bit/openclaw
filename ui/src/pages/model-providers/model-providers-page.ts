@@ -25,6 +25,7 @@ import {
   isMissingMethodError,
   mergeProbeResults,
   modelProviderApiKeySuccess,
+  modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   modelProviderErrorMessage,
@@ -167,7 +168,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly installedAgents = new InstalledAgentsController(this, {
     gateway: this.gateway,
     getContext: () => this.context,
-    isConfigBusy: () => this.configBusy(),
+    isConfigBusy: () => modelProviderConfigBusy(this.context),
     refreshModels: () => this.refresh("forced"),
   });
   private readonly profileActions = new ModelProviderProfileActionsController({
@@ -209,12 +210,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     )
     .effect(
       () => this.context?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          if (event.event === "config.changed") {
-            this.installedAgents.handleConfigChanged();
-          }
-        }),
+      (gateway) => this.installedAgents.subscribe(gateway),
     )
     .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
     .watch(
@@ -284,9 +280,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     // Detected agents are global; they load without route data or agent selection.
-    if (this.gateway.connected) {
-      this.installedAgents.ensureLoaded();
-    }
+    this.installedAgents.ensureLoaded();
     // The route owns initial loading, even when its page module is already cached.
     const client = this.gateway.client;
     if (
@@ -390,19 +384,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private canMutate(): boolean {
-    return this.mutationBlockedReason() === null && !this.configBusy();
-  }
-
-  private configBusy(): boolean {
-    const runtimeState = this.context.runtimeConfig.state;
-    const update = this.context.overlays.snapshot;
-    return (
-      runtimeState.configLoading ||
-      runtimeState.configSaving ||
-      runtimeState.configApplying ||
-      update.updateRunning ||
-      update.updateReconciliationPending
-    );
+    return this.mutationBlockedReason() === null && !modelProviderConfigBusy(this.context);
   }
 
   private setBusy = (key: string, value: boolean) =>
@@ -425,7 +407,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (
       !client ||
       modelProviderConfigMutationBlockedReason(this.context) ||
-      this.configBusy() ||
+      modelProviderConfigBusy(this.context) ||
       this.busy[params.key]
     ) {
       return { ok: false };
@@ -684,9 +666,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
-      cards: noSelectableAgents
-        ? []
-        : cards.filter((card) => !this.installedAgents.ownsProvider(card.id)),
+      cards: noSelectableAgents ? [] : this.installedAgents.filterProviders(cards),
       configuredModels: buildSelectableDefaultModels(catalog?.models ?? null, defaults),
       defaultModels: defaults,
       authStatus: data.authStatus,
@@ -698,7 +678,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       catalogDiscovering:
         this.catalogDiscovery.discovering || Boolean(catalog?.pendingProviders?.length),
       catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
-      configBusy: this.configBusy(),
+      configBusy: modelProviderConfigBusy(this.context),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.authStatus?.providerCapabilities,

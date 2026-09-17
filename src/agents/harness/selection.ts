@@ -62,6 +62,7 @@ import {
   type AgentHarnessPreparedModelProvider,
 } from "./selection-decision.js";
 import {
+  assertPluginHarnessConversationToolPolicySupport,
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./support.js";
@@ -603,25 +604,6 @@ function preparePluginHarnessParams(
     },
     policies,
   );
-}
-
-function assertPluginHarnessConversationToolPolicySupport(
-  harness: AgentHarness,
-  restricted: boolean,
-): void {
-  if (
-    harness.id !== "openclaw" &&
-    restricted &&
-    harness.conversationToolPolicySupport !== "exact"
-  ) {
-    throw new AgentHarnessPreflightError(
-      `${harness.label} cannot enforce this conversation's tool policy. Use the embedded runtime or ask in the main conversation.`,
-      {
-        scope: "harness",
-        userMessage: `${harness.label} cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.`,
-      },
-    );
-  }
 }
 
 function applyPluginHarnessDenyAllToolPolicy(

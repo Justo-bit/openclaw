@@ -2810,12 +2810,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:binding:test",
     });
     vi.spyOn(delegate, "close").mockResolvedValue(undefined);
-    vi.spyOn(
-      runtime as unknown as {
-        cleanupProcessTreeForRecord: () => Promise<void>;
-      },
-      "cleanupProcessTreeForRecord",
-    ).mockRejectedValue(new Error("cleanup failed"));
+    leaseStore.store.load
+      .mockResolvedValueOnce(await leaseStore.store.load("lease-close-failure"))
+      .mockRejectedValueOnce(new Error("cleanup failed"));
 
     await expect(
       runtime.close({
@@ -2828,6 +2825,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       }),
     ).rejects.toThrow("cleanup failed");
 
+    expect(delegate.close).toHaveBeenCalledOnce();
     expect(leaseStore.leases.get("lease-close-failure")).toMatchObject({
       rootPid: 0,
       state: "open",
@@ -2862,12 +2860,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
     vi.spyOn(delegate, "close").mockResolvedValue(undefined);
-    vi.spyOn(
-      runtime as unknown as {
-        cleanupProcessTreeForRecord: () => Promise<void>;
-      },
-      "cleanupProcessTreeForRecord",
-    ).mockRejectedValue(new Error("cleanup failed"));
+    leaseStore.store.listOpen.mockRejectedValue(new Error("cleanup failed"));
 
     await expect(
       runtime.close({
@@ -2880,6 +2873,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       }),
     ).rejects.toThrow("cleanup failed");
 
+    expect(delegate.close).toHaveBeenCalledOnce();
     expect(leaseStore.leases.get("lease-close-live")).toMatchObject({
       rootPid: 777,
       state: "open",

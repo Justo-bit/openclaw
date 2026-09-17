@@ -18,6 +18,7 @@ import {
   runModelProviderConfigMutation,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
+import type { ModelProviderCard } from "./data.ts";
 
 const INSTALLED_AGENTS_METHOD = "acpx.agents.list";
 
@@ -58,6 +59,14 @@ export class InstalledAgentsController {
     private readonly options: InstalledAgentsOptions,
   ) {}
 
+  subscribe(gateway: ApplicationContext["gateway"]): () => void {
+    return gateway.subscribeEvents((event) => {
+      if (event.event === "config.changed") {
+        this.handleConfigChanged();
+      }
+    });
+  }
+
   /** Writes from a previous connection cannot settle here, so their state goes too. */
   reset(options: { preserveVisibleData?: boolean } = {}): void {
     this.generation += 1;
@@ -72,17 +81,18 @@ export class InstalledAgentsController {
   }
 
   ensureLoaded(): void {
-    if (!this.loading && this.settledEpoch !== this.options.gateway.epoch) {
+    const gateway = this.options.gateway;
+    if (gateway.connected && !this.loading && this.settledEpoch !== gateway.epoch) {
       void this.load();
     }
   }
 
-  ownsProvider(provider: string): boolean {
-    return this.agents?.some((agent) => agent.runtimeId === provider) === true;
+  filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
+    return cards.filter((card) => !this.agents?.some((agent) => agent.runtimeId === card.id));
   }
 
   /** Another client's config write can change enabled flags. */
-  handleConfigChanged(): void {
+  private handleConfigChanged(): void {
     if (this.agents !== null && this.pending.size === 0) {
       void this.load();
     }
