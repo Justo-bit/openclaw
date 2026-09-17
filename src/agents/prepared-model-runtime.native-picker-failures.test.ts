@@ -21,6 +21,8 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquirePreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
+  publishPreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
@@ -37,7 +39,11 @@ afterEach(async ({ task }) => {
 });
 
 describe("native picker acquisition failures", () => {
-  async function prepareNativePickerOwner({ unconfigured = false, warmCatalog = true } = {}) {
+  async function prepareNativePickerOwner({
+    unconfigured = false,
+    warmCatalog = true,
+    standalone = false,
+  } = {}) {
     const { resolveAgentEffectiveModelPrimary } =
       await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
@@ -107,16 +113,29 @@ describe("native picker acquisition failures", () => {
         ({ provider }) => !providerIds || providerIds.includes(provider),
       ),
     }));
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-    });
-    const owner = getPreparedModelRuntimeSnapshot({
-      config,
-      agentId: "pro",
-      agentDir: state.agentDir("pro"),
-    })!;
+    let owner: PreparedModelRuntimeSnapshot;
+    if (standalone) {
+      owner = await publishPreparedModelRuntimeSnapshot(
+        {
+          config,
+          agentId: "pro",
+          agentDir: state.agentDir("pro"),
+          allowGatewaySubagentBinding: true,
+        },
+        { catalogMode: "static", provenance: "standalone" },
+      );
+    } else {
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+      owner = getPreparedModelRuntimeSnapshot({
+        config,
+        agentId: "pro",
+        agentDir: state.agentDir("pro"),
+      })!;
+    }
     if (warmCatalog) {
       await owner.loadFullModelCatalog!({ refresh: true });
     }
@@ -125,68 +144,157 @@ describe("native picker acquisition failures", () => {
     return { owner, config, loadDefault, loadAlternative, freshDefault, providerOutcomes };
   }
 
-  it("prepares an explicit native selection from a cold run owner without picker discovery", async () => {
-    const { owner, config, loadDefault, loadAlternative } = await prepareNativePickerOwner({
+  it("preserves opaque model identity during selected native discovery", async () => {
+    const { owner, loadDefault, loadAlternative } = await prepareNativePickerOwner({
       unconfigured: true,
       warmCatalog: false,
+      standalone: true,
     });
+    const entry = {
+      provider: "provider-b",
+      id: "@opaque-model",
+      name: "Opaque native model",
+      nativeRuntime: "native-alternative",
+    };
+    loadAlternative.mockResolvedValue([entry]);
+    const catalog = await owner.loadNativeModelCatalog!({
+      provider: entry.provider,
+      modelId: entry.id,
+      runtime: entry.nativeRuntime,
+    });
+    expect(catalog.entries).toContainEqual(expect.objectContaining(entry));
+    expect(loadAlternative).toHaveBeenCalledOnce();
     expect(loadDefault).not.toHaveBeenCalled();
-    expect(loadAlternative).not.toHaveBeenCalled();
-    const expected = { provider: "provider-b", id: "model", nativeRuntime: "native-alternative" };
-    const input = {
-      config,
-      agentId: "pro",
-      agentDir: state.agentDir("pro"),
-      workspaceDir: owner.workspaceDir,
-      allowGatewaySubagentBinding: true,
-      runtimePluginSelections: [
-        {
+  });
+
+  it.each([false, true])(
+    "prepares an explicit native selection from a cold run owner without picker discovery (standalone=%s)",
+    async (standalone) => {
+      const { owner, config, loadDefault, loadAlternative } = await prepareNativePickerOwner({
+        unconfigured: true,
+        warmCatalog: false,
+        standalone,
+      });
+      expect(loadDefault).not.toHaveBeenCalled();
+      expect(loadAlternative).not.toHaveBeenCalled();
+      const expected = { provider: "provider-b", id: "model", nativeRuntime: "native-alternative" };
+      const input = {
+        config,
+        agentId: "pro",
+        agentDir: state.agentDir("pro"),
+        workspaceDir: owner.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          {
+            provider: expected.provider,
+            modelId: expected.id,
+            runtime: expected.nativeRuntime,
+            agentId: "pro",
+          },
+        ],
+      };
+      await using lease = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "static",
+      });
+      const workspaceDir = lease.snapshot.workspaceDir!;
+      const setup = await withPluginRuntimeGenerationScope(lease.snapshot, () =>
+        resolveEmbeddedRunModelSetup({
+          runParams: {
+            config,
+            agentId: "pro",
+            sessionId: "cold-native-run",
+            runId: "cold-native-run",
+            workspaceDir,
+            prompt: "Use the saved native choice",
+            timeoutMs: 30000,
+            agentHarnessRuntimeOverride: expected.nativeRuntime,
+          },
           provider: expected.provider,
           modelId: expected.id,
-          runtime: expected.nativeRuntime,
-          agentId: "pro",
-        },
-      ],
-    };
-    await using lease = await acquireAgentRunPreparedModelRuntime(input, { catalogMode: "static" });
-    const workspaceDir = lease.snapshot.workspaceDir!;
-    const setup = await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-      resolveEmbeddedRunModelSetup({
-        runParams: {
-          config,
-          agentId: "pro",
-          sessionId: "cold-native-run",
-          runId: "cold-native-run",
+          agentDir: input.agentDir,
           workspaceDir,
-          prompt: "Use the saved native choice",
-          timeoutMs: 30000,
-          agentHarnessRuntimeOverride: expected.nativeRuntime,
-        },
-        provider: expected.provider,
-        modelId: expected.id,
-        agentDir: input.agentDir,
-        workspaceDir,
-        globalLane: "test",
-        hookRunner: undefined,
-        hookContext: { sessionId: "cold-native-run", workspaceDir },
-        onHooksResolved: () => {},
-        preparedModelRuntime: lease.snapshot,
-      }),
-    );
-    expect(setup.nativeModelOwned).toBe(true);
-    expect(setup.agentHarness.id).toBe(expected.nativeRuntime);
-    expect(setup.model).toMatchObject({ provider: expected.provider, id: expected.id });
-    expect(loadAlternative).toHaveBeenCalledTimes(1);
-    const discoveryCalls = [loadDefault.mock.calls.length, loadAlternative.mock.calls.length];
-    await using reused = await acquireAgentRunPreparedModelRuntime(input, {
-      catalogMode: "static",
-    });
-    expect(reused.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(expected));
-    expect(loadAlternative).toHaveBeenCalledTimes(1);
-    expect([loadDefault.mock.calls.length, loadAlternative.mock.calls.length]).toEqual(
-      discoveryCalls,
-    );
-  });
+          globalLane: "test",
+          hookRunner: undefined,
+          hookContext: { sessionId: "cold-native-run", workspaceDir },
+          onHooksResolved: () => {},
+          preparedModelRuntime: lease.snapshot,
+        }),
+      );
+      expect(setup.nativeModelOwned).toBe(true);
+      expect(setup.agentHarness.id).toBe(expected.nativeRuntime);
+      expect(setup.model).toMatchObject({ provider: expected.provider, id: expected.id });
+      expect(loadAlternative).toHaveBeenCalledTimes(1);
+      if (standalone) {
+        expect(loadDefault).not.toHaveBeenCalled();
+      }
+      const discoveryCalls = [loadDefault.mock.calls.length, loadAlternative.mock.calls.length];
+      await using reused = await acquireAgentRunPreparedModelRuntime(input, {
+        catalogMode: "static",
+      });
+      expect(reused.snapshot.modelCatalog.entries).toContainEqual(
+        expect.objectContaining(expected),
+      );
+      expect(loadAlternative).toHaveBeenCalledTimes(1);
+      expect([loadDefault.mock.calls.length, loadAlternative.mock.calls.length]).toEqual(
+        discoveryCalls,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "keeps pending native discovery scoped to the selected runtime (first fails=%s)",
+    async (failFirst) => {
+      const { owner, loadDefault, loadAlternative } = await prepareNativePickerOwner({
+        unconfigured: true,
+        warmCatalog: false,
+        standalone: true,
+      });
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      const selected = { provider: "provider-b", modelId: "model" };
+      const failure = new Error("First native catalog unavailable");
+      loadDefault.mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        if (failFirst) {
+          throw failure;
+        }
+        return [
+          {
+            provider: selected.provider,
+            id: selected.modelId,
+            name: "First",
+            nativeRuntime: "native-default",
+          },
+        ];
+      });
+      const first = owner.loadNativeModelCatalog!({ ...selected, runtime: "native-default" });
+      const firstAssertion = failFirst
+        ? expect(first).rejects.toBe(failure)
+        : expect(first).resolves.toMatchObject({
+            entries: expect.arrayContaining([
+              expect.objectContaining({ nativeRuntime: "native-default" }),
+            ]),
+          });
+      await started.promise;
+      const second = owner.loadNativeModelCatalog!({ ...selected, runtime: "native-alternative" });
+      const secondAssertion = expect(second).resolves.toMatchObject({
+        entries: expect.arrayContaining([
+          expect.objectContaining({ nativeRuntime: "native-alternative" }),
+        ]),
+      });
+      try {
+        expect(loadAlternative).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+      }
+      await Promise.all([firstAssertion, secondAssertion]);
+      const secondCatalog = await second;
+      expect(loadDefault).toHaveBeenCalledOnce();
+      expect(loadAlternative).toHaveBeenCalledOnce();
+      expect(isPreparedModelCatalogFull(secondCatalog)).toBe(false);
+    },
+  );
 
   it("publishes native providers discovered without configured runtime references", async () => {
     const { owner, freshDefault } = await prepareNativePickerOwner({ unconfigured: true });

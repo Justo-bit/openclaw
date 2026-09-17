@@ -44,6 +44,7 @@ import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
+  PreparedNativeModelSelection,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -413,6 +414,9 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   loadFullModelCatalog: (
     options?: PreparedModelCatalogRefreshOptions,
   ) => Promise<ModelCatalogSnapshot>;
+  loadNativeModelCatalog: (
+    selection: PreparedNativeModelSelection,
+  ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;
 export function createPreparedModelRuntimeSnapshot(
@@ -480,6 +484,7 @@ export function createPreparedModelRuntimeSnapshot(
     readFullModelCatalog: catalogAccess.readFullModelCatalog,
     readPublishedModels: catalogAccess.readPublishedModels,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
+    loadNativeModelCatalog: catalogAccess.loadNativeModelCatalog,
     configuredRuntimeModels,
     configuredModelAliases: prepareConfiguredModelAliases(
       agentFacts,

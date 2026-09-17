@@ -36,6 +36,12 @@ export type PreparedModelCatalogRefreshOptions = {
   changedOnly?: boolean;
 };
 
+export type PreparedNativeModelSelection = {
+  provider: string;
+  modelId: string;
+  runtime: string;
+};
+
 export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };
 
 export type PreparedMediaCapabilityProviderSource = Readonly<{
@@ -103,6 +109,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
   loadFullModelCatalog?: (
     options?: PreparedModelCatalogRefreshOptions,
+  ) => Promise<ModelCatalogSnapshot>;
+  /** Acquires the selected runtime's native facts before host model resolution. */
+  loadNativeModelCatalog?: (
+    selection: PreparedNativeModelSelection,
   ) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];

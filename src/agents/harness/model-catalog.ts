@@ -22,7 +22,10 @@ import {
   resolveModelCatalogIdentityKey,
 } from "../openai-model-routes.js";
 import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
-import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedNativeModelSelection,
+} from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
@@ -128,6 +131,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   /** Concrete runtime already selected for a turn; omitted for configured inventory reads. */
   agentRuntime?: string;
+  nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;
   /** Current route and donor facts stay separate from retained raw inventory. */
   preparedSnapshot?: ModelCatalogSnapshot;
@@ -153,15 +157,17 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     runtimeProviders.set(runtime, providers);
   };
   const rawDefaultModel = params.defaultModel?.trim();
-  const ref = rawDefaultModel
-    ? resolveModelRefFromString({
-        cfg: params.cfg,
-        raw: rawDefaultModel,
-        defaultProvider: params.defaultProvider,
-        allowManifestNormalization: true,
-        allowPluginNormalization: true,
-      })?.ref
-    : undefined;
+  const ref = params.nativeSelection
+    ? { provider: params.nativeSelection.provider, model: params.nativeSelection.modelId }
+    : rawDefaultModel
+      ? resolveModelRefFromString({
+          cfg: params.cfg,
+          raw: rawDefaultModel,
+          defaultProvider: params.defaultProvider,
+          allowManifestNormalization: true,
+          allowPluginNormalization: true,
+        })?.ref
+      : undefined;
   let defaultRuntime: string | undefined;
   if (ref) {
     const routeKeyOf = createModelCatalogIdentityKeyResolver();
@@ -170,6 +176,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       (entry) => routeKeyOf(entry) === refKey,
     );
     defaultRuntime =
+      params.nativeSelection?.runtime ??
       params.agentRuntime ??
       resolveAgentHarnessPolicy({
         provider: ref.provider,
@@ -325,6 +332,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
 
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
+  nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
@@ -345,9 +353,10 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
       resolveDefaultAgentWorkspaceDir(),
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
+    nativeSelection: params.nativeSelection,
     snapshot: params.snapshot,
     preparedSnapshot: params.preparedSnapshot,
-    includePickerRuntimes: true,
+    includePickerRuntimes: params.nativeSelection === undefined,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
     observationConfig: params.input.config,

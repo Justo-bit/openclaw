@@ -275,6 +275,7 @@ async function prepareSnapshot(
       readFullModelCatalog: () => catalog.modelCatalog,
       readPublishedModels: () => undefined,
       loadFullModelCatalog: async () => catalog.modelCatalog,
+      loadNativeModelCatalog: async () => catalog.modelCatalog,
       loadAuth: async () => {
         throw new Error("The synthetic media provider does not request model credentials");
       },

@@ -12,6 +12,7 @@ import type { AgentHarness } from "../../harness/types.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { ModelRef } from "../../model-selection.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import { assertPreparedModelRuntimeInputCurrent } from "../../prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
@@ -193,9 +194,33 @@ export async function resolveEmbeddedRunModelSetup(params: {
     );
   }
 
-  const catalog = params.preparedModelRuntime?.modelCatalog;
+  let catalog = params.preparedModelRuntime?.modelCatalog;
+  let nativeCatalogFailure: { error: unknown } | undefined;
   const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
+  if (
+    !nativeSessionRuntime &&
+    pluginHarnessOwnsTransport &&
+    agentHarness.loadModelCatalog &&
+    params.preparedModelRuntime?.loadNativeModelCatalog &&
+    !catalog?.entries.some(ownsSelectedNativeModel) &&
+    !catalog?.routeVariants.some(ownsSelectedNativeModel)
+  ) {
+    try {
+      catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
+        provider,
+        modelId,
+        runtime: agentHarness.id,
+      });
+    } catch (error) {
+      nativeCatalogFailure = { error };
+    }
+    runParams.abortSignal?.throwIfAborted();
+    assertPreparedModelRuntimeInputCurrent(
+      params.preparedModelRuntime,
+      params.preparedModelRuntime.isCurrent,
+    );
+  }
   const nativeModelOwned =
     nativeSessionRuntime !== undefined ||
     (pluginHarnessOwnsTransport &&
@@ -241,6 +266,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
   }
   provider = resolvedModelProvider;
   if (!modelResolution.model) {
+    if (nativeCatalogFailure) {
+      throw nativeCatalogFailure.error;
+    }
     throw new FailoverError(modelResolution.error ?? `Unknown model: ${provider}/${modelId}`, {
       reason: "model_not_found",
       provider,

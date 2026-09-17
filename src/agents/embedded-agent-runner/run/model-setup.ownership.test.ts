@@ -21,6 +21,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
 import {
@@ -56,6 +57,7 @@ afterEach(async () => {
 async function createFixture(
   config: OpenClawConfig = {},
   nativeOwner?: AgentHarness["resolveSessionRuntimeOwnership"],
+  suppression?: Parameters<typeof createModelGenerationFixture>[0]["suppression"],
 ) {
   const state = await createOpenClawTestState({ label: "model-ownership" });
   states.push(state);
@@ -69,6 +71,7 @@ async function createFixture(
     runtimeApi: "openai-responses",
     runtimeBaseUrl: "https://api.openai.com/v1",
     config,
+    suppression,
   });
   publishCurrentModelGeneration(generation);
   const harness: AgentHarness = {
@@ -117,7 +120,9 @@ async function createFixture(
         }),
   };
   await replaceSessionEntry(target, entry);
-  const resolve = () =>
+  const resolve = (
+    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
+  ) =>
     resolveEmbeddedRunModelSetup({
       runParams,
       sessionAdmission: assertAgentHarnessRunAdmission(runParams),
@@ -132,7 +137,7 @@ async function createFixture(
         workspaceDir: runParams.workspaceDir,
       },
       onHooksResolved: () => {},
-      preparedModelRuntime: generation.preparedModelRuntime,
+      preparedModelRuntime,
     });
   const withRuntime = async (
     overrides: Partial<RunEmbeddedAgentParams>,
@@ -188,6 +193,81 @@ describe("model chat and native model ownership", () => {
       maxTokens: 2_048,
     });
   });
+
+  it.each([false, true])(
+    "keeps host model resolution when a harness catalog does not claim native ownership (catalog fails=%s)",
+    async (catalogFails) => {
+      const fixture = await createFixture();
+      const model = fixture.generation.resolveDynamicModel();
+      const catalog = { entries: [model], routeVariants: [model] };
+      fixture.harness.loadModelCatalog = vi.fn(async () => [model]);
+      registerAgentHarness(fixture.harness);
+      const loadNativeModelCatalog = vi.fn(async () => {
+        if (catalogFails) {
+          throw new Error("Optional catalog unavailable");
+        }
+        return catalog;
+      });
+      const setup = await fixture.resolve({
+        ...fixture.generation.preparedModelRuntime,
+        loadNativeModelCatalog,
+      });
+
+      expect(loadNativeModelCatalog).toHaveBeenCalledWith({
+        provider: "openai",
+        modelId: "fixture-model",
+        runtime: fixture.harness.id,
+      });
+      expect(setup.nativeModelOwned).toBe(false);
+      expect(setup.model).toMatchObject({
+        id: "fixture-model",
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+      });
+    },
+  );
+
+  it.each(["missing host model", "cancelled", "retired"] as const)(
+    "preserves catalog failure or authority when acquisition is %s",
+    async (outcome) => {
+      const fixture = await createFixture(
+        {},
+        undefined,
+        outcome === "missing host model" ? {} : undefined,
+      );
+      fixture.harness.loadModelCatalog = vi.fn(async () => []);
+      registerAgentHarness(fixture.harness);
+      const failure = new Error("Native catalog unavailable");
+      const cancellation = new Error("Native selection cancelled");
+      const controller = new AbortController();
+      fixture.runParams.abortSignal = controller.signal;
+      let current = true;
+      const createStores = vi.fn(fixture.generation.preparedModelRuntime.createStores);
+      const setup = fixture.resolve({
+        ...fixture.generation.preparedModelRuntime,
+        createStores,
+        isCurrent: () => current,
+        loadNativeModelCatalog: async () => {
+          if (outcome === "cancelled") {
+            controller.abort(cancellation);
+          } else if (outcome === "retired") {
+            current = false;
+          }
+          throw failure;
+        },
+      });
+      if (outcome === "retired") {
+        await expect(setup).rejects.toThrow("superseded");
+      } else {
+        await expect(setup).rejects.toBe(outcome === "cancelled" ? cancellation : failure);
+      }
+      if (outcome === "missing host model") {
+        expect(createStores).toHaveBeenCalledOnce();
+      } else {
+        expect(createStores).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();

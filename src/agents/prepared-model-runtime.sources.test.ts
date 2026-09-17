@@ -194,6 +194,7 @@ describe("prepared catalog source composition", () => {
           readFullModelCatalog: () => undefined,
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
+          loadNativeModelCatalog: async () => catalogFacts.modelCatalog,
           loadAuth: async () => ({ authStore: facts.authStore, authModes: {}, credentials: {} }),
         },
       );
