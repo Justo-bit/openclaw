@@ -10,6 +10,202 @@ function htmlFragment(html: string): HTMLElement {
 describe("github item references", () => {
   const githubRepo = { owner: "openclaw", repo: "openclaw" };
 
+  const githubRepositories = [
+    { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    { owner: "other", repo: "release-tools", aliases: ["Release.Tools", "Release Tools"] },
+  ];
+
+  it.each([
+    ["Original ClawSweeper PR **#1558 merged**", "openclaw/clawsweeper/pull/1558"],
+    ["Follow-up ClawSweeper PR **#1576 opened**", "openclaw/clawsweeper/pull/1576"],
+    ["clawsweeper **PR** #42", "openclaw/clawsweeper/pull/42"],
+    ["Release.Tools issue **#42**", "other/release-tools/issues/42"],
+    ["Release Tools PR #42", "other/release-tools/pull/42"],
+    ["release-tools PR #42", "other/release-tools/pull/42"],
+  ])("resolves the named repository in %s", (source, target) => {
+    const options = { githubRepo, githubRepositories };
+    for (const rendered of [
+      toSanitizedMarkdownHtml(source, options),
+      toStreamingMarkdownParts(source, options).join(""),
+    ]) {
+      expect(htmlFragment(rendered).querySelector("a")?.getAttribute("href")).toBe(
+        "https://github.com/" + target,
+      );
+    }
+  });
+
+  it("keeps local qualifiers independent for same-number references in one reply", () => {
+    const input = "ClawSweeper PR #1576; Release.Tools PR #1576; PR #1576.";
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml(input, { githubRepo, githubRepositories }),
+    );
+    expect([...fragment.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/openclaw/clawsweeper/pull/1576",
+      "https://github.com/other/release-tools/pull/1576",
+      "https://github.com/openclaw/openclaw/pull/1576",
+    ]);
+    expect(fragment.textContent?.trim()).toBe(input);
+  });
+
+  it.each([
+    "ClawSweeper PR **#1576 opened**",
+    "UnknownProject PR #1576",
+    'repository "Unknown Project" PR #1576',
+  ])("does not bind an unresolved named reference to the checkout: %s", (source) => {
+    expect(
+      htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo })).querySelector("a"),
+    ).toBeNull();
+  });
+
+  it("does not pick a repository when an alias is ambiguous", () => {
+    const options = {
+      githubRepo,
+      githubRepositories: [
+        ...githubRepositories,
+        { owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+      ],
+    };
+    expect(
+      htmlFragment(toSanitizedMarkdownHtml("ClawSweeper PR #1576", options)).querySelector("a"),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["openclaw/clawsweeper#1576", "issues"],
+    ["PR openclaw/clawsweeper#42", "pull"],
+    ["openclaw/clawsweeper PR #42", "pull"],
+  ])("resolves explicit owner/repo without a checkout: %s", (source, kind) => {
+    const fragment = htmlFragment(toSanitizedMarkdownHtml(source));
+    expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
+      "https://github.com/openclaw/clawsweeper/" +
+        kind +
+        (source.includes("1576") ? "/1576" : "/42"),
+    );
+    expect(fragment.textContent?.trim()).toBe(source);
+  });
+
+  it.each([
+    "# ClawSweeper PR #1576",
+    "`ClawSweeper PR #1576`",
+    "[ClawSweeper PR #1576](https://example.test)",
+    "ClawSweeper [PR](https://example.test) #42",
+  ])("preserves authored link and code boundaries in %s", (source) => {
+    const fragment = htmlFragment(
+      toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }),
+    );
+    expect(fragment.querySelector("a.markdown-github-item")).toBeNull();
+    expect(fragment.querySelector("a a")).toBeNull();
+  });
+
+  it.each([
+    ["(CLAWsweeper) PR #42", "clawsweeper"],
+    ['"ClawSweeper": PR #42', "clawsweeper"],
+    ["Original **ClawSweeper _PR_** **#42 merged**", "clawsweeper"],
+    ["OpenClaw PR #42", "openclaw"],
+    ["Original PR #42", "openclaw"],
+    ["Follow-up PR #42", "openclaw"],
+    ["See PR #42", "openclaw"],
+    ["Fixed PR #42", "openclaw"],
+  ])("recognizes exact aliases but preserves ordinary prose: %s", (source, repo) => {
+    const rendered = htmlFragment(
+      toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }),
+    );
+    expect(rendered.querySelector("a")?.getAttribute("href")).toBe(
+      "https://github.com/openclaw/" + repo + "/pull/42",
+    );
+  });
+
+  it.each([
+    [{ aliases: ["ClawSweeper"] }],
+    [{ owner: "fork", repo: "openclaw", aliases: ["OpenClaw"] }],
+  ])("does not select the checkout to break a known alias collision", (other) => {
+    const options = { githubRepo, githubRepositories: [...githubRepositories, other] };
+    const source = other.aliases[0] + " PR #1576";
+    expect(htmlFragment(toSanitizedMarkdownHtml(source, options)).querySelector("a")).toBeNull();
+  });
+
+  it("deduplicates same-coordinate aliases and resolves without checkout context", () => {
+    const options = {
+      githubRepositories: [
+        ...githubRepositories,
+        { owner: "OPENCLAW", repo: "CLAWSWEEPER", aliases: ["clawsweeper"] },
+      ],
+    };
+    expect(
+      htmlFragment(toSanitizedMarkdownHtml("ClawSweeper PR #42", options))
+        .querySelector("a")
+        ?.getAttribute("href"),
+    ).toBe("https://github.com/openclaw/clawsweeper/pull/42");
+  });
+
+  it.each([
+    "Unknown.Project PR #1576",
+    "project unknown PR #1576",
+    '"Unknown Project" PR #1576',
+    "repo: unknown PR #1576",
+  ])("leaves syntactically qualified unknown repositories unlinked: %s", (source) => {
+    expect(
+      htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo })).querySelector("a"),
+    ).toBeNull();
+  });
+
+  it("does not match aliases inside larger identifiers", () => {
+    const options = {
+      githubRepo,
+      githubRepositories: [{ owner: "other", repo: "project", aliases: ["Claw"] }],
+    };
+    expect(
+      htmlFragment(toSanitizedMarkdownHtml("OpenClaw PR #42", options))
+        .querySelector("a")
+        ?.getAttribute("href"),
+    ).toBe("https://github.com/openclaw/openclaw/pull/42");
+  });
+
+  it.each([
+    '"Unknown Tools" PR #42',
+    "project Unknown Tools PR #42",
+    'repository "Unknown Tools" PR #42',
+    "(“Unknown Tools”) PR #42",
+    "\"Unknown 'Legacy' Tools\" PR #42",
+  ])("does not select a known suffix inside an explicit complete name: %s", (source) => {
+    const options = {
+      githubRepo,
+      githubRepositories: [{ owner: "acme", repo: "tools", aliases: ["Tools"] }],
+    };
+    expect(htmlFragment(toSanitizedMarkdownHtml(source, options)).querySelector("a")).toBeNull();
+  });
+
+  it("matches an entire paired-quote alias containing apostrophes", () => {
+    const quotedRepositories = [{ owner: "acme", repo: "tools", aliases: ["Alice's Tools"] }];
+    expect(
+      htmlFragment(
+        toSanitizedMarkdownHtml('"Alice\'s Tools" PR #42', {
+          githubRepo,
+          githubRepositories: quotedRepositories,
+        }),
+      )
+        .querySelector("a")
+        ?.getAttribute("href"),
+    ).toBe("https://github.com/acme/tools/pull/42");
+  });
+
+  it.each(["Release Tools (Legacy)", "Build:"])(
+    "preserves punctuation belonging to known alias %s",
+    (alias) => {
+      for (const origin of [{ owner: "other", repo: "tools" }, {}]) {
+        const options = { githubRepo, githubRepositories: [{ ...origin, aliases: [alias] }] };
+        for (const qualified of [alias, "(" + alias + ")"]) {
+          const href = htmlFragment(toSanitizedMarkdownHtml(qualified + " PR #42", options))
+            .querySelector("a")
+            ?.getAttribute("href");
+          expect(href ?? null).toBe(
+            "owner" in origin ? "https://github.com/other/tools/pull/42" : null,
+          );
+        }
+      }
+    },
+  );
+
   it("leaves references plain without a repository", () => {
     const fragment = htmlFragment(toSanitizedMarkdownHtml("PR #141270 issue #123 #141270"));
     expect(fragment.querySelector("a")).toBeNull();

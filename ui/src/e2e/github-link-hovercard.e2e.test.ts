@@ -206,6 +206,144 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
   afterEach(closeContexts);
 
+  it.each([false, true])(
+    "resolves named repository references through registered project context (late=%s)",
+    async (late) => {
+      const context = await newBrowserContext();
+      const page = await context.newPage();
+      const repository = { owner: "openclaw", repo: "openclaw" };
+      const namedRepository = { owner: "openclaw", repo: "clawsweeper" };
+      const projectName = late ? "clawsweeper" : "ClawSweeper";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+          "projects.list",
+          "controlUi.githubPreview",
+        ],
+        deferredMethods: late ? ["projects.list"] : [],
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: [
+                  "Synthetic cross-repository reproduction",
+                  `Original ${projectName} PR **#1558 merged**`,
+                  `Follow-up ${projectName} PR **#1576 opened**`,
+                  "Same checkout: OpenClaw PR #1576.",
+                ].join("\n\n"),
+              },
+            ],
+          },
+        ],
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "projects.list": {
+            projects: [
+              {
+                id: "openclaw",
+                displayName: "OpenClaw",
+                originUrl: "https://github.com/openclaw/openclaw",
+                source: "registered",
+              },
+              {
+                id: "clawsweeper",
+                displayName: "ClawSweeper",
+                originUrl: "https://github.com/openclaw/clawsweeper",
+                source: "registered",
+              },
+            ],
+          },
+          "controlUi.githubPreview": {
+            cases: [repository, namedRepository].flatMap((repo) =>
+              [1558, 1576].map((number) => ({
+                match: { ...repo, kind: "pull", number },
+                response: {
+                  ...pullPreviewResponse,
+                  ...repo,
+                  number,
+                  title:
+                    repo.repo === "clawsweeper"
+                      ? "Synthetic ClawSweeper pull request"
+                      : "Synthetic OpenClaw pull request",
+                  login: "reviewer",
+                  coAuthors: [],
+                  coAuthorCount: 0,
+                },
+              })),
+            ),
+          },
+        },
+      });
+      await page.goto(server.baseUrl + "chat");
+      const key = await waitForWatchedSessionKey(gateway);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
+      });
+      const followUpRow = page
+        .locator(".chat-bubble p")
+        .filter({ hasText: "Follow-up " + projectName });
+      if (late) {
+        await followUpRow.waitFor({ state: "visible" });
+        expect(await followUpRow.locator("a").count()).toBe(0);
+        await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(1);
+        await gateway.resolveDeferred("projects.list");
+      }
+      const followUp = followUpRow.locator("a");
+      await followUp.waitFor({ state: "visible" });
+      await followUp.focus();
+      const card = page.locator(".github-link-hovercard");
+      await card.waitFor({ state: "visible" });
+      await captureArtifact(page, "named-repository-reference");
+      const href = "https://github.com/openclaw/clawsweeper/pull/1576";
+      expect(await followUp.getAttribute("href")).toBe(href);
+      expect(await card.locator(".github-link-hovercard__title").getAttribute("href")).toBe(href);
+      await expectText(card, "Synthetic ClawSweeper pull request");
+      expect(
+        await page.locator('a[href="https://github.com/openclaw/clawsweeper/pull/1558"]').count(),
+      ).toBe(1);
+      expect(
+        await page.locator('a[href="https://github.com/openclaw/openclaw/pull/1576"]').count(),
+      ).toBe(1);
+      for (const [repo, number] of [
+        [namedRepository, 1558],
+        [repository, 1576],
+      ] as const) {
+        await page.keyboard.press("Escape");
+        const target = "https://github.com/" + repo.owner + "/" + repo.repo + "/pull/" + number;
+        await page.locator('a[href="' + target + '"]').focus();
+        await expect
+          .poll(() => card.locator(".github-link-hovercard__title").getAttribute("href"))
+          .toBe(target);
+        await expectText(
+          card,
+          repo.repo === "clawsweeper"
+            ? "Synthetic ClawSweeper pull request"
+            : "Synthetic OpenClaw pull request",
+        );
+      }
+      const requests = (await gateway.getRequests("controlUi.githubPreview")).map(({ params }) => {
+        if (!isRecord(params)) {
+          throw new Error("Expected GitHub preview parameters");
+        }
+        return [params.owner, params.repo, params.kind, params.number].join("/");
+      });
+      expect(requests.toSorted()).toEqual([
+        "openclaw/clawsweeper/pull/1558",
+        "openclaw/clawsweeper/pull/1576",
+        "openclaw/openclaw/pull/1576",
+      ]);
+      expect(await gateway.getRequests("projects.list")).toHaveLength(1);
+      if (artifactDir) {
+        await writeFile(
+          path.join(artifactDir, "named-repository-requests.json"),
+          JSON.stringify({ requests, late }, null, 2),
+        );
+      }
+    },
+  );
+
   it("keeps formatted PR references and their hover targets consistent", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
