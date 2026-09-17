@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
@@ -234,7 +235,7 @@ it.each([
       const attempt = await attemptFor(state, config, agent, "full");
       const controller = new AbortController();
       attempt.input.abortSignal = controller.signal;
-      const timedOut = Promise.withResolvers<void>();
+      const timedOut = createDeferred();
       if (kind === "timeout") {
         attempt.input.timeoutMs = 3000;
         attempt.input.onAttemptTimeout = () => timedOut.resolve();
