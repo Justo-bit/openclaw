@@ -653,6 +653,10 @@ export function createFullModelCatalogAccess(params: {
       refreshExpiredCatalog();
       return published.catalog;
     },
+    readPublishedModelCatalog: () => {
+      assertCurrent();
+      return published.catalog;
+    },
     readPublishedModels: () => {
       assertCurrent();
       return published.runtimeModels;

@@ -15,13 +15,14 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 let state: OpenClawTestState;
@@ -30,6 +31,7 @@ beforeEach(async () => {
   await resetPreparedModelRuntimeHarness(state);
 });
 afterEach(async ({ task }) => {
+  vi.restoreAllMocks();
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
@@ -85,6 +87,45 @@ async function fixture(standalone = false) {
     : getPreparedModelRuntimeSnapshot(input)!;
   return { input, owner, a, b, loadA, loadB };
 }
+
+it("reuses published native facts without renewing providers during warm API and native turns", async () => {
+  const { input, owner, b, loadA, loadB } = await fixture();
+  const api = { provider: "provider-c", id: "model", name: "API model" };
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+    entries: [api],
+    routeVariants: [api],
+  });
+  await owner.loadFullModelCatalog!({ refresh: true });
+  const inventory = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!.catalogInventory!;
+  inventory.providers.get(api.provider)!.expiresAt = 0;
+  const providerCalls = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  const nativeCalls = [loadA.mock.calls.length, loadB.mock.calls.length];
+  const merges = vi.spyOn(fullCatalog, "mergePreparedNativeCatalog");
+  for (const selection of [
+    { provider: api.provider, modelId: api.id, runtime: "openclaw" },
+    { provider: b.provider, modelId: b.id, runtime: b.nativeRuntime },
+  ]) {
+    const selected = {
+      ...input,
+      workspaceDir: owner.workspaceDir,
+      runtimePluginSelections: [selection],
+    };
+    await using first = await acquireAgentRunPreparedModelRuntime(selected);
+    const captures = merges.mock.calls.length;
+    await using second = await acquireAgentRunPreparedModelRuntime(selected);
+    expect.soft(second.snapshot.modelCatalog).toBe(first.snapshot.modelCatalog);
+    expect.soft(merges).toHaveBeenCalledTimes(captures);
+    expect.soft(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(providerCalls);
+    expect(second.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
+  }
+  expect([loadA.mock.calls.length, loadB.mock.calls.length]).toEqual(nativeCalls);
+
+  owner.readFullModelCatalog!();
+  await vi.waitFor(() => {
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(providerCalls + 1);
+  });
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith([api.provider]);
+});
 
 it.each([false, true])(
   "carries a cold native selection into a stable run lease (standalone=%s)",
@@ -149,7 +190,7 @@ it.each([false, true])(
     loadA.mockResolvedValue([]);
     loadB.mockResolvedValue([]);
     const empty = await catalogOwner.loadFullModelCatalog!({ refresh: true });
-    expect(isPreparedModelCatalogFull(empty)).toBe(true);
+    expect(fullCatalog.isPreparedModelCatalogFull(empty)).toBe(true);
     await using next = await acquireAgentRunPreparedModelRuntime(selected, {
       catalogMode: "static",
     });
