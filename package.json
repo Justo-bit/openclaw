@@ -423,7 +423,8 @@
     "!dist/plugin-sdk/provider-auth-aliases.d.ts",
     "!dist/plugin-sdk/provider-model-metadata.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-knn.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-indexing.d.ts"
+    "!dist/plugin-sdk/memory-core-host-engine-indexing.d.ts",
+    "!dist/plugin-sdk/sqlite-worker-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1197,6 +1198,9 @@
     },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
+    },
+    "./plugin-sdk/sqlite-worker-runtime": {
+      "default": "./dist/plugin-sdk/sqlite-worker-runtime.js"
     },
     "./plugin-sdk/session-transcript-hit": {
       "default": "./dist/plugin-sdk/session-transcript-hit.js"

@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { logWarn } from "../logger.js";
 import type {
@@ -91,13 +90,12 @@ import type { SandboxContext } from "./sandbox.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import {
-  resolveScheduledExecPolicy,
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
 import {
   resolveSessionPermissionCoreToolPolicy,
-  resolveSessionPermissionExecPolicy,
+  projectEffectiveExecPolicy,
 } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -597,17 +595,13 @@ export function createOpenClawCodingToolsInternal(
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
   const execDefaults = options?.exec ?? {};
-  const effectiveExecPolicy = sessionPermissionPolicy
-    ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
-    : applyExecPolicyLayer(execConfig, options?.exec);
-  // A scheduled cap narrows the rebuilt exec tool to its captured policy.
-  // Its approval floor outranks a reused full session; the wrapper below
-  // prevents caller arguments from weakening either restriction.
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
-  const scheduledExecPolicy = resolveScheduledExecPolicy(
-    { ...effectiveExecPolicy, host: execDefaults.host ?? execConfig.host },
+  const effectiveExecPolicy = projectEffectiveExecPolicy({
+    base: execConfig,
+    overrides: options?.exec,
+    permissionPolicy: sessionPermissionPolicy,
     scheduledExecTarget,
-  );
+  });
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
@@ -616,7 +610,7 @@ export function createOpenClawCodingToolsInternal(
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,
-    includeShellTools,
+    shellTools: includeShellTools ? "full" : "disabled",
     workspaceOnly,
     readOnly,
     sandbox,
@@ -631,11 +625,7 @@ export function createOpenClawCodingToolsInternal(
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
-      bypassHostApprovalFloors:
-        scheduledExecTarget?.ask !== "always" &&
-        sessionCoreToolPolicy?.bypassHostApprovalFloors &&
-        effectiveExecPolicy.security === "full",
-      ...scheduledExecPolicy,
+      ...effectiveExecPolicy,
       config: execRuntimeConfig,
       preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
@@ -846,7 +836,10 @@ export function createOpenClawCodingToolsInternal(
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
             execOverrides: {
-              ...scheduledExecPolicy,
+              host: effectiveExecPolicy.host,
+              mode: effectiveExecPolicy.mode,
+              security: effectiveExecPolicy.security,
+              ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
