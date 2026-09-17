@@ -84,6 +84,7 @@ type ModelProvidersViewProps = {
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
+  installedAgents: TemplateResult | typeof nothing;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -595,43 +596,49 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
+    ${props.installedAgents}
     ${
       props.loading
         ? renderSettingsGroup(renderSettingsLoadingSkeleton())
-        : renderSettingsSection(
-            {
-              title: t("modelProviders.title"),
-              count: props.cards.length,
-              actions: html`
-                ${
-                  props.updatedAt
-                    ? html`<span class="model-providers__updated"
-                        >${t("modelProviders.updated", {
-                          time: formatTimeMs(props.updatedAt, {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          }),
-                        })}</span
-                      >`
-                    : nothing
-                }
-                <openclaw-tooltip
-                  .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
-                >
-                  <button
-                    type="button"
-                    class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                    aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
-                    ?disabled=${props.refreshing}
-                    @click=${() => props.onRefresh()}
+        : props.cards.length === 0 &&
+            props.installedAgents !== nothing &&
+            !props.error &&
+            !props.providerUsageFailed
+          ? nothing
+          : renderSettingsSection(
+              {
+                title: t("modelProviders.title"),
+                count: props.cards.length,
+                actions: html`
+                  ${
+                    props.updatedAt
+                      ? html`<span class="model-providers__updated"
+                          >${t("modelProviders.updated", {
+                            time: formatTimeMs(props.updatedAt, {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            }),
+                          })}</span
+                        >`
+                      : nothing
+                  }
+                  <openclaw-tooltip
+                    .content=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
                   >
-                    ${icons.refresh}
-                  </button>
-                </openclaw-tooltip>
-              `,
-            },
-            providerRows,
-          )
+                    <button
+                      type="button"
+                      class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
+                      aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
+                      ?disabled=${props.refreshing}
+                      @click=${() => props.onRefresh()}
+                    >
+                      ${icons.refresh}
+                    </button>
+                  </openclaw-tooltip>
+                `,
+              },
+              providerRows,
+            )
     }
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${

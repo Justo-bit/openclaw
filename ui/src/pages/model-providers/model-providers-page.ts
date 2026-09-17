@@ -45,6 +45,7 @@ import {
   type DefaultModelSelection,
   type ModelProviderPendingLogout,
 } from "./data.ts";
+import { InstalledAgentsController } from "./installed-agents.ts";
 import {
   EMPTY_MODEL_PROVIDERS_DATA,
   MODEL_PROVIDERS_COST_DAYS,
@@ -163,6 +164,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     },
     onPageActivation: () => this.refreshPolicy.request("focus"),
   });
+  private readonly installedAgents = new InstalledAgentsController(this, {
+    gateway: this.gateway,
+    getContext: () => this.context,
+    isConfigBusy: () => this.configBusy(),
+    refreshModels: () => this.refresh("forced"),
+  });
   private readonly profileActions = new ModelProviderProfileActionsController({
     getAgentEpoch: () => this.agentEpoch,
     getAgentId: () => this.selectedAgentId,
@@ -199,6 +206,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway) =>
         modelCatalog.subscribeModelCatalogChanges(gateway, () => void this.refresh("publication")),
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            this.installedAgents.handleConfigChanged();
+          }
+        }),
     )
     .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
     .watch(
@@ -267,6 +283,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       void this.context.agents.ensureList();
     }
+    // Detected agents are global; they load without route data or agent selection.
+    if (this.gateway.connected) {
+      this.installedAgents.ensureLoaded();
+    }
     // The route owns initial loading, even when its page module is already cached.
     const client = this.gateway.client;
     if (
@@ -300,6 +320,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.dataClient = null;
     }
     this.refreshPolicy.resetPayload();
+    this.installedAgents.reset(options);
     this.resetAgentScopeState();
     this.probeEpochs = new Map();
     this.probeUnsupported = false;
@@ -663,7 +684,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
-      cards: noSelectableAgents ? [] : cards,
+      cards: noSelectableAgents
+        ? []
+        : cards.filter((card) => !this.installedAgents.ownsProvider(card.id)),
       configuredModels: buildSelectableDefaultModels(catalog?.models ?? null, defaults),
       defaultModels: defaults,
       authStatus: data.authStatus,
@@ -698,6 +721,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
+      installedAgents: this.installedAgents.render(),
       onRefresh: () =>
         void (rosterError
           ? this.context.agents.refreshList()

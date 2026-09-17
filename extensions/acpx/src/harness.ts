@@ -50,6 +50,7 @@ const NATIVE_TOOL_REQUIREMENTS = {
 export function createAcpAgentHarness(params: {
   agent: keyof typeof NATIVE_TOOL_REQUIREMENTS;
   label: string;
+  isEnabled: () => boolean;
   shutdown: () => Promise<void> | void;
   api: OpenClawPluginApi;
   getRuntime: (context: OpenClawPluginServiceContext) => Promise<CompleteAcpRuntime>;
@@ -92,6 +93,9 @@ export function createAcpAgentHarness(params: {
     authBootstrap: "harness",
     conversationToolPolicyNativeTools: NATIVE_TOOL_REQUIREMENTS[params.agent],
     supports: ({ requestedRuntime, modelProvider }) => {
+      if (!params.isEnabled()) {
+        return { supported: false, reason: `${params.label} is disabled in Models settings.` };
+      }
       if (requestedRuntime !== id) {
         return { supported: false, reason: `Choose ${params.label} explicitly` };
       }
@@ -114,11 +118,14 @@ export function createAcpAgentHarness(params: {
     },
     async loadModelCatalog(input) {
       generation.signal.throwIfAborted();
+      if (!params.isEnabled()) {
+        return [];
+      }
       const runtime = await runtimeFor(input.workspaceDir);
       generation.signal.throwIfAborted();
       const inspection = await runtime.inspectAgent(params.agent);
       generation.signal.throwIfAborted();
-      if (inspection?.launch.kind !== "installed") {
+      if (!params.isEnabled() || inspection?.launch.kind !== "installed") {
         return [];
       }
       const target = {
@@ -134,7 +141,7 @@ export function createAcpAgentHarness(params: {
       try {
         const status = await runtime.getStatus({ handle, signal: generation.signal });
         generation.signal.throwIfAborted();
-        return (status.models?.availableModels ?? []).map((model) => ({
+        return (params.isEnabled() ? (status.models?.availableModels ?? []) : []).map((model) => ({
           provider: id,
           id: model.modelId,
           name: model.name,
@@ -146,6 +153,11 @@ export function createAcpAgentHarness(params: {
     },
     async runAttempt(input) {
       generation.signal.throwIfAborted();
+      if (!params.isEnabled()) {
+        throw new Error(
+          `${params.label} is disabled. Enable it in Models settings to start a turn.`,
+        );
+      }
       if (input.permissionMode && input.permissionMode !== "full") {
         throw new Error(
           `${params.label} cannot enforce this permission mode. Choose Full access or another runtime.`,

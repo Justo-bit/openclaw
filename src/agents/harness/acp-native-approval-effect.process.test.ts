@@ -3,6 +3,12 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-identity-token.js";
+import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
+} from "../../gateway/config-reload-plan.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -16,6 +22,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore as createDeferred } from "../../shared/deferred.js";
@@ -25,6 +32,7 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
+import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
@@ -36,6 +44,10 @@ it.for(["allow", "deny", "cancel"] as const)(
     await withOpenClawTestState({ label: "acp-native-approval-effect" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
+      };
+      const disabledConfig: OpenClawConfig = {
+        ...config,
+        plugins: { entries: { acpx: { config: { nativeAgents: { opencode: false } } } } },
       };
       const manager = createTestApprovalManager<PluginApprovalRequestPayload>(test, {
         approvalKind: "plugin",
@@ -101,6 +113,13 @@ it.for(["allow", "deny", "cancel"] as const)(
             JSON.parse(await fs.readFile(state.path("peer", "permission-request.json"), "utf8")),
           ).toMatchObject({ toolCallId: "native-write", kind: "edit" });
           expect(await fs.readdir(state.path("peer", "effects"))).toEqual([]);
+          if (kind === "allow") {
+            const plan = buildGatewayReloadPlan(
+              diffGatewayReloadPaths(config, disabledConfig, listConfigReloadRefinementPrefixes()),
+            );
+            expect(isNoopGatewayReloadPlan(plan)).toBe(true);
+            native.getRuntimeConfig.mockReturnValue(disabledConfig);
+          }
           if (kind === "cancel") {
             abort.abort();
           }
@@ -119,6 +138,32 @@ it.for(["allow", "deny", "cancel"] as const)(
             kind: kind === "cancel" ? "aborted" : "ok",
           });
           expect(manager.listPendingRecords()).toEqual([]);
+          if (kind === "allow") {
+            const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
+            expect(transcript.map((row) => row.role)).toEqual(["user", "assistant"]);
+            attempt.close();
+            const next = await attemptFor(state, disabledConfig, "opencode", "full");
+            try {
+              await expect(runAgentHarnessAttempt(next.input)).rejects.toThrow("disabled");
+              expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
+                transcript,
+              );
+              const harness = getRegisteredAgentHarness("acp-opencode")?.harness;
+              if (!harness?.loadModelCatalog) {
+                throw new Error("Native catalog operation missing");
+              }
+              await expect(
+                harness.loadModelCatalog({
+                  config: disabledConfig,
+                  agentId: "main",
+                  agentDir: state.agentDir(),
+                  workspaceDir: state.workspaceDir,
+                }),
+              ).resolves.toEqual([]);
+            } finally {
+              next.close();
+            }
+          }
           if (kind === "cancel") {
             expect(manager.getSnapshot(approvalId)).toMatchObject({
               status: "cancelled",

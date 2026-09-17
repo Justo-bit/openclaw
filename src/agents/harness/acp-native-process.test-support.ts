@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,7 @@ import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-sto
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
+  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -76,6 +78,7 @@ export async function registerNative(
     pluginId: "acpx",
     artifactBasename: "index.js",
   });
+  const getRuntimeConfig = vi.fn(() => config);
   const api = createTestPluginApi({
     id: "acpx",
     config,
@@ -98,12 +101,20 @@ export async function registerNative(
       ),
     },
     runtime: createPluginRuntimeMock({
+      config: { current: getRuntimeConfig },
       state: {
         resolveStateDir: () => state.stateDir,
         openKeyedStore: (options) => createPluginStateKeyedStore("acpx", options),
       },
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
+    registerReload: (registration) => {
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("Native process test registry missing");
+      }
+      registry.reloads.push({ pluginId: "acpx", pluginName: "ACPX", source: "test", registration });
+    },
   });
   if (!plugin.register) {
     throw new Error("ACPX registration missing");
@@ -120,7 +131,7 @@ export async function registerNative(
     stateDir: state.stateDir,
     logger: api.logger,
   };
-  return { peerDirectory, service, context };
+  return { peerDirectory, service, context, getRuntimeConfig };
 }
 
 export async function attemptFor(
@@ -137,7 +148,7 @@ export async function attemptFor(
   };
   const entry = { sessionId: target.sessionId, updatedAt: Date.now() };
   await upsertSessionEntry({ ...target, entry });
-  const runId = "native-execution";
+  const runId = randomUUID();
   const admission = prepareAgentRunAdmission({
     cfg: config,
     facts: {

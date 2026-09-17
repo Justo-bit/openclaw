@@ -6,7 +6,9 @@ import { createAgentRegistry } from "acpx/agent-registry";
 import { tryDispatchAcpReplyHook } from "openclaw/plugin-sdk/acp-runtime-backend";
 import { createAcpxRuntimeService } from "./register.runtime.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
+import { ACPX_NATIVE_AGENT_IDS } from "./src/config-schema.js";
 import { createAcpAgentHarness } from "./src/harness.js";
+import { isAcpxNativeAgentEnabled, listAcpxNativeAgents } from "./src/native-agents.js";
 import { registerPiSessionCatalog } from "./src/pi-session-catalog-plugin.js";
 
 const plugin = {
@@ -20,8 +22,9 @@ const plugin = {
       openKeyedStore: (options) => api.runtime.state.openKeyedStore(options),
     });
     api.registerService(service);
+    const currentConfig = () => api.runtime.config.current().plugins?.entries?.acpx?.config;
     const registry = createAgentRegistry();
-    for (const agentId of ["opencode", "qwen", "pi", "kilocode"] as const) {
+    const nativeAgents = ACPX_NATIVE_AGENT_IDS.map((agentId) => {
       const agent = registry.inspect(agentId);
       if (!agent) {
         throw new Error(`Unknown ACP harness: ${agentId}`);
@@ -30,6 +33,7 @@ const plugin = {
         createAcpAgentHarness({
           agent: agentId,
           label: agent.name,
+          isEnabled: () => isAcpxNativeAgentEnabled(currentConfig()?.nativeAgents, agentId),
           api,
           getRuntime: service.getRuntime,
           shutdown: () =>
@@ -40,7 +44,23 @@ const plugin = {
             }),
         }),
       );
-    }
+      return { id: agentId, name: agent.name, runtimeId: `acp-${agentId}` };
+    });
+    api.registerReload({ noopPrefixes: ["plugins.entries.acpx.config.nativeAgents"] });
+    api.registerGatewayMethod(
+      "acpx.agents.list",
+      ({ params, respond }) => {
+        if (Object.keys(params).length > 0) {
+          respond(false, undefined, {
+            code: "INVALID_REQUEST",
+            message: "acpx.agents.list takes no parameters",
+          });
+          return;
+        }
+        respond(true, { agents: listAcpxNativeAgents(currentConfig(), nativeAgents) }, undefined);
+      },
+      { scope: "operator.read", profileAccess: "independent" },
+    );
     api.on("reply_dispatch", tryDispatchAcpReplyHook, { eligibleDispatchKinds: ["acp"] });
   },
 };

@@ -32,6 +32,13 @@ Each model keeps its native ID, including any slashes. Configured ACP agent comm
 precedence over installed defaults. Catalog refresh uses installed commands and does not install
 missing agents. Explicit ACP commands and bindings keep their existing agent names.
 
+Models settings lists detected agents on the Gateway machine. Turn each native agent on or off
+there, or set `plugins.entries.acpx.config.nativeAgents.<id>` to `false` (`opencode`, `qwen`,
+`pi`, or `kilocode`). Missing flags are enabled. Disabling an agent prevents new native turns
+and catalog discovery without interrupting a running turn or deleting history. Classic ACP
+commands and `acp.allowedAgents` keep their existing behavior. Detection checks installed
+executables; it does not prove that an agent is logged in or can serve a model.
+
 The picker runtime cannot enforce OpenClaw's Read Only, Guarded, or Workspace permission modes.
 It rejects those explicit modes before starting the agent. Use Full access with the agent's own
 permission policy, or choose another runtime for those OpenClaw restrictions.
