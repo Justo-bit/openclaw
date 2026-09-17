@@ -49,6 +49,15 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it("does not expose a foreign error's userMessage property", () => {
+    const error = Object.assign(new Error("private-diagnostic-canary"), {
+      userMessage: "untrusted-public-canary",
+    });
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+  });
   it("includes heartbeat preflight reasons without verbose opt-in", () => {
     const message =
       "Codex session became active in another runner; wait for it to finish before continuing";

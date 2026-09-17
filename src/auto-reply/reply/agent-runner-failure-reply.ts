@@ -9,7 +9,10 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import {
+  renderAgentHarnessPreflightUserMessage,
+  renderUserFacingText,
+} from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
@@ -282,9 +285,10 @@ export function buildExternalRunFailureReply(
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
   if (isAgentHarnessPreflightError(error)) {
-    if (error.userMessage !== undefined) {
+    const userMessage = renderAgentHarnessPreflightUserMessage(error);
+    if (userMessage !== undefined) {
       return {
-        text: renderUserFacingText(error.userMessage, { errorContext: true }),
+        text: userMessage,
         isGenericRunnerFailure: false,
       };
     }

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import {
   createMinimalRunAgentTurnParams,
   createMockReplyOperation,
@@ -48,12 +49,25 @@ it.each(
     params.resolvedVerboseLevel = verbose;
     params.isHeartbeat = name === "heartbeat";
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(params);
-
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(failMock).toHaveBeenCalledWith("run_failed", error);
-    expect(error.cause).toBe(cause);
-    expect(result).toMatchObject({ kind: "final", payload: { text: userMessage, isError: true } });
+    const terminalErrors: unknown[] = [];
+    const unsubscribe = onAgentRuntimeEvent((event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "error") {
+        terminalErrors.push(event.data.error);
+      }
+    });
+    try {
+      const result = await executeAgentTurn(params);
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(failMock).toHaveBeenCalledWith("run_failed", error);
+      expect(error.cause).toBe(cause);
+      expect(terminalErrors).toEqual([userMessage]);
+      expect(result).toMatchObject({
+        kind: "final",
+        payload: { text: userMessage, isError: true },
+      });
+    } finally {
+      unsubscribe();
+    }
   },
 );

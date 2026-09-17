@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   appendTranscriptMessage,
@@ -25,60 +26,87 @@ import {
   handleChatSendSetupError,
 } from "./chat-send-dispatch-errors.js";
 
+const policyMessage =
+  "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
+
 describe("handleChatSendSetupError", () => {
-  it("returns typed projection setup failures to the client retry owner without a terminal broadcast", async () => {
-    const cleanupAdmittedRun = vi.fn();
-    const clearRun = vi.fn();
-    const broadcast = vi.fn();
-    const respond = vi.fn();
-    const dedupe = new Map();
+  it.each(["projection", "policy"] as const)(
+    "settles %s setup failures with the owning public result",
+    async (kind) => {
+      const cleanupAdmittedRun = vi.fn();
+      const broadcast = vi.fn();
+      const respond = vi.fn();
+      const dedupe = new Map();
 
-    await handleChatSendSetupError({
-      admission: {
-        cleanupAdmittedRun,
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState: { clearRun },
-        dedupe,
-        logGateway: { warn: vi.fn() },
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(),
-      } as never,
-      error: new SessionTranscriptProjectionUnavailableError("sess-main"),
-      respond,
-      session: {
-        agentId: "main",
-        clientRunId: "setup-projection-retry",
-        sessionKey: "agent:main:main",
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-    });
+      await handleChatSendSetupError({
+        admission: {
+          cleanupAdmittedRun,
+          lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
+        },
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState: createChatRunState(),
+          dedupe,
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
+        } as never,
+        error:
+          kind === "projection"
+            ? new SessionTranscriptProjectionUnavailableError("sess-main")
+            : new AgentHarnessPreflightError("private-policy-diagnostic", {
+                userMessage: policyMessage,
+              }),
+        respond,
+        session: {
+          agentId: "main",
+          clientRunId: "setup-projection-retry",
+          sessionKey: "agent:main:main",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+      });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
-      expect.anything(),
-    );
-    expect(dedupe.size).toBe(0);
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-  });
+      if (kind === "projection") {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
+          expect.anything(),
+        );
+        expect(dedupe.size).toBe(0);
+        expect(broadcast).not.toHaveBeenCalled();
+      } else {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          expect.objectContaining({ status: "error", summary: policyMessage }),
+          expect.objectContaining({ code: "UNAVAILABLE", message: policyMessage }),
+          expect.objectContaining({ error: expect.stringContaining("private-policy-diagnostic") }),
+        );
+        expect(dedupe.size).toBe(1);
+        expect(broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ state: "error", errorMessage: policyMessage }),
+          expect.anything(),
+        );
+      }
+      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
-    { settlement: "fallback", missingProfile: false },
-    { settlement: "restart-safe", missingProfile: false },
-    { settlement: "fallback", missingProfile: true },
-    { settlement: "restart-safe", missingProfile: true },
+    { settlement: "fallback", missingProfile: false, policyFailure: false },
+    { settlement: "restart-safe", missingProfile: false, policyFailure: false },
+    { settlement: "fallback", missingProfile: true, policyFailure: false },
+    { settlement: "restart-safe", missingProfile: true, policyFailure: false },
+    { settlement: "fallback", missingProfile: false, policyFailure: true },
+    { settlement: "restart-safe", missingProfile: false, policyFailure: true },
   ])(
-    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile)",
-    async ({ settlement, missingProfile }) => {
+    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure)",
+    async ({ settlement, missingProfile, policyFailure }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const target = {
           agentId: "main",
@@ -179,7 +207,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
               provider: "openai",
               modelId: "fixture-model",
             })
-          : new Error("Cloud worker unavailable");
+          : policyFailure
+            ? new AgentHarnessPreflightError("private-policy-diagnostic", {
+                userMessage: policyMessage,
+              })
+            : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
@@ -214,6 +246,16 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           expect(broadcast).toHaveBeenLastCalledWith(
             "chat",
             expect.objectContaining({ errorMessage: recovery }),
+            expect.anything(),
+          );
+        }
+        if (policyFailure) {
+          expect(loadSessionEntry(target)?.lastRunError).toBe(policyMessage);
+          expect(JSON.stringify(messages)).toContain(policyMessage);
+          expect(JSON.stringify(messages)).not.toContain("private-policy-diagnostic");
+          expect(broadcast).toHaveBeenLastCalledWith(
+            "chat",
+            expect.objectContaining({ errorMessage: policyMessage }),
             expect.anything(),
           );
         }
