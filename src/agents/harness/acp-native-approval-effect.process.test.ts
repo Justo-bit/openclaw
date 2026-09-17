@@ -28,7 +28,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import type { OpenClawPluginDefinition, OpenClawPluginService } from "../../plugins/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore as createDeferred } from "../../shared/deferred.js";
@@ -49,7 +49,9 @@ import { runAgentHarnessAttempt } from "./selection.js";
 const peer = fileURLToPath(
   new URL("../../../extensions/acpx/test/fixtures/approval-effect-agent.mjs", import.meta.url),
 );
-type ServiceModule = typeof import("../../../extensions/acpx/register.runtime.js");
+type ServiceModule = {
+  createAcpxRuntimeService: () => OpenClawPluginService;
+};
 let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 beforeEach(() => {
   snapshot = captureActivePluginRegistrySnapshot();

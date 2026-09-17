@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   buildExternalRunFailureReply,
@@ -19,7 +21,11 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+} from "../../plugins/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore as createDeferred } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -40,7 +46,17 @@ const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
 const peer = fileURLToPath(
   new URL("../../../extensions/acpx/test/fixtures/owner-agent.mjs", import.meta.url),
 );
-type ServiceModule = typeof import("../../../extensions/acpx/register.runtime.js");
+type ServiceModule = {
+  createAcpxRuntimeService: () => OpenClawPluginService & {
+    getRuntime: (
+      ctx: OpenClawPluginServiceContext,
+    ) => Promise<
+      Pick<AcpRuntime, "ensureSession"> &
+        Required<Pick<AcpRuntime, "setMode">> &
+        Pick<AcpxRuntime, "getStatus" | "setModel">
+    >;
+  };
+};
 let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 beforeEach(() => {
   snapshot = captureActivePluginRegistrySnapshot();
