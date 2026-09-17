@@ -92,14 +92,11 @@ export function registerTelegramModelPickerCases({
     expect(firstEditMessageTextArg(2)).toContain(
       "Selecting a model also applies its configured runtime.",
     );
-    const params = firstEditMessageTextArg(3);
-    const inlineKeyboard = (
-      params as {
-        reply_markup?: {
-          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
-        };
-      }
-    ).reply_markup?.inline_keyboard;
+    const params = requireRecord(firstEditMessageTextArg(3), "model picker options");
+    const inlineKeyboard = requireRecord(
+      params.reply_markup,
+      "model picker markup",
+    ).inline_keyboard;
 
     expect(inlineKeyboard).toStrictEqual([
       [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],

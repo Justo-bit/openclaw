@@ -46,7 +46,7 @@ export function createModelSetupDetectTask(
   });
 }
 
-export function detectModelSetup(
+function detectModelSetup(
   client: GatewayBrowserClient,
   agentId?: string,
   signal?: AbortSignal,

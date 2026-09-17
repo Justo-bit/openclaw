@@ -36,7 +36,7 @@ export const GatewayThinkingLevelOptionSchema = closedObject({
   label: NonEmptyString,
 });
 
-export const GatewayContextWindowOptionSchema = closedObject({
+const GatewayContextWindowOptionSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   contextWindow: Type.Integer({ minimum: 1 }),
