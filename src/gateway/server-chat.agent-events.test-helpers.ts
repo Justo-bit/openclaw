@@ -96,7 +96,11 @@ export function createDirectChatContext(
   const getRuntimeConfig = overrides.getRuntimeConfig ?? (() => config);
   const loadGatewayModelCatalog =
     overrides.loadGatewayModelCatalog ??
-    vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () => agentDiscoveryMock.models);
+    vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () =>
+      agentDiscoveryMock.models.map((model) =>
+        Object.assign({}, model, { name: model.name ?? model.id }),
+      ),
+    );
   return {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: vi.fn<

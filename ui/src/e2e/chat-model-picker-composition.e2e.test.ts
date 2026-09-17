@@ -94,7 +94,7 @@ suite.define(() => {
           // This exercises browser event ownership, not a native OS IME candidate window.
           const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
             (input, args) => {
-              const highlightedBefore = input.getAttribute("aria-activedescendant");
+              const previousHighlight = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
                 key: args.key,
                 isComposing: args.composition === "active",
@@ -106,7 +106,7 @@ suite.define(() => {
               input.dispatchEvent(event);
               return {
                 prevented: event.defaultPrevented,
-                highlightedBefore,
+                highlightedBefore: previousHighlight,
                 highlightedAfter: input.getAttribute("aria-activedescendant"),
               };
             },
