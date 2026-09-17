@@ -80,10 +80,14 @@ async function registerNative(state: OpenClawTestState, config: OpenClawConfig) 
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
   });
-  if (!plugin.register) throw new Error("ACPX registration missing");
+  if (!plugin.register) {
+    throw new Error("ACPX registration missing");
+  }
   plugin.register(api);
   const result = factory.mock.results.at(-1);
-  if (!result || result.type !== "return") throw new Error("ACPX service missing");
+  if (!result || result.type !== "return") {
+    throw new Error("ACPX service missing");
+  }
   const service = result.value;
   const context = {
     config,
@@ -169,35 +173,39 @@ async function peerStates(directory: string): Promise<PeerState[]> {
   );
 }
 
-const policyCases = agents.flatMap((agent) => [
-  ...(["messaging", "minimal", "full", undefined] as const).flatMap((profile) =>
-    (["full", undefined] as const).map((permissionMode) => ({
-      agent,
-      profile,
-      permissionMode,
-      alsoAllow: undefined,
-      denied: profile === "minimal" || profile === "messaging",
-    })),
-  ),
-  {
-    agent,
-    profile: "coding" as const,
-    permissionMode: "full" as const,
-    alsoAllow: undefined,
-    denied: agent === "kilocode",
-  },
-  ...(agent === "kilocode"
-    ? [
-        {
-          agent,
-          profile: "coding" as const,
-          permissionMode: "full" as const,
-          alsoAllow: ["message"],
-          denied: false,
-        },
-      ]
-    : []),
-]);
+const policyCases = agents.flatMap((agent) =>
+  [
+    (["messaging", "minimal", "full", undefined] as const).flatMap((profile) =>
+      (["full", undefined] as const).map((permissionMode) => ({
+        agent,
+        profile,
+        permissionMode,
+        alsoAllow: undefined,
+        denied: profile === "minimal" || profile === "messaging",
+      })),
+    ),
+    [
+      {
+        agent,
+        profile: "coding" as const,
+        permissionMode: "full" as const,
+        alsoAllow: undefined,
+        denied: agent === "kilocode",
+      },
+    ],
+    agent === "kilocode"
+      ? [
+          {
+            agent,
+            profile: "coding" as const,
+            permissionMode: "full" as const,
+            alsoAllow: ["message"],
+            denied: false,
+          },
+        ]
+      : [],
+  ].flat(),
+);
 it.each(policyCases)(
   "admits $agent profile=$profile permission=$permissionMode alsoAllow=$alsoAllow before native effects",
   async ({ agent, profile, permissionMode, alsoAllow, denied }) => {
@@ -211,7 +219,7 @@ it.each(policyCases)(
       try {
         const outcome = await runAgentHarnessAttempt(attempt.input).then(
           (value) => ({ value, error: undefined }),
-          (error) => ({ value: undefined, error }),
+          (error: unknown) => ({ value: undefined, error }),
         );
         const records = await peerStates(native.peerDirectory);
         const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
@@ -258,8 +266,8 @@ it.each(["cancel", "timeout", "revoke", "active"] as const)(
           modelExplicit: true,
         });
         const before = await peerStates(native.peerDirectory);
-        const entered = createDeferred<void>();
-        const release = createDeferred<void>();
+        const entered = createDeferred();
+        const release = createDeferred();
         const getStatus = runtime.getStatus.bind(runtime);
         vi.spyOn(runtime, "getStatus").mockImplementationOnce(async (input) => {
           const status = await getStatus(input);
@@ -270,7 +278,9 @@ it.each(["cancel", "timeout", "revoke", "active"] as const)(
         const controls = vi.spyOn(runtime, "setModel");
         const abort = new AbortController();
         attempt.input.abortSignal = abort.signal;
-        if (kind === "timeout") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        if (kind === "timeout") {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        }
         const run = runAgentHarnessAttempt(attempt.input);
         void run.catch(() => {});
         try {
@@ -280,8 +290,12 @@ it.each(["cancel", "timeout", "revoke", "active"] as const)(
               throw new Error("Attempt ended before status gate");
             }),
           ]);
-          if (kind === "cancel") abort.abort();
-          if (kind === "revoke") attempt.close();
+          if (kind === "cancel") {
+            abort.abort();
+          }
+          if (kind === "revoke") {
+            attempt.close();
+          }
           if (kind === "timeout") {
             await vi.advanceTimersByTimeAsync(attempt.input.timeoutMs);
             vi.useRealTimers();
@@ -289,7 +303,7 @@ it.each(["cancel", "timeout", "revoke", "active"] as const)(
           release.resolve();
           const outcome = await run.then(
             (value) => ({ value, error: undefined }),
-            (error) => ({ value: undefined, error }),
+            (error: unknown) => ({ value: undefined, error }),
           );
           const records = await peerStates(native.peerDirectory);
           const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
