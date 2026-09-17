@@ -594,6 +594,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<{
   rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
   nodeRunner?: string;
   serviceUnitTarget?: string;
   installationDrift?: string;
@@ -644,6 +645,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       return {
         rootRedirect: null,
         serviceUnitTarget,
+        serviceRoot: layout.packageRootReal,
         installationDrift: await inspectGatewayServiceInstallationDrift(layout, params.root),
       };
     }
