@@ -3,7 +3,10 @@ import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/man
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
+import {
+  augmentPreparedModelCatalogWithAgentHarness,
+  isPreparedNativeModelCatalogReady,
+} from "./harness/model-catalog.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -665,13 +668,14 @@ export function createFullModelCatalogAccess(params: {
       assertCurrent();
       const catalog = published.catalog ?? staticCatalog;
       if (
-        [...catalog.entries, ...catalog.routeVariants].some(
-          (entry) =>
-            entry.provider === selection.provider &&
-            entry.id === selection.modelId &&
-            entry.nativeRuntime === selection.runtime,
-        )
+        isPreparedNativeModelCatalogReady({
+          input: params.agentFacts.input,
+          pluginGeneration: params.pluginGeneration,
+          snapshot: catalog,
+          selection,
+        })
       ) {
+        assertCurrent();
         return catalog;
       }
       return await acquireCatalog(

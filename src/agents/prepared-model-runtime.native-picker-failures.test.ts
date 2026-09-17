@@ -8,6 +8,11 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -15,6 +20,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { loadProviderScopedThinkingCatalog } from "./prepared-model-catalog.js";
 import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -87,6 +94,58 @@ async function fixture(standalone = false) {
     : getPreparedModelRuntimeSnapshot(input)!;
   return { input, owner, a, b, loadA, loadB };
 }
+
+it("reuses native thinking observations across messages and refreshes invalidated owners", async () => {
+  const { input, owner, a, b, loadA, loadB } = await fixture();
+  const previous = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(owner.pluginRegistry!);
+  try {
+    const read = (entry: typeof b) =>
+      withPluginRuntimeGenerationScope(owner, () =>
+        loadProviderScopedThinkingCatalog({
+          config: input.config,
+          agentId: input.agentId,
+          agentDir: input.agentDir,
+          workspaceDir: owner.workspaceDir,
+          provider: entry.provider,
+          model: entry.id,
+          agentRuntime: entry.nativeRuntime,
+        }),
+      );
+    const first = await read(b);
+    expect(first).toContainEqual(expect.objectContaining(b));
+    expect(first.find((entry) => entry.provider === b.provider)?.reasoning).toBeUndefined();
+    expect(await read(b)).toContainEqual(expect.objectContaining(b));
+    expect.soft(loadB).toHaveBeenCalledOnce();
+    expect(loadA).toHaveBeenCalledOnce();
+    expect(await read(a)).toContainEqual(expect.objectContaining(a));
+    expect.soft(loadB).toHaveBeenCalledOnce();
+    expect(loadA).toHaveBeenCalledOnce();
+
+    const updated = { ...b, reasoning: true, input: ["text", "image"] } satisfies ModelCatalogEntry;
+    loadB.mockResolvedValue([updated]);
+    await owner.loadFullModelCatalog!({ refresh: true });
+    const refreshedCalls = loadB.mock.calls.length;
+    expect(await read(b)).toContainEqual(expect.objectContaining(updated));
+    expect.soft(loadB).toHaveBeenCalledTimes(refreshedCalls);
+
+    const harness = owner.pluginRegistry!.agentHarnesses.find(
+      ({ harness }) => harness.id === b.nativeRuntime,
+    )!.harness;
+    let ready = false;
+    harness.readModelCatalogReadiness = () => (ready ? { accountType: "native" } : undefined);
+    loadB.mockImplementation(async () => {
+      ready = true;
+      return [updated];
+    });
+    expect(await read(b)).toContainEqual(expect.objectContaining(updated));
+    expect(await read(b)).toContainEqual(expect.objectContaining(updated));
+    expect.soft(loadB).toHaveBeenCalledTimes(refreshedCalls + 1);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+  } finally {
+    restoreActivePluginRegistrySnapshot(previous);
+  }
+});
 
 it("reuses published native facts without renewing providers during warm API and native turns", async () => {
   const { input, owner, b, loadA, loadB } = await fixture();

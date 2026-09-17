@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { normalizeOptionalAgentRuntimeId, isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -24,11 +25,13 @@ import {
 import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
 import type {
   PreparedModelRuntimeInput,
+  PreparedModelRuntimePluginGeneration,
   PreparedNativeModelSelection,
 } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
+import type { AgentHarnessModelCatalogParams } from "./types.js";
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -330,6 +333,58 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   return discovered ? result : params.snapshot;
 }
 
+function preparedHarnessCatalogScope(
+  input: PreparedModelRuntimeInput,
+): AgentHarnessModelCatalogParams {
+  const agentId = input.agentId ?? resolveDefaultAgentId(input.config);
+  return {
+    config: input.config,
+    agentId,
+    agentDir: input.agentDir,
+    workspaceDir:
+      input.workspaceDir ??
+      resolveAgentWorkspaceDir(input.config, agentId) ??
+      resolveDefaultAgentWorkspaceDir(),
+  };
+}
+
+export function isPreparedNativeModelCatalogReady(params: {
+  input: PreparedModelRuntimeInput;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  snapshot: ModelCatalogSnapshot;
+  selection: PreparedNativeModelSelection;
+}): boolean {
+  const { selection, snapshot, pluginGeneration } = params;
+  if (
+    ![...snapshot.entries, ...snapshot.routeVariants].some(
+      (entry) =>
+        entry.provider === selection.provider &&
+        entry.id === selection.modelId &&
+        entry.nativeRuntime === selection.runtime,
+    )
+  ) {
+    return false;
+  }
+  const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
+    (registration) => registration.harness.id === selection.runtime,
+  )?.harness;
+  return (
+    !harness?.readModelCatalogReadiness ||
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry: pluginGeneration.pluginRegistry,
+      },
+      () =>
+        harness.readModelCatalogReadiness?.({
+          ...preparedHarnessCatalogScope(params.input),
+          provider: selection.provider,
+          modelId: selection.modelId,
+        }),
+    ) !== undefined
+  );
+}
+
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
   nativeSelection?: PreparedNativeModelSelection;
@@ -342,15 +397,12 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
+  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(params.input);
   return augmentModelCatalogWithAgentHarness({
-    cfg: params.input.config,
+    cfg: config,
     agentId,
-    agentDir: params.input.agentDir,
-    workspaceDir:
-      params.input.workspaceDir ??
-      resolveAgentWorkspaceDir(params.input.config, agentId) ??
-      resolveDefaultAgentWorkspaceDir(),
+    agentDir,
+    workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
     nativeSelection: params.nativeSelection,
