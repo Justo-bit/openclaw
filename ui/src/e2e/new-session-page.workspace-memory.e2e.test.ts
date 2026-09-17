@@ -3,7 +3,11 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import {
+  revealChatModelOption,
+  selectChatModel,
+  selectChatModelOption,
+} from "../test-helpers/select-picker-e2e.ts";
 import {
   MOVED_WORKSPACE,
   NEW_SESSION_MODEL_CATALOG,
@@ -437,9 +441,7 @@ suite.define(() => {
       });
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("xhigh");
 
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
+      await selectChatModel(page, "openai/gpt-5.6-sol");
       await effortSelect.click();
 
       await expect
@@ -492,10 +494,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await selectChatModelOption(
-        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-      );
+      await selectChatModel(page, "anthropic/claude-sonnet-4-6");
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
@@ -722,11 +721,7 @@ suite.define(() => {
 
         await gateway.deferNext("users.prefs.set");
         const newSession = page.locator("openclaw-new-session-page");
-        const modelSelect = newSession.locator('[data-chat-model-select="true"]');
-        await modelSelect.click();
-        await selectChatModelOption(
-          newSession.locator('[data-chat-model-option="openai/gpt-5.5"]'),
-        );
+        await selectChatModel(newSession, "openai/gpt-5.5");
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
@@ -812,10 +807,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const newSession = page.locator("openclaw-new-session-page");
       const modelSelect = newSession.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await selectChatModelOption(
-        newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-      );
+      await selectChatModel(newSession, "anthropic/claude-sonnet-4-6");
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
@@ -904,10 +896,7 @@ suite.define(() => {
       );
 
       const newSession = page.locator("openclaw-new-session-page");
-      await newSession.locator('[data-chat-model-select="true"]').click();
-      await selectChatModelOption(
-        newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-      );
+      await selectChatModel(newSession, "anthropic/claude-sonnet-4-6");
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,

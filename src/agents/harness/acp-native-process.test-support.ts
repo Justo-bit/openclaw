@@ -64,7 +64,16 @@ export async function registerNative(
   peerOptions: { holdModeControl?: boolean; holdNewSession?: boolean } = {},
 ) {
   const peer = fileURLToPath(
-    new URL(`../../../extensions/acpx/test/fixtures/${peerName}`, import.meta.url),
+    {
+      "owner-agent.mjs": new URL(
+        "../../../extensions/acpx/test/fixtures/owner-agent.mjs",
+        import.meta.url,
+      ),
+      "approval-effect-agent.mjs": new URL(
+        "../../../extensions/acpx/test/fixtures/approval-effect-agent.mjs",
+        import.meta.url,
+      ),
+    }[peerName],
   );
   const peerDirectory = state.path("peer");
   await fs.mkdir(peerDirectory);
