@@ -129,11 +129,11 @@ it("reuses native thinking observations across messages and refreshes invalidate
     expect(await read(b)).toContainEqual(expect.objectContaining(updated));
     expect.soft(loadB).toHaveBeenCalledTimes(refreshedCalls);
 
-    const harness = owner.pluginRegistry!.agentHarnesses.find(
-      ({ harness }) => harness.id === b.nativeRuntime,
+    const nativeHarness = owner.pluginRegistry!.agentHarnesses.find(
+      (registration) => registration.harness.id === b.nativeRuntime,
     )!.harness;
     let ready = false;
-    harness.readModelCatalogReadiness = () => (ready ? { accountType: "native" } : undefined);
+    nativeHarness.readModelCatalogReadiness = () => (ready ? { accountType: "native" } : undefined);
     loadB.mockImplementation(async () => {
       ready = true;
       return [updated];
