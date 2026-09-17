@@ -19,7 +19,9 @@ import {
 } from "./runtime.js";
 
 const harness = "owner-fixture";
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 
 it.each(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",

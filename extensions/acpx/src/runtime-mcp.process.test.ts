@@ -7,7 +7,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
 
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
 it.each([
   "session",
@@ -25,7 +25,7 @@ it.each([
     const wrapper = path.join(state.root, "openclaw.mjs");
     await fs.writeFile(
       wrapper,
-      `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../test/fixtures/owner-agent.mjs", import.meta.url).href)});`,
+      `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url).href)});`,
     );
     const directCommand = [process.execPath, peer, directory];
     const bridgeCommand = [process.execPath, wrapper, "acp", directory];

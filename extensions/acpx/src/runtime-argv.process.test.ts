@@ -18,7 +18,9 @@ import {
 } from "./process-lease.js";
 import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
 
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 const sessionKey = "agent:main:acp:argv";
 const samples = ["", "space value", `owner's "choice"`, String.raw`C:\tools\adapter`];
 

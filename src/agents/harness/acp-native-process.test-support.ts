@@ -65,12 +65,9 @@ export async function registerNative(
 ) {
   const peer = fileURLToPath(
     {
-      "owner-agent.mjs": new URL(
-        "../../../extensions/acpx/test/fixtures/owner-agent.mjs",
-        import.meta.url,
-      ),
+      "owner-agent.mjs": new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
       "approval-effect-agent.mjs": new URL(
-        "../../../extensions/acpx/test/fixtures/approval-effect-agent.mjs",
+        "../../../test/fixtures/acp/approval-effect-agent.mjs",
         import.meta.url,
       ),
     }[peerName],
