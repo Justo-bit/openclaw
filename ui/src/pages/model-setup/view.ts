@@ -16,7 +16,7 @@ import {
   renderConfiguredUtilityModel,
 } from "./configured-model.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
-import { renderNativeModelSetup } from "./native-model-setup.ts";
+import { renderNativeModelSetup, renderNativeModelSetupLoading } from "./native-model-setup.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, renderManualProviderPicker } from "./provider-picker.ts";
 import type {
@@ -459,7 +459,7 @@ function renderLoadingSection(params: {
   return html`
     <section class=${`settings-section ${params.className ?? ""}`.trim()}>
       <div class="settings-section__header"><h2>${params.title}</h2></div>
-      ${params.intro ? html`<p class="muted">${params.intro}</p>` : nothing}
+      ${params.intro ? html`<p class="muted model-setup__loading-intro">${params.intro}</p>` : nothing}
       <div class="model-setup__rows">
         ${Array.from(
           { length: params.rows ?? 1 },
@@ -501,6 +501,7 @@ function renderLoading(modelConfigured: boolean) {
               })
             : nothing
         }
+        ${renderNativeModelSetupLoading()}
         ${renderLoadingSection({
           title: t("modelSetup.candidates.title"),
           className: "model-setup__loading-section--candidates",

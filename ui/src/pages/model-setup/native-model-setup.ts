@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
@@ -221,40 +221,53 @@ class NativeModelSetup extends OpenClawLightDomElement {
   override render() {
     const models = this.nativeModels;
     const selected = models.find((model) => `${model.provider}/${model.id}` === this.nativeModel);
-    return html`
-      <section class="settings-section" data-native-model-setup>
-        <div class="settings-section__header"><h2>${t("modelSetup.nativeModels.title")}</h2></div>
-        <p class="muted">${t("modelSetup.nativeModels.body")}</p>
-        ${this.nativeModelsStatus === "loading" ? html`<p role="status">${t("modelSetup.nativeModels.loading")}</p>` : nothing}
-        ${this.nativeModelsStatus === "ready" && models.length === 0 && !this.nativeModelError ? html`<p role="status">${t("modelSetup.nativeModels.empty")}</p>` : nothing}
-        ${renderModelPicker({
-          label: t("modelSetup.nativeModels.choose"),
-          value: this.nativeModel,
-          options: models.map((model) => ({
-            value: `${model.provider}/${model.id}`,
-            label: model.name,
-            provider: model.provider,
-            detail:
-              model.available === true
-                ? providerDisplayLabel(model.provider)
-                : t("modelSetup.nativeModels.signIn"),
-            disabled: model.available !== true,
-          })),
-          disabled: this.blocked || this.nativeModelSaving,
-          onChange: (value) => (this.nativeModel = value),
-          onOpen: () => void this.loadNativeModels(),
-        })}
-        <button
-          class="btn primary"
-          ?disabled=${this.blocked || this.nativeModelSaving || selected?.available !== true}
-          @click=${() => void this.useNativeModel()}
-        >
-          ${t(this.nativeModelSaving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
-        </button>
-        ${this.nativeModelError ? html`<div class="callout danger" role="alert">${this.nativeModelError}</div>` : nothing}
-      </section>
-    `;
+    return renderNativeModelSetupSection(html`
+      ${this.nativeModelsStatus === "loading" ? html`<p role="status">${t("modelSetup.nativeModels.loading")}</p>` : nothing}
+      ${this.nativeModelsStatus === "ready" && models.length === 0 && !this.nativeModelError ? html`<p role="status">${t("modelSetup.nativeModels.empty")}</p>` : nothing}
+      ${renderModelPicker({
+        label: t("modelSetup.nativeModels.choose"),
+        value: this.nativeModel,
+        options: models.map((model) => ({
+          value: `${model.provider}/${model.id}`,
+          label: model.name,
+          provider: model.provider,
+          detail:
+            model.available === true
+              ? providerDisplayLabel(model.provider)
+              : t("modelSetup.nativeModels.signIn"),
+          disabled: model.available !== true,
+        })),
+        disabled: this.blocked || this.nativeModelSaving,
+        onChange: (value) => (this.nativeModel = value),
+        onOpen: () => void this.loadNativeModels(),
+      })}
+      <button
+        class="btn primary"
+        ?disabled=${this.blocked || this.nativeModelSaving || selected?.available !== true}
+        @click=${() => void this.useNativeModel()}
+      >
+        ${t(this.nativeModelSaving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
+      </button>
+      ${this.nativeModelError ? html`<div class="callout danger" role="alert">${this.nativeModelError}</div>` : nothing}
+    `);
   }
+}
+
+function renderNativeModelSetupSection(content: TemplateResult) {
+  return html`
+    <section class="settings-section" data-native-model-setup>
+      <div class="settings-section__header"><h2>${t("modelSetup.nativeModels.title")}</h2></div>
+      <p class="muted">${t("modelSetup.nativeModels.body")}</p>
+      ${content}
+    </section>
+  `;
+}
+
+export function renderNativeModelSetupLoading() {
+  return renderNativeModelSetupSection(html`
+    <div class="model-picker"><span class="picker-select__trigger skeleton"></span></div>
+    <span class="btn skeleton">&nbsp;</span>
+  `);
 }
 
 if (!customElements.get("openclaw-native-model-setup")) {
