@@ -3,8 +3,52 @@ import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 
+const LOCAL_TOOL_REQUIREMENTS = ["ls", "read", "write", "edit", "exec"] as const;
+// Native settings can enable these tools outside OpenClaw's control. Admission
+// must cover the reachable tool set, including provider-conditional tools.
+const NATIVE_TOOL_REQUIREMENTS = {
+  opencode: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "apply_patch",
+    "web_fetch",
+    "web_search",
+    "sessions_spawn",
+    "sessions_send",
+    "ask_user",
+  ],
+  qwen: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "process",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_list",
+    "subagents",
+    "web_fetch",
+    "web_search",
+    "view_image",
+    "ask_user",
+    "automations",
+    "image_generate",
+  ],
+  pi: LOCAL_TOOL_REQUIREMENTS,
+  kilocode: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "apply_patch",
+    "web_fetch",
+    "web_search",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_search",
+    "sessions_history",
+    "memory_search",
+    "memory_get",
+    "message",
+    "image_generate",
+  ],
+} as const;
+
 export function createAcpAgentHarness(params: {
-  agent: string;
+  agent: keyof typeof NATIVE_TOOL_REQUIREMENTS;
   label: string;
   shutdown: () => Promise<void> | void;
   api: OpenClawPluginApi;
@@ -46,6 +90,7 @@ export function createAcpAgentHarness(params: {
     label: params.label,
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
+    conversationToolPolicyNativeTools: NATIVE_TOOL_REQUIREMENTS[params.agent],
     supports: ({ requestedRuntime, modelProvider }) => {
       if (requestedRuntime !== id) {
         return { supported: false, reason: `Choose ${params.label} explicitly` };

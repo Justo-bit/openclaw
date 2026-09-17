@@ -21,14 +21,14 @@ const plugin = {
     });
     api.registerService(service);
     const registry = createAgentRegistry();
-    for (const agentId of ["opencode", "qwen", "pi", "kilocode"]) {
+    for (const agentId of ["opencode", "qwen", "pi", "kilocode"] as const) {
       const agent = registry.inspect(agentId);
       if (!agent) {
         throw new Error(`Unknown ACP harness: ${agentId}`);
       }
       api.registerAgentHarness(
         createAcpAgentHarness({
-          agent: agent.id,
+          agent: agentId,
           label: agent.name,
           api,
           getRuntime: service.getRuntime,

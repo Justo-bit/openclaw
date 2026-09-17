@@ -7,6 +7,7 @@ import { Readable, Writable } from "node:stream";
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 
 const directory = process.argv[2];
+const modelControls = process.argv.slice(3).includes("--model-controls");
 const sessions = new Map();
 const configOptions = (state) => [
   {
@@ -19,6 +20,21 @@ const configOptions = (state) => [
       { value: "brief", name: "Brief" },
     ],
   },
+  ...(modelControls
+    ? [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: state.currentModelId,
+          options: [
+            { value: "initial", name: "Initial" },
+            { value: "selected", name: "Selected" },
+          ],
+        },
+      ]
+    : []),
 ];
 const describe = (state) => ({
   modes: {
@@ -49,6 +65,7 @@ const connection = new AgentSideConnection(
         mode: "normal",
         mcpServers,
         argv: process.argv.slice(3),
+        ...(modelControls ? { currentModelId: "initial", modelChanges: [] } : {}),
       };
       sessions.set(sessionId, state);
       await save(sessionId);
@@ -66,11 +83,18 @@ const connection = new AgentSideConnection(
       return {};
     },
     async setSessionConfigOption({ sessionId, configId, value }) {
-      if (configId !== "tone") {
+      const state = sessions.get(sessionId);
+      if (modelControls && configId === "model") {
+        if (value !== "initial" && value !== "selected") {
+          throw new Error("unknown model");
+        }
+        state.currentModelId = value;
+        state.modelChanges.push(value);
+      } else if (configId === "tone") {
+        state.tone = value;
+      } else {
         throw new Error("unknown option");
       }
-      const state = sessions.get(sessionId);
-      state.tone = value;
       await save(sessionId);
       return { configOptions: configOptions(state) };
     },
@@ -83,6 +107,14 @@ const connection = new AgentSideConnection(
           .join(""),
       );
       await save(sessionId);
+      if (modelControls) {
+        const effectsDirectory = path.join(directory, "effects");
+        await fs.mkdir(effectsDirectory, { recursive: true });
+        await fs.writeFile(
+          path.join(effectsDirectory, `${sessionId}.txt`),
+          state.history.join("\n"),
+        );
+      }
       await client.sessionUpdate({
         sessionId,
         update: {

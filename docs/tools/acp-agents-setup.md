@@ -66,6 +66,21 @@ normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
 `session/set_model` support; if a harness exposes neither that ACP capability
 nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
 
+## Tool profiles for native chat runtimes
+
+When you select Kilo Code, OpenCode, Pi, or Qwen Code as a native chat runtime,
+OpenClaw checks the tool profile before native execution. The `minimal` and
+`messaging` profiles do not permit their native file and command tools.
+Session **Full access** does not bypass this check.
+
+The `coding` profile supports OpenCode, Pi, and Qwen Code. Kilo Code can also
+deliver messages through its native settings, so it needs
+`tools.alsoAllow: ["message"]` with `tools.profile: "coding"`.
+The `full` tool profile supports all four runtimes.
+
+These checks include native tools that the agent's own settings or selected
+provider can enable. OpenClaw cannot assume those native settings disable a tool.
+
 ## Required config
 
 Core ACP baseline:

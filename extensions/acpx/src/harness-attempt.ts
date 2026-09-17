@@ -121,6 +121,7 @@ export async function runAcpHarnessAttempt(params: {
     handle = await runtime.ensureSession(target);
     assertActive();
     const status = await runtime.getStatus({ handle });
+    assertActive();
     if (status.models?.currentModelId !== target.model) {
       await runtime.setModel({ handle, model: target.model });
     }
