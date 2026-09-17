@@ -21,6 +21,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { modelCatalogRowToEntry } from "../../model-catalog-entry.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
@@ -198,9 +199,9 @@ describe("model chat and native model ownership", () => {
     "keeps host model resolution when a harness catalog does not claim native ownership (catalog fails=%s)",
     async (catalogFails) => {
       const fixture = await createFixture();
-      const model = fixture.generation.resolveDynamicModel();
-      const catalog = { entries: [model], routeVariants: [model] };
-      fixture.harness.loadModelCatalog = vi.fn(async () => [model]);
+      const entry = modelCatalogRowToEntry(fixture.generation.resolveDynamicModel());
+      const catalog = { entries: [entry], routeVariants: [entry] };
+      fixture.harness.loadModelCatalog = vi.fn(async () => [entry]);
       registerAgentHarness(fixture.harness);
       const loadNativeModelCatalog = vi.fn(async () => {
         if (catalogFails) {
