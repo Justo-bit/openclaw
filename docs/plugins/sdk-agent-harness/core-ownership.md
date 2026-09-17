@@ -65,6 +65,11 @@ harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
 
+For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
+`userMessage`. Core renders this owner-authored public copy across chat surfaces
+without a verbose setting or generic retry/reset advice. Keep technical context
+in the error's `message` and `cause`; omit `userMessage` for diagnostic failures.
+
 ### Harness-owned auth bootstrap
 
 By default, core resolves provider credentials before calling a harness. A

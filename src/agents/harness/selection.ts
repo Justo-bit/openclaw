@@ -616,7 +616,10 @@ function assertPluginHarnessConversationToolPolicySupport(
   ) {
     throw new AgentHarnessPreflightError(
       `${harness.label} cannot enforce this conversation's tool policy. Use the embedded runtime or ask in the main conversation.`,
-      { scope: "harness" },
+      {
+        scope: "harness",
+        userMessage: `${harness.label} cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.`,
+      },
     );
   }
 }

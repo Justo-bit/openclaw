@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  buildExternalRunFailureReply,
+  buildKnownAgentRunFailureReplyPayload,
+} from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
@@ -229,6 +234,24 @@ it.each(policyCases)(
           });
           expect.soft(records).toEqual([]);
           expect.soft(effects).toEqual([]);
+          const reply = buildExternalRunFailureReply({
+            message: formatErrorMessage(outcome.error),
+            error: outcome.error,
+          });
+          expect.soft(reply.text).toContain("cannot run with this chat's tool restrictions");
+          expect.soft(reply.text).toContain("Choose a different model provider");
+          expect.soft(reply.text).not.toContain("try again");
+          expect.soft(reply.text).not.toContain("/new");
+          expect.soft(reply.isGenericRunnerFailure).toBe(false);
+          expect
+            .soft(
+              buildKnownAgentRunFailureReplyPayload({
+                err: outcome.error,
+                sessionCtx: { Provider: "discord", Surface: "discord", ChatType: "group" },
+                resolvedVerboseLevel: "off",
+              }),
+            )
+            .toMatchObject({ text: reply.text, isError: true });
         } else {
           expect.soft(outcome.error).toBeUndefined();
           expect.soft(outcome.value?.terminal).toMatchObject({ kind: "ok" });
