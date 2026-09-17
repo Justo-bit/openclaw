@@ -266,7 +266,7 @@ function renderNativeModelSetupSection(content: TemplateResult) {
 export function renderNativeModelSetupLoading() {
   return renderNativeModelSetupSection(html`
     <div class="model-picker"><span class="picker-select__trigger skeleton"></span></div>
-    <span class="btn skeleton">&nbsp;</span>
+    <span class="btn skeleton">${"\u00a0"}</span>
   `);
 }
 

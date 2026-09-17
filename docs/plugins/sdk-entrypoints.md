@@ -87,13 +87,6 @@ Malformed frames, incompatible initialization, write failures, and unexpected pr
 
 ## ACP harness turns
 
-Import `consumeAcpTurnStream` from `openclaw/plugin-sdk/acp-runtime` when adapting an ACP backend
-to a registered agent harness. It owns prompt readiness, event delivery failure, cancellation,
-stream closure, and terminal result settlement. Supply the runtime, admitted turn input, and a
-caller-owned `eventGate`. Close `eventGate.open` when the caller aborts to suppress later output.
-Use `onBeforePrompt` to recheck current authority before submission and `onPromptStarted` to
-record that the admitted input reached the backend.
-
 Pass optional `currentInboundContext` to `resolveAgentHarnessBeforePromptBuildResult` from
 `openclaw/plugin-sdk/agent-harness-runtime`. It combines the prompt with its inbound context
 and channel-provided joiner before prompt hooks run. Frame ordinary chat
