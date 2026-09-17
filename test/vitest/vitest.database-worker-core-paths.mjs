@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/harness/acp-native-approval-effect.process.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
   "src/state/openclaw-agent-worker-store.test.ts",
   "src/sessions/session-state-events.test.ts",

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   buildExternalRunFailureReply,
@@ -51,7 +52,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function registerNative(state: OpenClawTestState, config: OpenClawConfig) {
+async function registerNative(
+  state: OpenClawTestState,
+  config: OpenClawConfig,
+  holdModeControl = false,
+) {
   const peerDirectory = state.path("peer");
   await fs.mkdir(peerDirectory);
   await fs.mkdir(path.join(peerDirectory, "effects"));
@@ -73,7 +78,15 @@ async function registerNative(state: OpenClawTestState, config: OpenClawConfig) 
       agents: Object.fromEntries(
         agents.map((agent) => [
           agent,
-          { command: process.execPath, args: [peer, peerDirectory, "--model-controls"] },
+          {
+            command: process.execPath,
+            args: [
+              peer,
+              peerDirectory,
+              "--model-controls",
+              ...(holdModeControl ? ["--hold-mode-control"] : []),
+            ],
+          },
         ]),
       ),
     },
@@ -354,6 +367,146 @@ it.each(["cancel", "timeout", "revoke", "active"] as const)(
           await Promise.allSettled([run]);
         }
       } finally {
+        attempt.close();
+        await native.service.stop?.(native.context);
+      }
+    });
+  },
+  60000,
+);
+
+it.each(
+  (["adapter-read", "control-queue"] as const).flatMap((boundary) =>
+    (["cancel", "timeout", "revoke", "active"] as const).map((kind) => ({ boundary, kind })),
+  ),
+)(
+  "preserves native model authority inside $boundary: $kind",
+  async ({ boundary, kind }) => {
+    await withOpenClawTestState({ label: "acp-native-control-authority" }, async (state) => {
+      const config: OpenClawConfig = {
+        session: { store: path.join(state.sessionsDir(), "sessions.json") },
+      };
+      const native = await registerNative(state, config, boundary === "control-queue");
+      const attempt = await attemptFor(state, config, "opencode", "full");
+      const entered = createDeferred();
+      const release = createDeferred();
+      let holdingControl: Promise<void> | undefined;
+      let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
+      try {
+        const runtime = await native.service.getRuntime(native.context);
+        const handle = await runtime.ensureSession({
+          agentId: "main",
+          sessionKey: `agent:main:harness:acp-opencode:${attempt.input.sessionId}`,
+          agent: "opencode",
+          cwd: state.workspaceDir,
+          mode: "persistent",
+          model: "initial",
+          modelExplicit: true,
+        });
+        const getStatus = runtime.getStatus.bind(runtime);
+        const initial = await getStatus({ handle });
+        expect(initial.models?.currentModelId).toBe("initial");
+        const before = await peerStates(native.peerDirectory);
+        let modelEntered = false;
+        const setModel = runtime.setModel.bind(runtime);
+        const controls = vi.spyOn(runtime, "setModel").mockImplementation((input) => {
+          modelEntered = true;
+          return setModel(input);
+        });
+        let waitForBoundary: () => Promise<void>;
+        if (boundary === "adapter-read") {
+          waitForBoundary = () => entered.promise;
+          const readFile = fs.readFile.bind(fs);
+          const sessionsDirectory = path.join(state.path("acpx-runtime"), "sessions") + path.sep;
+          let held = false;
+          vi.spyOn(fs, "readFile").mockImplementation(async (file, options) => {
+            const bytes = await readFile(file, options);
+            if (
+              !held &&
+              modelEntered &&
+              typeof file === "string" &&
+              file.startsWith(sessionsDirectory)
+            ) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return bytes;
+          });
+        } else {
+          holdingControl = runtime.setMode({ handle, mode: "review" });
+          void holdingControl.catch(() => {});
+          await expect
+            .poll(async () =>
+              fs.readFile(path.join(native.peerDirectory, "mode-control-entered"), "utf8"),
+            )
+            .toBe("review");
+          const require = createRequire(
+            new URL("../../../extensions/acpx/package.json", import.meta.url),
+          );
+          const upstream: typeof import("acpx/runtime") = await import(
+            pathToFileURL(require.resolve("acpx/runtime")).href
+          );
+          const upstreamControls = vi.spyOn(upstream.AcpxRuntime.prototype, "setModel");
+          // The warmed manager queues this call before polling returns; the earlier native control stays held.
+          waitForBoundary = () => expect.poll(() => upstreamControls.mock.calls.length).toBe(1);
+        }
+        const abort = new AbortController();
+        attempt.input.abortSignal = abort.signal;
+        if (kind === "timeout") {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        }
+        run = runAgentHarnessAttempt(attempt.input);
+        void run.catch(() => {});
+        await Promise.race([
+          waitForBoundary(),
+          run.then(() => {
+            throw new Error("Attempt ended before native control boundary");
+          }),
+        ]);
+        expect(controls).toHaveBeenCalledOnce();
+        if (kind === "cancel") {
+          abort.abort();
+        } else if (kind === "revoke") {
+          attempt.close();
+        } else if (kind === "timeout") {
+          await vi.advanceTimersByTimeAsync(attempt.input.timeoutMs);
+          vi.useRealTimers();
+        }
+        release.resolve();
+        if (boundary === "control-queue") {
+          await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
+          await holdingControl;
+        }
+        const outcome = await run;
+        const records = await peerStates(native.peerDirectory);
+        const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
+        const persisted = await getStatus({ handle });
+        if (kind === "active") {
+          expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
+          expect.soft(persisted.models?.currentModelId).toBe("selected");
+          expect.soft(records[0]?.currentModelId).toBe("selected");
+          expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
+          expect.soft(records[0]?.history).toHaveLength(1);
+          expect.soft(effects).toHaveLength(1);
+        } else {
+          expect.soft(outcome?.terminal).toMatchObject({
+            kind: kind === "timeout" ? "timeout" : kind === "cancel" ? "aborted" : "failed",
+          });
+          expect.soft(persisted.models?.currentModelId).toBe("initial");
+          expect.soft(records[0]?.currentModelId).toBe("initial");
+          expect.soft(records[0]?.modelChanges).toEqual(before[0]?.modelChanges);
+          expect.soft(records[0]?.history).toEqual(before[0]?.history);
+          expect.soft(effects).toEqual([]);
+        }
+      } finally {
+        release.resolve();
+        vi.useRealTimers();
+        await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
+        await Promise.allSettled([
+          ...(run ? [run] : []),
+          ...(holdingControl ? [holdingControl] : []),
+        ]);
         attempt.close();
         await native.service.stop?.(native.context);
       }

@@ -2,8 +2,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { FailoverError } from "./failover/error.js";
-import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
+import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 

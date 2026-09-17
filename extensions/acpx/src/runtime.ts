@@ -1435,6 +1435,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
 
   async setModel(input: Parameters<BaseAcpxRuntime["setModel"]>[0]): Promise<void> {
     await this.loadOperationSnapshotForHandle(input.handle);
+    input.signal?.throwIfAborted();
+    input.assertActive?.();
     await this.sessionScope.run(resolveBridgeSession(input.handle), () =>
       this.delegate.setModel(toAcpxResourceInput(input)),
     );

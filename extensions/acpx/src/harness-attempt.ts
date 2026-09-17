@@ -123,7 +123,7 @@ export async function runAcpHarnessAttempt(params: {
     const status = await runtime.getStatus({ handle });
     assertActive();
     if (status.models?.currentModelId !== target.model) {
-      await runtime.setModel({ handle, model: target.model });
+      await runtime.setModel({ handle, model: target.model, signal, assertActive });
     }
     assertActive();
     const lastRequestId = status.lastRequestId;

@@ -4,10 +4,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 
 const directory = process.argv[2];
 const modelControls = process.argv.slice(3).includes("--model-controls");
+const holdModeControl = process.argv.slice(3).includes("--hold-mode-control");
 const sessions = new Map();
 const configOptions = (state) => [
   {
@@ -78,6 +80,21 @@ const connection = new AgentSideConnection(
       return describe(state);
     },
     async setSessionMode({ sessionId, modeId }) {
+      if (holdModeControl && modeId === "review") {
+        await fs.writeFile(path.join(directory, "mode-control-entered"), modeId);
+        const deadline = Date.now() + 30000;
+        while (true) {
+          try {
+            await fs.access(path.join(directory, "mode-control-release"));
+            break;
+          } catch (error) {
+            if (error.code !== "ENOENT" || Date.now() >= deadline) {
+              throw error;
+            }
+            await delay(5);
+          }
+        }
+      }
       sessions.get(sessionId).mode = modeId;
       await save(sessionId);
       return {};
