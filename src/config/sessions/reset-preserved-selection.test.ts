@@ -10,11 +10,13 @@ describe("resolveResetPreservedSelection", () => {
           updatedAt: 1,
           providerOverride: "anthropic",
           modelOverride: "sonnet",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toEqual({
       providerOverride: "anthropic",
       modelOverride: "sonnet",
+      agentRuntimeOverride: "native-runtime",
       modelOverrideSource: "user",
     });
   });
@@ -29,52 +31,14 @@ describe("resolveResetPreservedSelection", () => {
           modelOverride: "claude-sonnet-4-6",
           modelOverrideSource: "user",
           modelOverrideRouteResolution: "resolved",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toMatchObject({
       modelOverride: "claude-sonnet-4-6",
       modelOverrideRouteResolution: "resolved",
+      agentRuntimeOverride: "native-runtime",
     });
-  });
-
-  it.each(["user", undefined] as const)(
-    "preserves the runtime with a user model selection (%s)",
-    (modelOverrideSource) => {
-      expect(
-        resolveResetPreservedSelection({
-          entry: {
-            sessionId: "native-choice",
-            updatedAt: 1,
-            providerOverride: "provider-a",
-            modelOverride: "opaque/model",
-            modelOverrideSource,
-            agentRuntimeOverride: "native-runtime",
-            agentHarnessId: "previous-runtime",
-            cliSessionIds: { "previous-runtime": "old-native-session" },
-          },
-        }),
-      ).toEqual({
-        providerOverride: "provider-a",
-        modelOverride: "opaque/model",
-        modelOverrideSource: "user",
-        agentRuntimeOverride: "native-runtime",
-      });
-    },
-  );
-
-  it("drops a runtime attached to an automatic fallback", () => {
-    expect(
-      resolveResetPreservedSelection({
-        entry: {
-          sessionId: "automatic-choice",
-          updatedAt: 1,
-          providerOverride: "provider-a",
-          modelOverride: "opaque/model",
-          modelOverrideSource: "auto",
-          agentRuntimeOverride: "native-runtime",
-        },
-      }),
-    ).toEqual({});
   });
 
   it("preserves an explicit configured-default selection", () => {
@@ -107,6 +71,10 @@ describe("resolveResetPreservedSelection", () => {
       resolveResetPreservedSelection({
         entry: {
           sessionId: "legacy-auto",
+          providerOverride: "provider-a",
+          modelOverride: "model",
+          modelOverrideSource: "auto",
+          agentRuntimeOverride: "native-runtime",
           updatedAt: 1,
           authProfileOverride: "openai:fallback",
           authProfileOverrideCompactionCount: 0,

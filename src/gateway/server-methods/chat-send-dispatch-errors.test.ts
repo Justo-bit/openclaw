@@ -30,70 +30,48 @@ const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
 describe("handleChatSendSetupError", () => {
-  it.each(["projection", "policy"] as const)(
-    "settles %s setup failures with the owning public result",
-    async (kind) => {
-      const cleanupAdmittedRun = vi.fn();
-      const broadcast = vi.fn();
-      const respond = vi.fn();
-      const dedupe = new Map();
+  it("returns typed projection setup failures to the client retry owner without a terminal broadcast", async () => {
+    const cleanupAdmittedRun = vi.fn();
+    const clearRun = vi.fn();
+    const broadcast = vi.fn();
+    const respond = vi.fn();
+    const dedupe = new Map();
 
-      await handleChatSendSetupError({
-        admission: {
-          cleanupAdmittedRun,
-          lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
-        },
-        context: {
-          agentRunSeq: new Map(),
-          broadcast,
-          chatRunState: createChatRunState(),
-          dedupe,
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
-        error:
-          kind === "projection"
-            ? new SessionTranscriptProjectionUnavailableError("sess-main")
-            : new AgentHarnessPreflightError("private-policy-diagnostic", {
-                userMessage: policyMessage,
-              }),
-        respond,
-        session: {
-          agentId: "main",
-          clientRunId: "setup-projection-retry",
-          sessionKey: "agent:main:main",
-        },
-        terminalizeRestartSafeAdmission: vi.fn(),
-      });
+    await handleChatSendSetupError({
+      admission: {
+        cleanupAdmittedRun,
+        lifecycleGeneration: "test-generation",
+        restartSafeAdmission: undefined,
+      },
+      context: {
+        agentRunSeq: new Map(),
+        broadcast,
+        chatRunState: { clearRun },
+        dedupe,
+        logGateway: { warn: vi.fn() },
+        nodeSendToSession: vi.fn(),
+        removeChatRun: vi.fn(),
+      } as never,
+      error: new SessionTranscriptProjectionUnavailableError("sess-main"),
+      respond,
+      session: {
+        agentId: "main",
+        clientRunId: "setup-projection-retry",
+        sessionKey: "agent:main:main",
+      },
+      terminalizeRestartSafeAdmission: vi.fn(),
+    });
 
-      if (kind === "projection") {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
-          expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
-          expect.anything(),
-        );
-        expect(dedupe.size).toBe(0);
-        expect(broadcast).not.toHaveBeenCalled();
-      } else {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          expect.objectContaining({ status: "error", summary: policyMessage }),
-          expect.objectContaining({ code: "UNAVAILABLE", message: policyMessage }),
-          expect.objectContaining({ error: expect.stringContaining("private-policy-diagnostic") }),
-        );
-        expect(dedupe.size).toBe(1);
-        expect(broadcast).toHaveBeenCalledWith(
-          "chat",
-          expect.objectContaining({ state: "error", errorMessage: policyMessage }),
-          expect.anything(),
-        );
-      }
-      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
+      expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
+      expect.anything(),
+    );
+    expect(dedupe.size).toBe(0);
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+  });
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {

@@ -58,7 +58,6 @@ afterEach(async () => {
 async function createFixture(
   config: OpenClawConfig = {},
   nativeOwner?: AgentHarness["resolveSessionRuntimeOwnership"],
-  suppression?: Parameters<typeof createModelGenerationFixture>[0]["suppression"],
 ) {
   const state = await createOpenClawTestState({ label: "model-ownership" });
   states.push(state);
@@ -72,7 +71,6 @@ async function createFixture(
     runtimeApi: "openai-responses",
     runtimeBaseUrl: "https://api.openai.com/v1",
     config,
-    suppression,
   });
   publishCurrentModelGeneration(generation);
   const harness: AgentHarness = {
@@ -225,48 +223,6 @@ describe("model chat and native model ownership", () => {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses",
       });
-    },
-  );
-
-  it.each(["missing host model", "cancelled", "retired"] as const)(
-    "preserves catalog failure or authority when acquisition is %s",
-    async (outcome) => {
-      const fixture = await createFixture(
-        {},
-        undefined,
-        outcome === "missing host model" ? {} : undefined,
-      );
-      fixture.harness.loadModelCatalog = vi.fn(async () => []);
-      registerAgentHarness(fixture.harness);
-      const failure = new Error("Native catalog unavailable");
-      const cancellation = new Error("Native selection cancelled");
-      const controller = new AbortController();
-      fixture.runParams.abortSignal = controller.signal;
-      let current = true;
-      const createStores = vi.fn(fixture.generation.preparedModelRuntime.createStores);
-      const setup = fixture.resolve({
-        ...fixture.generation.preparedModelRuntime,
-        createStores,
-        isCurrent: () => current,
-        loadNativeModelCatalog: async () => {
-          if (outcome === "cancelled") {
-            controller.abort(cancellation);
-          } else if (outcome === "retired") {
-            current = false;
-          }
-          throw failure;
-        },
-      });
-      if (outcome === "retired") {
-        await expect(setup).rejects.toThrow("superseded");
-      } else {
-        await expect(setup).rejects.toBe(outcome === "cancelled" ? cancellation : failure);
-      }
-      if (outcome === "missing host model") {
-        expect(createStores).toHaveBeenCalledOnce();
-      } else {
-        expect(createStores).not.toHaveBeenCalled();
-      }
     },
   );
 

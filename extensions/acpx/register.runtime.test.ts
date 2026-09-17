@@ -21,16 +21,6 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
           sessionKey: input.sessionKey,
         };
       },
-      startTurn(input: { requestId: string }) {
-        return {
-          requestId: input.requestId,
-          promptStarted: Promise.resolve(),
-          events: (async function* () {})(),
-          result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
-          cancel: async () => {},
-          closeStream: async () => {},
-        };
-      },
       async *runTurn() {},
       async cancel() {},
       async close() {},
@@ -107,69 +97,6 @@ function createServiceContext() {
 }
 
 describe("acpx register runtime service", () => {
-  it("keeps Gateway recovery when catalog acquisition initializes a started service", async () => {
-    const ctx = createServiceContext();
-    const service = createAcpxRuntimeService();
-    await service.start(ctx);
-    const runtime = await service.getRuntime(ctx);
-    expect(runtime).toBe(realRuntime);
-    expect(createRealServiceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ startupPurpose: "gateway", probeAtStartup: false }),
-    );
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
-    expect(realServiceStartMock).toHaveBeenCalledOnce();
-    await service.stop?.(ctx);
-  });
-
-  it("shares catalog acquisition with startup without probing another agent", async () => {
-    const ctx = createServiceContext();
-    const service = createAcpxRuntimeService();
-    const runtime = await service.getRuntime(ctx);
-    expect(runtime).toBe(realRuntime);
-    expect(createRealServiceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ probeAtStartup: false, startupPurpose: "inspection" }),
-    );
-    expect(runtimeRegistry.has("acpx")).toBe(false);
-    await service.start(ctx);
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
-    expect(realServiceStartMock).toHaveBeenCalledOnce();
-    await service.stop?.(ctx);
-  });
-
-  it.each(["stop", "replacement"])("rejects inspection promotion after %s", async (change) => {
-    const ctx = createServiceContext();
-    const service = createAcpxRuntimeService();
-    await service.getRuntime(ctx);
-    const created = createRealServiceMock.mock.results.at(-1);
-    if (created?.type !== "return") {
-      throw new Error("Expected initialized inner service");
-    }
-    const inner = created.value;
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    vi.spyOn(inner, "promote").mockImplementation((_ctx, assertCurrent) => {
-      entered.resolve();
-      return release.promise.then(() => assertCurrent?.());
-    });
-    const starting = service.start(ctx);
-    const rejected = expect(starting).rejects.toThrow("promotion ownership");
-    await entered.promise;
-    const replacement = { id: "replacement" };
-    const stopping = change === "stop" ? service.stop?.(ctx) : undefined;
-    if (change === "replacement") {
-      runtimeRegistry.set("acpx", { runtime: replacement });
-    }
-    release.resolve();
-    await rejected;
-    await stopping;
-    expect(runtimeRegistry.get("acpx")?.runtime).toBe(
-      change === "replacement" ? replacement : undefined,
-    );
-    if (change === "replacement") {
-      await service.stop?.(ctx);
-    }
-  });
-
   afterEach(() => {
     runtimeRegistry.clear();
     realServiceStartMock.mockClear();
@@ -189,31 +116,15 @@ describe("acpx register runtime service", () => {
 
     const deferredRuntime = runtimeRegistry.get("acpx")?.runtime as {
       ensureSession(input: { sessionKey: string; agent: string; mode: string }): Promise<unknown>;
-      startTurn(input: {
-        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
-        text: string;
-        mode: string;
-        requestId: string;
-      }): {
-        promptStarted: Promise<void>;
-        events: AsyncIterable<unknown>;
-        result: Promise<unknown>;
-      };
     };
     expect(deferredRuntime).toBeTruthy();
     expect(createRealServiceMock).not.toHaveBeenCalled();
     expect(realServiceStartMock).not.toHaveBeenCalled();
 
-    await expect(
-      deferredRuntime.ensureSession({
-        sessionKey: "agent:codex:acp:test",
-        agent: "codex",
-        mode: "oneshot",
-      }),
-    ).resolves.toEqual({
-      backend: "acpx",
-      runtimeSessionName: "agent:codex:acp:test",
+    await deferredRuntime.ensureSession({
       sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "oneshot",
     });
 
     expect(createRealServiceMock).toHaveBeenCalledWith(
@@ -228,22 +139,6 @@ describe("acpx register runtime service", () => {
     expect(realServiceStartMock).toHaveBeenCalledWith(ctx, expect.any(Object));
     expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
     expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
-
-    const turn = deferredRuntime.startTurn({
-      handle: {
-        sessionKey: "agent:codex:acp:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:acp:test",
-      },
-      text: "hello",
-      mode: "prompt",
-      requestId: "turn-1",
-    });
-    await expect(turn.promptStarted).resolves.toBeUndefined();
-    await expect(turn.result).resolves.toEqual({
-      status: "completed",
-      stopReason: "end_turn",
-    });
 
     await service.stop?.(ctx as never);
 

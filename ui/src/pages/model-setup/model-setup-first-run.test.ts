@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { clearFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -32,6 +33,92 @@ describe("ModelSetupPage first-run inference", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each([true, false])(
+    "finishes native Use only while its page is current (%s)",
+    async (current) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const { context, client, request } = createFirstRunContext(undefined, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const agents = createAgentCapability(context.gateway);
+      Object.assign(context, { agents });
+      const refresh = vi.spyOn(agents, "refreshList");
+      request.mockImplementation(async (method) => {
+        if (method === "models.list") {
+          return {
+            models: [
+              {
+                provider: "acp-opencode",
+                id: "fixture-model",
+                name: "Fixture model",
+                available: true,
+                agentRuntime: { id: "acp-opencode", source: "implicit" },
+              },
+            ],
+          };
+        }
+        if (method === "agents.update") {
+          return { ok: true, agentId: "main" };
+        }
+        if (method === "agents.list") {
+          return {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main", model: "acp-opencode/fixture-model" }],
+          };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { page } = await mountPage(context, {
+        client,
+        firstRun: true,
+        state: { phase: "ready", result: detection },
+      });
+      try {
+        page
+          .querySelector<HTMLButtonElement>("[data-native-model-setup] .picker-select__trigger")!
+          .click();
+        const option = '[role="option"][data-value="acp-opencode/fixture-model"]';
+        await waitForFast(() => expect(page.querySelector(option)).not.toBeNull());
+        page.querySelector<HTMLElement>(option)!.click();
+        await page.updateComplete;
+        page.querySelector<HTMLButtonElement>("[data-native-model-setup] button.primary")!.click();
+        await entered.promise;
+        expect(request).toHaveBeenCalledWith("agents.update", {
+          agentId: "main",
+          model: "acp-opencode/fixture-model",
+          agentRuntime: "acp-opencode",
+        });
+        expect(
+          request.mock.calls.some(
+            ([method]) =>
+              method === "openclaw.setup.verify" || method === "openclaw.setup.activate.start",
+          ),
+        ).toBe(false);
+        if (!current) {
+          page.remove();
+        }
+        release.resolve();
+        await vi.mocked(context.runtimeConfig.runExternalMutation).mock.results[0]!.value;
+        if (current) {
+          await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat"));
+          expect(refresh).toHaveBeenCalledOnce();
+          expect(agents.state.agentsList?.agents[0]?.model).toBe("acp-opencode/fixture-model");
+        } else {
+          await Promise.resolve();
+          expect(refresh).not.toHaveBeenCalled();
+          expect(context.navigate).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        agents.dispose();
+      }
+    },
+  );
 
   it.each(["rejected", "uncertain"] as const)(
     "stops after a %s candidate and only permits retry after a proven rejection",

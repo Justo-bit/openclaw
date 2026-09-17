@@ -76,7 +76,6 @@ vi.mock("../../logging/subsystem.js", async () => {
 
 import { createGatewaySession } from "../session-create-service.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { registerModelOnlyRuntimeTests } from "./sessions-mutations.model-only-runtime.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 
 const defaultAgents: AgentConfig[] = [
@@ -945,13 +944,97 @@ registerSessionRuntimeWindowTests({
     patchSession(request, scopes, { ...context(), ...requestContext }),
 });
 
-registerModelOnlyRuntimeTests({
-  getConfig: () => cfg,
-  context,
-  catalogSnapshot,
-  prepare: runtimeChoice.prepare,
-  pluginMetadata,
-  queueRuntimeSelection,
-  patchSession: (request, scopes, requestContext) =>
-    patchSession(request, scopes, { ...context(), ...requestContext }),
+it.each([false, true])(
+  "commits model-only native creation only while its owner is current (stale=%s)",
+  async (stale) => {
+    const sessionKey = `agent:main:model-only-${stale}`;
+    const requestContext = context();
+    requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(
+      catalogSnapshot([
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: "Native model",
+          reasoning: false,
+          nativeRuntime: "claude-cli",
+        },
+      ]),
+    );
+    runtimeChoice.prepare.mockResolvedValue({
+      kind: "ready",
+      runtimeId: "claude-cli",
+      validate: vi
+        .fn<() => string | undefined>()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(stale ? "Native owner replaced" : undefined),
+    });
+    const create = createGatewaySession({
+      cfg,
+      key: sessionKey,
+      model: "anthropic/claude-sonnet-4-6",
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      loadGatewayModelCatalogSnapshot: requestContext.loadGatewayModelCatalogSnapshot,
+    });
+    if (stale) {
+      await expect(create).rejects.toThrow("Native owner replaced");
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+    } else {
+      await expect(create).resolves.toMatchObject({ ok: true });
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        agentRuntimeOverride: "claude-cli",
+      });
+    }
+  },
+);
+
+it("retargets queued work and its stored runtime when only a native model is selected", async () => {
+  const sessionKey = "agent:main:model-only-patch";
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId: sessionKey,
+      updatedAt: 1,
+      agentRuntimeOverride: "openclaw",
+    },
+  );
+  const requestContext = context();
+  requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(
+    catalogSnapshot([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Native model",
+        reasoning: false,
+        nativeRuntime: "claude-cli",
+      },
+    ]),
+  );
+  runtimeChoice.prepare.mockResolvedValue({
+    kind: "ready",
+    runtimeId: "claude-cli",
+    validate: () => undefined,
+  });
+  const queued = queueRuntimeSelection(sessionKey);
+  try {
+    expect(
+      (
+        await patchSession(
+          { key: sessionKey, model: "anthropic/claude-sonnet-4-6" },
+          ["operator.admin"],
+          requestContext,
+        )
+      )[0],
+    ).toBe(true);
+    expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      agentRuntimeOverride: "claude-cli",
+    });
+  } finally {
+    clearFollowupQueue(sessionKey);
+  }
 });

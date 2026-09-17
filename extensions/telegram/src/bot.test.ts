@@ -2890,23 +2890,21 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
   });
 
-  it("passes a native picker click as model-only selection to the shared owner", async () => {
+  it("persists the native runtime selected through the Telegram picker", async () => {
     const storePath = createTelegramTestStorePath("native-model-only");
     const config = makeModelPickerConfig(storePath, { omitModels: true });
+    const nativeEntry = {
+      provider: "acp-opencode",
+      id: "big-pickle",
+      name: "Big Pickle",
+      nativeRuntime: "acp-opencode",
+    };
     vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
       byProvider: new Map([["acp-opencode", new Set(["big-pickle"])]]),
       providers: ["acp-opencode"],
       resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
       modelNames: new Map(),
-      modelCatalog: [
-        {
-          provider: "acp-opencode",
-          id: "big-pickle",
-          name: "Big Pickle",
-          reasoning: false,
-          nativeRuntime: "acp-opencode",
-        },
-      ],
+      modelCatalog: [nativeEntry],
     });
     const { createEmptyPluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime");
     const registry = createEmptyPluginRegistry();
@@ -2923,12 +2921,6 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    const nativeEntry = {
-      provider: "acp-opencode",
-      id: "big-pickle",
-      name: "Big Pickle",
-      nativeRuntime: "acp-opencode",
-    };
     await mockPublishedModelRuntimeForTest({
       config,
       isCurrent: () => true,
@@ -2942,38 +2934,20 @@ describe("createTelegramBot", () => {
       },
       authStore: { version: 1, profiles: {} },
     });
-    const modelRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
-    const apply = vi.spyOn(modelRuntime, "applySessionModelSelection");
-    try {
-      loadConfig.mockReturnValue(config);
-      createTelegramBot({ token: "tok", config });
-      await getTelegramCallbackHandlerForTests()(
-        createTelegramCallbackContext({
-          id: "native-model-only",
-          data: "mdl_sel_acp-opencode/big-pickle",
-          message: { message_id: 17 },
-        }),
-      );
-      expect.soft(apply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          request: expect.objectContaining({
-            provider: "acp-opencode",
-            model: "big-pickle",
-            isDefault: false,
-            runtime: { kind: "unchanged" },
-          }),
-        }),
-      );
-      expect.soft(firstEditMessageTextArg(2)).toContain("Runtime set to <b>acp-opencode</b>");
-      expect.soft(firstEditMessageTextArg(2)).not.toContain("from configured policy");
-      expect(readOnlySessionEntry(storePath)).toMatchObject({
-        providerOverride: "acp-opencode",
-        modelOverride: "big-pickle",
-        agentRuntimeOverride: "acp-opencode",
-      });
-    } finally {
-      apply.mockRestore();
-    }
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
+    await getTelegramCallbackHandlerForTests()(
+      createTelegramCallbackContext({
+        id: "native-model-only",
+        data: "mdl_sel_acp-opencode/big-pickle",
+        message: { message_id: 17 },
+      }),
+    );
+    expect(readOnlySessionEntry(storePath)).toMatchObject({
+      providerOverride: "acp-opencode",
+      modelOverride: "big-pickle",
+      agentRuntimeOverride: "acp-opencode",
+    });
   });
 
   it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {

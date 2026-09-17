@@ -14,36 +14,6 @@ afterEach(() => {
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
   it.each([false, true])(
-    "preserves inbound context through prompt hooks (hooks=%s)",
-    async (hooks) => {
-      const handler = vi.fn(async () => ({ prependContext: "before", appendContext: "after" }));
-      if (hooks) {
-        initializeGlobalHookRunner(
-          createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
-        );
-      }
-      const result = await resolveAgentHarnessBeforePromptBuildResult({
-        prompt: "hello",
-        currentInboundContext: { text: "  channel context  ", promptJoiner: "\n" },
-        currentUserMessage: "hello",
-        developerInstructions: "base",
-        messages: [],
-        ctx: {},
-      });
-      const inputPrompt = "channel context\nhello";
-      expect(result.prompt).toBe(hooks ? "before\n\n" + inputPrompt + "\n\nafter" : inputPrompt);
-      const start = hooks ? "before\n\n".length : 0;
-      expect(result.promptInputRange).toEqual({ start, end: start + inputPrompt.length });
-      if (hooks) {
-        expect(handler).toHaveBeenCalledWith(
-          expect.objectContaining({ prompt: inputPrompt, currentUserMessage: "hello" }),
-          expect.anything(),
-        );
-      }
-    },
-  );
-
-  it.each([false, true])(
     "preserves the admitted request through projected prompts (authorized=%s)",
     async (authorized) => {
       const handler = vi.fn(async (_event: unknown) => undefined);
@@ -56,8 +26,12 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           },
         ]),
       );
-      await resolveAgentHarnessBeforePromptBuildResult({
-        prompt: "Prior conversation: remember my preference\nCurrent message: hello",
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
         currentUserMessage: "hello",
         currentUserMessageId: "message-1",
         messages: [],
@@ -69,6 +43,10 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           assertActive: () => undefined,
         },
       });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
       expect(handler).toHaveBeenCalledOnce();
       expect(handler.mock.calls[0]?.[0]).toMatchObject({
         currentUserMessage: "hello",

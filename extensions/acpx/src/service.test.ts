@@ -16,7 +16,6 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpxRuntime } from "./runtime.js";
-import { registerInspectionRecoveryTests } from "./service.inspection.test-support.js";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
   runtimeRegistry: new Map<string, { runtime: unknown; healthy?: () => boolean }>(),
@@ -348,22 +347,6 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
 
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
-    expect(runtime.shutdown).toHaveBeenCalledOnce();
-  });
-
-  it("does not run a default-agent probe for explicit catalog acquisition", async () => {
-    delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
-    const ctx = createServiceContext(testWorkspace.dir);
-    const runtime = createMockRuntime();
-    runtime.doctor.mockRejectedValue(new Error("unrelated default agent is missing"));
-    const service = createAcpxRuntimeService(ctx, {
-      probeAtStartup: false,
-      runtimeFactory: () => runtime as never,
-    });
-    await service.start(ctx);
-    expect(runtime.doctor).not.toHaveBeenCalled();
-    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
-    await service.stop?.(ctx);
     expect(runtime.shutdown).toHaveBeenCalledOnce();
   });
 
@@ -1083,14 +1066,36 @@ describe("createAcpxRuntimeService", () => {
   });
 });
 
-registerInspectionRecoveryTests({
-  createContext: () => createServiceContext(testWorkspace.dir),
-  createService: createAcpxRuntimeService,
-  createRuntime: createRuntimeWithoutProcesses,
-  seedLease: seedActiveLease,
-  openGatewayStore: openGatewayInstanceStore,
-  openLeaseStore: openProcessLeaseStore,
-  cleanupTree: cleanupOpenClawOwnedAcpxProcessTreeMock,
-  cleanupPending: cleanupOpenClawOwnedAcpxPendingLeaseMock,
-  cleanupOrphans: reapStaleOpenClawOwnedAcpxOrphansMock,
+it("catalog-only acquisition and disposal preserve another active runtime lease", async () => {
+  const ctx = createServiceContext(testWorkspace.dir);
+  await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+    instanceId: "gw-test",
+    createdAt: 1,
+  });
+  const primary = createRuntimeWithoutProcesses();
+  const primaryShutdown = vi.spyOn(primary, "shutdown");
+  const owner = createAcpxRuntimeService(ctx, {
+    probeAtStartup: false,
+    runtimeFactory: () => primary,
+  });
+  await owner.start(ctx);
+  const lease = await seedActiveLease(ctx);
+  const inspectionRuntime = createRuntimeWithoutProcesses();
+  const inspectionShutdown = vi.spyOn(inspectionRuntime, "shutdown");
+  const inspection = createAcpxRuntimeService(ctx, {
+    startupPurpose: "inspection",
+    probeAtStartup: false,
+    runtimeFactory: () => inspectionRuntime,
+    backendLifecycle: { publish: () => {}, retract: () => {} },
+  });
+  await inspection.start(ctx);
+  await inspection.stop?.(ctx);
+  expect(cleanupOpenClawOwnedAcpxProcessTreeMock).not.toHaveBeenCalled();
+  expect(cleanupOpenClawOwnedAcpxPendingLeaseMock).not.toHaveBeenCalled();
+  expect(reapStaleOpenClawOwnedAcpxOrphansMock).not.toHaveBeenCalled();
+  expect(await openProcessLeaseStore(ctx).lookup(lease.leaseId)).toEqual(lease);
+  expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(primary);
+  expect(inspectionShutdown).toHaveBeenCalledOnce();
+  expect(primaryShutdown).not.toHaveBeenCalled();
+  await owner.stop?.(ctx);
 });

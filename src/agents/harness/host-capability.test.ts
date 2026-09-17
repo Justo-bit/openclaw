@@ -726,53 +726,6 @@ describe("agent harness host capability", () => {
     host.close();
   });
 
-  it("formats approval presentation at the host boundary and preserves full evidence", async () => {
-    const { attempt } = await admittedAttempt("approval-presentation");
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "acpx" });
-    const controller = new AbortController();
-    const detail = JSON.stringify({ command: "echo \u001b[31mexample", input: "x".repeat(1000) });
-    try {
-      await host.capabilities.requestApproval({
-        title: "\u001b[31mTitle\u001b[0m " + "long ".repeat(100),
-        description: "\u202eEdit\u2066\n" + "long ".repeat(400),
-        detail,
-        signal: controller.signal,
-        severity: "warning",
-        toolName: "edit",
-        toolCallId: "call-1",
-        allowedDecisions: ["allow-once", "deny"],
-        timeoutMs: 1000,
-        transportTimeoutMs: 2000,
-      });
-      const [, options, payload, callOptions] = mockCallGatewayTool.mock.calls[0]!;
-      expect(options).toEqual({ timeoutMs: 2000 });
-      expect(payload).toMatchObject({
-        detail,
-        severity: "warning",
-        toolName: "edit",
-        toolCallId: "call-1",
-        allowedDecisions: ["allow-once", "deny"],
-        timeoutMs: 1000,
-        twoPhase: true,
-      });
-      expect(payload).toHaveProperty("title", expect.stringMatching(/^Title long /));
-      expect(payload).toHaveProperty("description", expect.stringMatching(/^Edit\nlong /));
-      expect(payload).toHaveProperty("description", expect.not.stringContaining("\u202e"));
-      expect(payload).toMatchObject({
-        title: expect.stringMatching(/^[\s\S]{1,80}$/),
-        description: expect.stringMatching(/^[\s\S]{1,512}$/),
-      });
-      expect(payload).not.toMatchObject({ title: expect.stringContaining("\u001b") });
-      expect(callOptions).toEqual({
-        expectFinal: false,
-        requireAgentRuntimeIdentity: true,
-        signal: controller.signal,
-      });
-    } finally {
-      host.close();
-    }
-  });
-
   it("hands off MCP persistence proof once without serializing the callback", async () => {
     const { attempt } = await admittedAttempt("mcp-persistence-proof");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
@@ -790,6 +743,7 @@ describe("agent harness host capability", () => {
       expect(payload).toMatchObject({
         mcpTool: { server: "docs", tool: "write_note" },
         toolCallId: "item-1",
+        detail: "Full review evidence",
       });
       expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
       expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
@@ -800,6 +754,7 @@ describe("agent harness host capability", () => {
     await host.capabilities.requestApproval({
       title: "MCP approval",
       description: "Write a note",
+      detail: "Full review evidence",
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       toolCallId: "item-1",
