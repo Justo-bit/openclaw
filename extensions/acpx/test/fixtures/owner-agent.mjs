@@ -10,6 +10,7 @@ import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclien
 const directory = process.argv[2];
 const modelControls = process.argv.slice(3).includes("--model-controls");
 const holdModeControl = process.argv.slice(3).includes("--hold-mode-control");
+const holdNewSession = process.argv.slice(3).includes("--hold-new-session");
 const sessions = new Map();
 const configOptions = (state) => [
   {
@@ -50,6 +51,21 @@ const describe = (state) => ({
 });
 const file = (id) => path.join(directory, `${id}.json`);
 const save = (id) => fs.writeFile(file(id), JSON.stringify(sessions.get(id)));
+async function holdControl(name, value) {
+  await fs.writeFile(path.join(directory, `${name}-entered`), value);
+  const deadline = Date.now() + 30000;
+  while (true) {
+    try {
+      await fs.access(path.join(directory, `${name}-release`));
+      return;
+    } catch (error) {
+      if (error.code !== "ENOENT" || Date.now() >= deadline) {
+        throw error;
+      }
+      await delay(5);
+    }
+  }
+}
 const connection = new AgentSideConnection(
   (client) => ({
     async initialize() {
@@ -71,6 +87,9 @@ const connection = new AgentSideConnection(
       };
       sessions.set(sessionId, state);
       await save(sessionId);
+      if (holdNewSession) {
+        await holdControl("session-new", sessionId);
+      }
       return { sessionId, ...describe(state) };
     },
     async loadSession({ sessionId, mcpServers }) {
@@ -81,19 +100,7 @@ const connection = new AgentSideConnection(
     },
     async setSessionMode({ sessionId, modeId }) {
       if (holdModeControl && modeId === "review") {
-        await fs.writeFile(path.join(directory, "mode-control-entered"), modeId);
-        const deadline = Date.now() + 30000;
-        while (true) {
-          try {
-            await fs.access(path.join(directory, "mode-control-release"));
-            break;
-          } catch (error) {
-            if (error.code !== "ENOENT" || Date.now() >= deadline) {
-              throw error;
-            }
-            await delay(5);
-          }
-        }
+        await holdControl("mode-control", modeId);
       }
       sessions.get(sessionId).mode = modeId;
       await save(sessionId);

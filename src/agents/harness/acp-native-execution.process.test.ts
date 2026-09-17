@@ -126,7 +126,9 @@ it.each(["revoke", "active"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
-      const native = await registerNative(state, config, "owner-agent.mjs", true);
+      const native = await registerNative(state, config, "owner-agent.mjs", {
+        holdModeControl: true,
+      });
       const attempt = await attemptFor(state, config, "opencode", "full");
       let holdingControl: Promise<void> | undefined;
       let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
@@ -203,6 +205,82 @@ it.each(["revoke", "active"] as const)(
           ...(run ? [run] : []),
           ...(holdingControl ? [holdingControl] : []),
         ]);
+        attempt.close();
+        await native.service.stop?.(native.context);
+      }
+    });
+  },
+  60000,
+);
+
+it.each([
+  { agent: "opencode", kind: "active" },
+  { agent: "qwen", kind: "active" },
+  { agent: "pi", kind: "active" },
+  { agent: "kilocode", kind: "active" },
+  { agent: "opencode", kind: "cancel" },
+  { agent: "opencode", kind: "timeout" },
+  { agent: "opencode", kind: "revoke" },
+] as const)(
+  "preserves $agent model authority during cold session initialization: $kind",
+  async ({ agent, kind }) => {
+    await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
+      const config: OpenClawConfig = {
+        session: { store: path.join(state.sessionsDir(), "sessions.json") },
+      };
+      const native = await registerNative(state, config, "owner-agent.mjs", {
+        holdNewSession: true,
+      });
+      const attempt = await attemptFor(state, config, agent, "full");
+      const controller = new AbortController();
+      attempt.input.abortSignal = controller.signal;
+      const timedOut = Promise.withResolvers<void>();
+      if (kind === "timeout") {
+        attempt.input.timeoutMs = 3000;
+        attempt.input.onAttemptTimeout = () => timedOut.resolve();
+      }
+      const run = runAgentHarnessAttempt(attempt.input);
+      void run.catch(() => {});
+      try {
+        await expect
+          .poll(() => fs.readFile(path.join(native.peerDirectory, "session-new-entered"), "utf8"))
+          .toEqual(expect.any(String));
+        const transcriptBeforeRelease = await readVisibleSessionTranscriptMessageEntries(
+          attempt.target,
+        );
+        if (kind === "cancel") {
+          controller.abort();
+        } else if (kind === "revoke") {
+          attempt.close();
+        } else if (kind === "timeout") {
+          await timedOut.promise;
+        }
+        await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
+        const outcome = await run;
+        const records = await peerStates(native.peerDirectory);
+        const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
+        expect(records).toHaveLength(1);
+        if (kind === "active") {
+          expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
+          expect.soft(records[0]?.currentModelId).toBe("selected");
+          expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
+          expect.soft(records[0]?.history).toHaveLength(1);
+          expect.soft(effects).toHaveLength(1);
+        } else {
+          expect.soft(outcome?.terminal).toMatchObject({
+            kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
+          });
+          expect.soft(records[0]?.currentModelId).toBe("initial");
+          expect.soft(records[0]?.modelChanges).toEqual([]);
+          expect.soft(records[0]?.history).toEqual([]);
+          expect.soft(effects).toEqual([]);
+          expect
+            .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
+            .toEqual(transcriptBeforeRelease);
+        }
+      } finally {
+        await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
+        await Promise.allSettled([run]);
         attempt.close();
         await native.service.stop?.(native.context);
       }

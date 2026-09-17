@@ -115,15 +115,14 @@ export async function runAcpHarnessAttempt(params: {
       mode: "persistent" as const,
       bridgeSession: { agentId, sessionKey, native: true },
       cwd: input.workspaceDir,
-      model: input.modelId,
-      modelExplicit: true,
     };
+    // Session initialization cannot guard model controls; select only with live turn authority below.
     handle = await runtime.ensureSession(target);
     assertActive();
     const status = await runtime.getStatus({ handle });
     assertActive();
-    if (status.models?.currentModelId !== target.model) {
-      await runtime.setModel({ handle, model: target.model, signal, assertActive });
+    if (status.models?.currentModelId !== input.modelId) {
+      await runtime.setModel({ handle, model: input.modelId, signal, assertActive });
     }
     assertActive();
     const lastRequestId = status.lastRequestId;

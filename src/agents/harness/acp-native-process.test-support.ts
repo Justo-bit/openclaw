@@ -61,7 +61,7 @@ export async function registerNative(
   state: OpenClawTestState,
   config: OpenClawConfig,
   peerName: "owner-agent.mjs" | "approval-effect-agent.mjs",
-  holdModeControl = false,
+  peerOptions: { holdModeControl?: boolean; holdNewSession?: boolean } = {},
 ) {
   const peer = fileURLToPath(
     new URL(`../../../extensions/acpx/test/fixtures/${peerName}`, import.meta.url),
@@ -94,7 +94,8 @@ export async function registerNative(
               peer,
               peerDirectory,
               ...(peerName === "owner-agent.mjs" ? ["--model-controls"] : []),
-              ...(holdModeControl ? ["--hold-mode-control"] : []),
+              ...(peerOptions.holdModeControl ? ["--hold-mode-control"] : []),
+              ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
             ],
           },
         ]),
