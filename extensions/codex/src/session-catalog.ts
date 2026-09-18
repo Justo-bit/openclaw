@@ -371,6 +371,7 @@ function registerCodexSessionCatalog(params: {
         control,
         hostId: request.hostId,
         threadId: request.threadId,
+        sourceHomeId: request.sourceHomeId,
         cursor: request.cursor,
         limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
@@ -389,6 +390,7 @@ function registerCodexSessionCatalog(params: {
           config,
           hostId: request.hostId,
           threadId: request.threadId,
+          sourceHomeId: request.sourceHomeId,
           clientScopes: request.clientScopes,
         });
       }

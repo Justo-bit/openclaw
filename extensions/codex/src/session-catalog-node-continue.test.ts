@@ -37,6 +37,8 @@ import {
   type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
 
+const nodeSourceHomeId = "a".repeat(64);
+
 describe("Codex supervision actions", () => {
   it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
     "advertises creation for %s from startup config before the live snapshot is available",
@@ -74,6 +76,7 @@ describe("Codex supervision actions", () => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
+            sourceHomeId: nodeSourceHomeId,
             canContinueCodex: true,
             sessions: [
               {
@@ -235,6 +238,7 @@ describe("Codex supervision actions", () => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
+            sourceHomeId: nodeSourceHomeId,
             canContinueCodex: true,
             sessions: [
               {
@@ -424,6 +428,7 @@ describe("Codex supervision actions", () => {
   it("rejects a non-continuable paired-node session status", async () => {
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
       payloadJSON: JSON.stringify({
+        sourceHomeId: nodeSourceHomeId,
         canContinueCodex: true,
         sessions: [
           {
@@ -491,6 +496,7 @@ describe("Codex supervision actions", () => {
     });
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
       payloadJSON: JSON.stringify({
+        sourceHomeId: nodeSourceHomeId,
         sessions:
           // The node thread lookup must page without a title searchTerm; if a
           // regression ever sends one, this returns [] and the test fails.

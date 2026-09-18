@@ -16,8 +16,14 @@ export async function lookupNodeCodexCatalogRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
+  sourceHomeId?: string;
 }): Promise<
-  | { kind: "found"; record: CodexSessionCatalogSession; canContinueCodex?: boolean }
+  | {
+      kind: "found";
+      record: CodexSessionCatalogSession;
+      sourceHomeId?: string;
+      canContinueCodex?: boolean;
+    }
   | { kind: "missing" | "cursor-cycle" }
 > {
   const deadline = performance.now() + NODE_INVOKE_TIMEOUT_MS;
@@ -31,6 +37,8 @@ export async function lookupNodeCodexCatalogRecord(params: {
     return timeoutMs;
   };
   let cursor: string | undefined;
+  let sourceHomeId = params.sourceHomeId;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   for (;;) {
     const timeoutMs = remaining();
@@ -40,6 +48,7 @@ export async function lookupNodeCodexCatalogRecord(params: {
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: {
           agentId: params.agentId,
+          ...(sourceHomeId ? { sourceHomeId } : {}),
           limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
           ...(cursor ? { cursor } : {}),
         },
@@ -52,9 +61,16 @@ export async function lookupNodeCodexCatalogRecord(params: {
     );
     remaining();
     const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
+    if ((!firstPage || sourceHomeId !== undefined) && page.sourceHomeId !== sourceHomeId) {
+      throw new CatalogParamsError(
+        "Codex session source home changed; refresh the catalog and retry",
+      );
+    }
+    sourceHomeId = page.sourceHomeId;
+    firstPage = false;
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
     if (record) {
-      return { kind: "found", record, canContinueCodex: page.canContinueCodex };
+      return { kind: "found", record, sourceHomeId, canContinueCodex: page.canContinueCodex };
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {

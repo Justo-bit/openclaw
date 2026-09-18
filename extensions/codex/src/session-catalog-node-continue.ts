@@ -19,6 +19,7 @@ import {
   createOrReuseNodeAdoptedSession,
   finalizeNodeAdoptedSession,
   findNodeAdoptedSessionEntry,
+  nodeAdoptedSourceKey,
   nodeSessionMarker,
   runSessionActionExclusive,
   type AdoptedSessionEntry,
@@ -151,12 +152,20 @@ export async function listPairedNode(params: {
         ...common,
         connected: true,
         ...page,
-        canContinueCodex: common.canContinueCodex && page.canContinueCodex === true,
+        canContinueCodex:
+          common.canContinueCodex && page.canContinueCodex === true && Boolean(page.sourceHomeId),
         sessions: page.sessions.map((session) => {
-          const adopted = params.adoptedSessions.get(
-            sessionCatalogAdoptedSourceKey(hostId, session.threadId),
+          const adopted = page.sourceHomeId
+            ? params.adoptedSessions.get(
+                nodeAdoptedSourceKey(hostId, session.threadId, page.sourceHomeId),
+              )
+            : undefined;
+          return Object.assign(
+            {},
+            session,
+            page.sourceHomeId ? { sourceHomeId: page.sourceHomeId } : {},
+            adopted ? { sessionKey: adopted.key } : {},
           );
-          return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
         }),
       };
     })
@@ -228,6 +237,7 @@ async function readNodeCodexHistory(params: {
   agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
+  sourceHomeId: string;
   record: CodexSessionCatalogSession;
 }): Promise<CodexNodeHistory> {
   const raw = await params.runtime.nodes.invoke({
@@ -235,6 +245,7 @@ async function readNodeCodexHistory(params: {
     command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
     params: {
       agentId: params.agentId,
+      sourceHomeId: params.sourceHomeId,
       threadId: params.record.threadId,
       limit: MAX_TRANSCRIPT_PAGE_LIMIT,
     },
@@ -264,6 +275,7 @@ async function continueNodeCodexSessionInner(params: {
   config: OpenClawConfig;
   hostId: string;
   threadId: string;
+  sourceHomeId?: string;
   clientScopes?: readonly string[];
 }): Promise<{
   sessionKey: string;
@@ -284,6 +296,7 @@ async function continueNodeCodexSessionInner(params: {
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
+    sourceHomeId: params.sourceHomeId,
   });
   if (lookup.kind !== "found") {
     throw new CatalogParamsError(
@@ -292,11 +305,12 @@ async function continueNodeCodexSessionInner(params: {
         : "Codex session is unavailable on the paired node",
     );
   }
-  if (lookup.canContinueCodex !== true) {
+  if (lookup.canContinueCodex !== true || !lookup.sourceHomeId) {
     throw new CatalogParamsError(
       "Codex session source does not support Chat continuation; use a local stdio source or update the node.",
     );
   }
+  const sourceHomeId = lookup.sourceHomeId;
   const record = lookup.record;
   requireContinuableNodeRecord(record);
   const existing = findNodeAdoptedSessionEntry({
@@ -305,6 +319,7 @@ async function continueNodeCodexSessionInner(params: {
     runtime: params.api.runtime,
     hostId: params.hostId,
     threadId: params.threadId,
+    sourceHomeId,
     includeInitializing: true,
   });
   let adopted: AdoptedSessionEntry;
@@ -319,6 +334,7 @@ async function continueNodeCodexSessionInner(params: {
       agentId: params.agentId,
       runtime: params.api.runtime,
       nodeId,
+      sourceHomeId,
       record,
     });
     adopted = await createOrReuseNodeAdoptedSession({
@@ -327,6 +343,7 @@ async function continueNodeCodexSessionInner(params: {
       config: params.config,
       hostId: params.hostId,
       nodeId,
+      sourceHomeId,
       record,
       history,
     });
@@ -335,6 +352,7 @@ async function continueNodeCodexSessionInner(params: {
   const marker = nodeSessionMarker({
     hostId: params.hostId,
     threadId: params.threadId,
+    sourceHomeId,
     nodeId,
   });
   return {
@@ -362,6 +380,7 @@ export async function continueNodeCodexSession(params: {
   config: OpenClawConfig;
   hostId: string;
   threadId: string;
+  sourceHomeId?: string;
   clientScopes?: readonly string[];
 }) {
   // Bound turns run native Codex on the node and pass canMutateCodexHost only
@@ -379,10 +398,14 @@ export async function continueNodeCodexSession(params: {
     agentId: params.agentId,
   }).sessionAgentId;
   const sourceKey = sessionCatalogAdoptedSourceKey(`node:${nodeId}`, params.threadId);
-  const operationKey = sessionCatalogAdoptedSourceKey(agentId, sourceKey);
-  // Memoization is agent-qualified while the native action lock is source-qualified,
-  // so different agents serialize on one thread without joining one adoption result.
-  // The exclusive inner operation owns both its existing lookup and raced recovery.
+  const operationKey = sessionCatalogAdoptedSourceKey(
+    agentId,
+    params.sourceHomeId
+      ? nodeAdoptedSourceKey(`node:${nodeId}`, params.threadId, params.sourceHomeId)
+      : sourceKey,
+  );
+  // Explicit homes cannot share an adoption result. Keep node/thread FIFO across
+  // source changes so each queued operation verifies its source after earlier work.
   return await continueNodeAdoption({
     sourceKey: operationKey,
     findExisting: () => undefined,

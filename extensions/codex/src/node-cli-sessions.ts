@@ -22,6 +22,7 @@ import { resolveCodexAppServerUserHomeDir } from "./app-server/auth-start-option
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { visitJsonlLines } from "./jsonl-lines.js";
 import { codexCatalogHomeId } from "./session-catalog-home-id.js";
+import { MAX_SESSION_ID_LENGTH, readBoundedOptionalString } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
@@ -80,12 +81,14 @@ export function createCodexCliSessionNodeHostCommands(
     {
       command: CODEX_CLI_SESSIONS_LIST_COMMAND,
       cap: "codex-cli-sessions",
+      hasActiveWork: () => false,
       handle: listLocalCodexCliSessions,
     },
     {
       command: CODEX_CLI_SESSION_RESUME_COMMAND,
       cap: CODEX_CLI_SESSION_SOURCE_CAPABILITY,
       dangerous: true,
+      hasActiveWork: () => activeResumeSessions.size > 0,
       handle: (paramsJSON, _io, context) =>
         resumeLocalCodexCliSession(paramsJSON, resolveCatalogSource, context),
     },
@@ -104,7 +107,7 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
       dangerous: true,
       handle: (ctx) =>
         isRecord(ctx.params) &&
-        ctx.params.agentId !== undefined &&
+        (ctx.params.agentId !== undefined || ctx.params.sourceHomeId !== undefined) &&
         !ctx.node?.caps?.includes(CODEX_CLI_SESSION_SOURCE_CAPABILITY)
           ? {
               ok: false,
@@ -173,6 +176,7 @@ export async function resumeCodexCliSessionOnNode(params: {
   timeoutMs?: number;
 }): Promise<CodexCliSessionResumeResult> {
   let catalogAgentId: string | undefined;
+  let catalogHomeId: string | undefined;
   if (params.sessionKey) {
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
       await import("./session-catalog-node-adoption.js");
@@ -201,6 +205,12 @@ export async function resumeCodexCliSessionOnNode(params: {
       ) {
         throw new Error("Codex catalog session changed before its node turn could run.");
       }
+      if (!marker.sourceHomeId) {
+        throw new Error(
+          "This Codex catalog session has no saved source home. Reopen it from the catalog to continue in a new chat.",
+        );
+      }
+      catalogHomeId = marker.sourceHomeId;
     }
   }
   const raw = await params.runtime.nodes.invoke({
@@ -209,6 +219,7 @@ export async function resumeCodexCliSessionOnNode(params: {
     params: {
       sessionId: params.sessionId,
       ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
+      ...(catalogHomeId ? { sourceHomeId: catalogHomeId } : {}),
       prompt: params.prompt,
       cwd: params.cwd,
       timeoutMs: params.timeoutMs,
@@ -279,6 +290,7 @@ async function resumeLocalCodexCliSession(
   const params = readRecordParam(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
+  const expectedHomeId = readBoundedOptionalString(params, "sourceHomeId", MAX_SESSION_ID_LENGTH);
   if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error("Missing or invalid Codex CLI session id.");
   }
@@ -301,6 +313,9 @@ async function resumeLocalCodexCliSession(
     assertCurrent = () => source.assertCurrent();
   } else {
     sourceHomeId = codexCatalogHomeId(codexHome);
+  }
+  if (expectedHomeId && expectedHomeId !== sourceHomeId) {
+    throw new Error("Codex catalog source home changed. Reopen the session from the catalog.");
   }
   context?.signal?.throwIfAborted();
   const resumeKey = `${sourceHomeId}\0${sessionId}`;

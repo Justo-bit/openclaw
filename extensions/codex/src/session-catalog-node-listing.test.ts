@@ -93,6 +93,8 @@ describe("Codex supervision catalog", () => {
       });
       const command = createCodexSessionCatalogNodeHostCommands(
         {
+          hasActiveWork: () => false,
+          disconnect: async () => {},
           forRequest: () => control,
           forNode: async () => ({
             control,
@@ -110,8 +112,11 @@ describe("Codex supervision catalog", () => {
         throw new Error("Codex session catalog node command was not registered");
       }
 
-      const result = await command.handle(JSON.stringify({ limit: 2, agentId: "main" }));
+      const result = await command.handle(
+        JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-main" }),
+      );
       expect(JSON.parse(result)).toEqual({
+        sourceHomeId: "home-main",
         canContinueCodex: transport === "stdio",
         sessions: [
           { threadId: "native-1", status: "idle", source: "cli", archived: false },
@@ -122,6 +127,10 @@ describe("Codex supervision catalog", () => {
       expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledTimes(1);
       expect(listPage).toHaveBeenNthCalledWith(1, { limit: 2 });
       expect(listPage).toHaveBeenNthCalledWith(2, { cursor: "page-2", limit: 1 });
+      await expect(
+        command.handle(JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-old" })),
+      ).rejects.toThrow("source home changed");
+      expect(listPage).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -595,7 +604,14 @@ describe("Codex supervision catalog", () => {
     }
 
     await expect(
-      command.handle(JSON.stringify({ threadId: "thread-1", cursor: "turns-page-1", limit: 25 })),
+      command.handle(
+        JSON.stringify({
+          threadId: "thread-1",
+          cursor: "turns-page-1",
+          limit: 25,
+          sourceHomeId: "node-native",
+        }),
+      ),
     ).resolves.toBe(
       JSON.stringify({
         data: [
@@ -638,7 +654,12 @@ describe("Codex supervision catalog", () => {
     }
 
     const payload = await command.handle(
-      JSON.stringify({ threadId: "thread-1", cursor: "native-start", limit: 2 }),
+      JSON.stringify({
+        threadId: "thread-1",
+        cursor: "native-start",
+        limit: 2,
+        sourceHomeId: "node-native",
+      }),
     );
     expect(JSON.parse(payload)).toEqual({
       items: [

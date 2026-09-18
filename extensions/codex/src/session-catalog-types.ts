@@ -50,6 +50,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Canonical node-owned home identity; absent from older read-only node pages. */
+  sourceHomeId?: string;
   /** The node's selected source must explicitly support Chat continuation. */
   canContinueCodex?: boolean;
   /** Internal provenance filtered before this page reaches the provider catalog. */
@@ -95,6 +97,9 @@ export type CodexSessionCatalogControl = {
 };
 
 export type CodexSessionCatalogControlFactory = {
+  hasActiveWork(this: void): boolean;
+  /** Drain node-owned state and transports while permitting the next connection. */
+  disconnect(this: void): Promise<void>;
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
   /** Native default, with the shipped agent selector retained for explicitly configured sources. */
   forNode(agentId?: string): Promise<{

@@ -35,6 +35,7 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
+    hasActiveWork: () => false,
     isAvailable: ({ env }) =>
       Boolean(resolveNodeHostExecutable("codex", { env, strategy: "direct" })),
     handle: async (paramsJSON, io) => {
@@ -137,6 +138,7 @@ export function createCodexTerminalNodeHostCommand(
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
+    hasActiveWork: () => false,
     isAvailable: ({ config, env }) =>
       (readCodexPluginConfig(config.plugins?.entries?.codex?.config).appServer?.transport ??
         "stdio") === "stdio" &&
@@ -201,6 +203,7 @@ export async function openCodexCatalogTerminal(
     control: CodexSessionCatalogControl;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
     source?: CodexCatalogHome;
   } & CodexTerminalConfigSources,
 ): Promise<SessionCatalogTerminalPlan> {
@@ -246,6 +249,7 @@ export async function openCodexCatalogTerminal(
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
+    sourceHomeId: params.sourceHomeId,
   });
   if (lookup.kind !== "found" || !isInteractiveThreadSource(lookup.record.source)) {
     throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
@@ -256,7 +260,11 @@ export async function openCodexCatalogTerminal(
     nodeId,
     command: CODEX_TERMINAL_RESUME_COMMAND,
     uploadPathStyle: "native",
-    paramsJSON: JSON.stringify({ agentId: params.agentId, threadId: params.threadId }),
+    paramsJSON: JSON.stringify({
+      agentId: params.agentId,
+      threadId: params.threadId,
+      ...(lookup.sourceHomeId ? { sourceHomeId: lookup.sourceHomeId } : {}),
+    }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,
   };

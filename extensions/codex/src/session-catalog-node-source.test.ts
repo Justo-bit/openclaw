@@ -49,6 +49,7 @@ describe("Codex node catalog sources", () => {
       }
       return {
         payloadJSON: JSON.stringify({
+          sourceHomeId: "a".repeat(64),
           canContinueCodex:
             nodeId === "missing-source"
               ? undefined
@@ -138,6 +139,7 @@ describe("Codex node catalog sources", () => {
         payloadJSON: JSON.stringify(
           command === CODEX_APP_SERVER_THREADS_LIST_COMMAND
             ? {
+                sourceHomeId: "a".repeat(64),
                 canContinueCodex,
                 sessions: [
                   {

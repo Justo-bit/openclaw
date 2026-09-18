@@ -483,15 +483,17 @@ other Codex client or OpenClaw runner is using that thread or its spawned
 descendants. OpenClaw freshly reads the process-local status, proceeds only for
 `idle` or `notLoaded`, calls the native Codex archive operation, and removes the
 session from the non-archived list. Native Codex also attempts to archive the
-thread's spawned descendants.
+thread's spawned descendants and stops archived descendants that were resumed
+through native collaboration.
 
 Archive is unavailable when the fresh read reports the session active or in an
 error state, when it belongs to a paired node, or while a newly created
 supervised Chat still has a pending branch from that source. Send the Chat's
 first message to materialize its canonical branch before archiving the source.
 Archive is also blocked when OpenClaw knows that an active binding owns the
-exact target thread or any non-archived spawned descendant. OpenClaw follows the
-experimental Codex descendant query through every page. An invalid response,
+exact target thread or any spawned descendant, including archived descendants.
+OpenClaw checks both descendant collections for active work and follows the
+experimental Codex descendant query through every page within one shared bound. An invalid response,
 request failure, repeated cursor or thread, or safety-limit exhaustion rejects
 archive.
 
@@ -534,6 +536,17 @@ If OpenClaw requests an upgrade, update the node and approve its refreshed
 capabilities. Older nodes remain available for browsing; the existing Chat is
 preserved. Legacy CLI bindings that resume the node's native user home retain
 their existing behavior.
+
+New paired-node Chats pin the selected canonical Codex home as well as the node
+and thread. Changing a node's catalog source cannot redirect an existing Chat,
+even when the replacement home contains a copied thread with the same ID.
+Restore the original source to continue that Chat, or select the replacement
+source in the catalog to adopt it into a separate Chat.
+
+Chats adopted by older versions did not record their source home. Their history
+remains available, but native continuation requires a fresh adoption from the
+catalog. OpenClaw creates a separate pinned Chat and preserves the older Chat;
+it does not infer the older Chat's home from the node's current configuration.
 
 The CLI-resume command is a dangerous node command: it needs explicit Gateway
 command allowlisting (`gateway.nodes.commands.allow`) as well as approval of

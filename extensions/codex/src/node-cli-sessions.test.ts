@@ -72,12 +72,14 @@ describe("codex cli node sessions", () => {
   });
 
   it.each([
-    { sourceAware: false, catalogAgent: undefined, allowed: true },
-    { sourceAware: true, catalogAgent: "research", allowed: true },
-    { sourceAware: false, catalogAgent: "research", allowed: false },
+    { sourceAware: false, catalogAgent: undefined, sourcePin: false, allowed: true },
+    { sourceAware: true, catalogAgent: "research", sourcePin: false, allowed: true },
+    { sourceAware: false, catalogAgent: "research", sourcePin: false, allowed: false },
+    { sourceAware: true, catalogAgent: undefined, sourcePin: true, allowed: true },
+    { sourceAware: false, catalogAgent: undefined, sourcePin: true, allowed: false },
   ])(
-    "guards selected-home resume for node capability $sourceAware and selector $catalogAgent",
-    async ({ sourceAware, catalogAgent, allowed }) => {
+    "guards selected-home resume for node capability $sourceAware, agent $catalogAgent and source pin $sourcePin",
+    async ({ sourceAware, catalogAgent, sourcePin, allowed }) => {
       const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
         entry.commands.includes("codex.cli.session.resume"),
       )!;
@@ -89,6 +91,7 @@ describe("codex cli node sessions", () => {
           sessionId: "native-thread",
           prompt: "continue",
           ...(catalogAgent ? { agentId: catalogAgent } : {}),
+          ...(sourcePin ? { sourceHomeId: codexCatalogHomeId(tempDir) } : {}),
         },
         config: {},
         node: { nodeId: "node-1", caps: sourceAware ? [CODEX_CLI_SESSION_SOURCE_CAPABILITY] : [] },
@@ -463,6 +466,7 @@ describe("codex cli node sessions", () => {
               sourceHostId: "node:node-1",
               sourceThreadId: "native-thread",
               nodeId: "node-1",
+              sourceHomeId: source.sourceHomeId,
             },
           },
         },
@@ -487,6 +491,10 @@ describe("codex cli node sessions", () => {
       await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
         text: "final answer",
       });
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        agentId: "research",
+        sourceHomeId: source.sourceHomeId,
+      });
       expect(await fs.readFile(path.join(source.codexHome, "resumed"), "utf8")).toBe("yes");
       await expect(fs.stat(path.join(tempDir, "resumed"))).rejects.toMatchObject({
         code: "ENOENT",
@@ -510,6 +518,7 @@ describe("codex cli node sessions", () => {
       });
       expect(await fs.readFile(path.join(tempDir, "resumed"), "utf8")).toBe("yes");
       expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("agentId");
+      expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("sourceHomeId");
     } finally {
       await factory.stop();
     }
@@ -594,6 +603,7 @@ describe("codex cli node sessions", () => {
                                 sourceThreadId:
                                   changed === "thread" ? "other-thread" : "native-thread",
                                 nodeId: changed === "node" ? "other-node" : "node-1",
+                                sourceHomeId: codexCatalogHomeId(tempDir),
                                 ...(changed === "initializing" ? { initializing: true } : {}),
                               },
                             },
