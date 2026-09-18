@@ -96,11 +96,12 @@ export async function recoverNodeWorkerLaunch(params: {
         // Missing mode retains the released v2026.9.4 direct-worker group contract.
         await signalOwnedNodeWorkerTree(receipt.worker, "SIGTERM");
       }
+      // Bound observation so unfinished cleanup only reserves its own capacity slot.
       // Never kill the anchor that retains nested lineage evidence. If it disappears,
       // recovery needs its durable completion fact as well as group extinction.
       workerState = await waitForOwnedNodeWorkerTreeDeath(
         receipt.worker,
-        ownedAnchor ? undefined : STOP_GRACE_MS,
+        STOP_GRACE_MS,
         () => stillOwned() && (!ownedAnchor || inspectNodeWorkerProcessIdentity(worker) === "live"),
       );
       if (

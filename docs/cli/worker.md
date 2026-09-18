@@ -36,10 +36,15 @@ The standalone command above remains a single-turn entry point.
 On current Linux and macOS node hosts, the launch journal identifies the worker's
 process owner; the application `worker.mjs` runs as its child. The owner survives
 an application crash and retains nested command cleanup before releasing capacity.
-After a node-host restart, recovery waits for that exact owner to finish rather
-than terminating its cleanup observer. This protection requires an updated node
-host as well as the current worker bundle; updating the Gateway alone does not
-replace an older node's supervision path.
+After a node-host restart, recovery briefly observes that exact owner without
+terminating its cleanup observer. Unfinished cleanup keeps its slot reserved
+while other free slots remain available. While a turn receipt is retained, later
+status, launch replay, or cancellation retries physical cleanup, even after that
+turn completes.
+Completed turn results stay unchanged; the slot is released only after recorded
+lineage completion and physical process-tree extinction. This protection requires
+an updated node host as well as the current worker bundle; updating the Gateway
+alone does not replace an older node's supervision path.
 
 Launches must fit 25 MiB in each complete serialized form: the node invocation
 event and the managed worker input line, including the node's connection endpoint.

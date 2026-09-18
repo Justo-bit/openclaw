@@ -346,6 +346,7 @@ class NodeWorkerSupervisor {
     if (turn) {
       const owner = this.active.get(turn.ownerLaunchId);
       if (
+        !owner ||
         owner?.state === "observed" ||
         (owner?.state === "running" && owner.deferredOutcome) ||
         turn.state === "pending" ||

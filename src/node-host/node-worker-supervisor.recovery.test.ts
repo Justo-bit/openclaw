@@ -227,24 +227,34 @@ async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
 describe("node worker supervisor recovery", () => {
   it
     .runIf(process.platform === "linux" || process.platform === "darwin")
-    .each(["close", "recover", "anchor-lost"])(
+    .each([
+      "close",
+      "recover",
+      "anchor-lost",
+      "initialize",
+      "status-completed",
+      "cancel-completed",
+      "replay-completed",
+    ])(
     "%s observes a stopped cleanup anchor with unreadable argv without releasing its slot",
     async (operation) => {
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-stopped-recovery-");
+      const retainsCompletedTurn = operation.endsWith("-completed");
       const input = testWorkerLaunchInput(
         workspaceDir,
         "stopped-former-owner",
-        operation === "anchor-lost" ? "tree" : "wait",
+        retainsCompletedTurn ? "background-start" : operation === "anchor-lost" ? "tree" : "wait",
       );
       const previous = spawnSupervisorOwner({ bundleRoot, env, input, root });
       const receipt = JSON.parse(await waitForChildLine(previous)) as NodeWorkerLaunchReceipt;
       const anchor = receipt.worker!;
       ownedProcessGroups.push(anchor);
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
+      const totalCapacity = operation === "initialize" ? 2 : 1;
       const replacement = createNodeWorkerSupervisor({
         bundleRoot,
         env,
-        capacity: 1,
+        capacity: totalCapacity,
         onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
       let initialization: Promise<void> | undefined;
@@ -266,6 +276,22 @@ describe("node worker supervisor recovery", () => {
         return psSync(args, timeout);
       });
       try {
+        const turns = new NodeWorkerTurnStore({ env });
+        if (retainsCompletedTurn) {
+          await vi.waitFor(() => expect(turns.get(input.launchId)?.state).toBe("completed"));
+        }
+        const completed = retainsCompletedTurn ? turns.get(input.launchId) : undefined;
+        if (completed) {
+          const observer = createNodeWorkerSupervisor({ bundleRoot, env, capacity: 1 });
+          try {
+            expect(await observer.status(input.launchId)).toEqual(completed);
+            expect(inspectNodeWorkerProcessIdentity(receipt.supervisor)).toBe("live");
+            expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
+            expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+          } finally {
+            await observer.close();
+          }
+        }
         let descendant: NodeWorkerProcessIdentity | undefined;
         if (operation === "anchor-lost") {
           const descendantPath = path.join(workspaceDir, "grandchild.pid");
@@ -284,9 +310,78 @@ describe("node worker supervisor recovery", () => {
           initialized = true;
         });
         await vi.waitFor(() =>
-          expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 }),
+          expect(capacitySnapshots.at(-1)).toEqual({ total: totalCapacity, available: 0 }),
         );
         expect(initialized).toBe(false);
+        if (operation === "initialize" || completed) {
+          await vi.waitFor(() => expect(initialized).toBe(true), { timeout: 5_000 });
+          await initialization;
+          const store = new NodeWorkerLaunchStore({ env });
+          expect(store.get(input.launchId)).toMatchObject({
+            state: "running",
+            worker: anchor,
+            workerCleanupMode: "owned-anchor",
+            workerLineageSettled: false,
+          });
+          expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
+          expect(capacitySnapshots.at(-1)).toEqual({
+            total: totalCapacity,
+            available: totalCapacity - 1,
+          });
+          expect(replacement.hasActiveWork()).toBe(true);
+
+          if (!completed) {
+            const next = testWorkerLaunchInput(workspaceDir, "free-slot", "wait");
+            next.descriptor.admission.environmentId = "free-environment";
+            next.descriptor.admission.sessionId = "free-session";
+            const running = await replacement.launch(next, TEST_WORKER_ENDPOINT);
+            expect(running).toMatchObject({ state: "running" });
+            expect(running.worker).not.toEqual(anchor);
+            await vi.waitFor(() =>
+              expect(
+                JSON.parse(
+                  fs.readFileSync(path.join(workspaceDir, "free-slot.started.json"), "utf8"),
+                ),
+              ).toMatchObject({ pid: expect.any(Number), starts: 1 }),
+            );
+            expect(store.nonterminalCount()).toBe(2);
+            expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 0 });
+            expect(await replacement.cancel(testNodeWorkerLaunchIdentity(next))).toMatchObject({
+              state: "cancelled",
+            });
+            await vi.waitFor(() => expect(store.nonterminalCount()).toBe(1));
+          }
+          const reconcile = () =>
+            operation === "cancel-completed"
+              ? replacement.cancel(testNodeWorkerLaunchIdentity(input))
+              : operation === "replay-completed"
+                ? replacement.launch(input, TEST_WORKER_ENDPOINT)
+                : replacement.status(input.launchId);
+          expect(await reconcile()).toMatchObject(completed ?? { state: "running" });
+          expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
+          expect(capacitySnapshots.at(-1)).toEqual({
+            total: totalCapacity,
+            available: totalCapacity - 1,
+          });
+
+          process.kill(anchor.pid, "SIGCONT");
+          await waitForIdentityDeath(anchor);
+          expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
+          expect(store.get(input.launchId)).toMatchObject({
+            state: "running",
+            workerLineageSettled: true,
+          });
+          expect(await reconcile()).toMatchObject(
+            completed ? { ...completed, workerLineageSettled: true } : { state: "interrupted" },
+          );
+          expect(store.get(input.launchId)).toMatchObject({ state: "interrupted" });
+          expect(capacitySnapshots.at(-1)).toEqual({
+            total: totalCapacity,
+            available: totalCapacity,
+          });
+          expect(replacement.hasActiveWork()).toBe(false);
+          return;
+        }
         if (descendant) {
           process.kill(anchor.pid, "SIGKILL");
           await initialization;
