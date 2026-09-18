@@ -21,6 +21,7 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
+import { publishServiceFile } from "./service-stage.js";
 import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -481,8 +482,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     return;
   }
   const content = serializeSystemdEnvironmentFile(remaining);
-  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(envFilePath, 0o600);
+  await publishServiceFile({ filePath: envFilePath, contents: `${content}\n`, mode: 0o600 });
 }
 
 function reportSystemdServicePublication(

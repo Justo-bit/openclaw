@@ -1,5 +1,4 @@
 /** LaunchAgent plist, environment-file, and atomic publication ownership. */
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
@@ -15,6 +14,7 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import { publishServiceFile } from "./service-stage.js";
 import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
@@ -150,32 +150,24 @@ async function prepareLaunchAgentProgramArguments(params: {
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
   const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  await params.definitionTransaction?.beforeWrite();
-  assertGatewayServiceUpdateCurrent();
-  params.definitionTransaction?.assertCurrent();
   const environmentFile = buildLaunchAgentEnvironmentFile(entries);
-  await fs.writeFile(envFilePath, environmentFile, {
-    encoding: "utf8",
+  await publishServiceFile({
+    filePath: envFilePath,
+    contents: environmentFile,
     mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    definitionTransaction: params.definitionTransaction,
   });
-  assertGatewayServiceUpdateCurrent();
-  await fs.chmod(envFilePath, LAUNCH_AGENT_ENV_FILE_MODE).catch(() => undefined);
-  await params.definitionTransaction?.fileWritten(envFilePath, environmentFile);
   const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
     wrapperPath,
     generatedWrapper,
   });
   writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
-  await params.definitionTransaction?.beforeWrite();
-  assertGatewayServiceUpdateCurrent();
-  params.definitionTransaction?.assertCurrent();
-  await fs.writeFile(wrapperPath, generatedWrapper, {
-    encoding: "utf8",
+  await publishServiceFile({
+    filePath: wrapperPath,
+    contents: generatedWrapper,
     mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
+    definitionTransaction: params.definitionTransaction,
   });
-  assertGatewayServiceUpdateCurrent();
-  await fs.chmod(wrapperPath, LAUNCH_AGENT_ENV_WRAPPER_MODE).catch(() => undefined);
-  await params.definitionTransaction?.fileWritten(wrapperPath, generatedWrapper);
 
   if (
     isLaunchAgentEnvironmentWrapperArgs({
@@ -233,57 +225,41 @@ export async function publishLaunchAgentPlist(params: {
   definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<void> {
   const previousContents = await readExistingLaunchAgentPlist(params.plistPath);
-  const temporaryPath = `${params.plistPath}.openclaw-${randomUUID()}.tmp`;
-  assertGatewayServiceUpdateCurrent();
-  await fs.writeFile(temporaryPath, params.contents, {
-    encoding: "utf8",
-    flag: "wx",
+  await publishServiceFile({
+    filePath: params.plistPath,
+    contents: params.contents,
     mode: LAUNCH_AGENT_PLIST_MODE,
+    definitionTransaction: params.definitionTransaction,
+    beforeRename: () => assertNoSystemLaunchDaemonOwnership(params.label),
   });
   try {
-    // The temporary filename does not end in .plist, so launchd cannot discover
-    // it before the final ownership check and atomic publication.
     await assertNoSystemLaunchDaemonOwnership(params.label);
-    await params.definitionTransaction?.beforeWrite();
-    assertGatewayServiceUpdateCurrent();
-    params.definitionTransaction?.assertCurrent();
-    await fs.rename(temporaryPath, params.plistPath);
-    try {
-      await assertNoSystemLaunchDaemonOwnership(params.label);
-    } catch (ownershipError) {
-      try {
-        if (previousContents === null) {
-          assertGatewayServiceUpdateCurrent();
-          await fs.unlink(params.plistPath);
-        } else {
-          const rollbackPath = `${params.plistPath}.openclaw-${randomUUID()}.rollback`;
-          try {
-            assertGatewayServiceUpdateCurrent();
-            await fs.writeFile(rollbackPath, previousContents, {
-              flag: "wx",
-              mode: LAUNCH_AGENT_PLIST_MODE,
-            });
-            assertGatewayServiceUpdateCurrent();
-            await fs.rename(rollbackPath, params.plistPath);
-          } finally {
-            await fs.unlink(rollbackPath).catch(() => undefined);
-          }
-        }
-      } catch (rollbackError) {
-        const ownershipDetail =
-          ownershipError instanceof Error ? ownershipError.message : String(ownershipError);
-        throw new Error(
-          `${ownershipDetail}\nThe previous LaunchAgent plist at ${params.plistPath} could not be restored.`,
-          { cause: rollbackError },
-        );
-      }
+  } catch (ownershipError) {
+    // The transaction owns compensation and rejects later operator edits.
+    if (params.definitionTransaction) {
       throw ownershipError;
     }
-  } finally {
-    await fs.unlink(temporaryPath).catch(() => undefined);
+    try {
+      if (previousContents === null) {
+        assertGatewayServiceUpdateCurrent();
+        await fs.unlink(params.plistPath);
+      } else {
+        await publishServiceFile({
+          filePath: params.plistPath,
+          contents: previousContents,
+          mode: LAUNCH_AGENT_PLIST_MODE,
+        });
+      }
+    } catch (rollbackError) {
+      const ownershipDetail =
+        ownershipError instanceof Error ? ownershipError.message : String(ownershipError);
+      throw new Error(
+        `${ownershipDetail}\nThe previous LaunchAgent plist at ${params.plistPath} could not be restored.`,
+        { cause: rollbackError },
+      );
+    }
+    throw ownershipError;
   }
-  await ensureLaunchAgentPlistReadable(params.plistPath);
-  await params.definitionTransaction?.fileWritten(params.plistPath, params.contents);
 }
 
 async function ensureSecureDirectory(

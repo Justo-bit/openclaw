@@ -343,6 +343,9 @@ export async function withSystemdDefinitionMutation<T>(
           await temporaryHandle.close();
         }
         const written = await fs.lstat(temporary);
+        if (file === unit || file === generated) {
+          await options?.definitionTransaction?.filePrepared(file, temporary);
+        }
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename
         // has no expected-inode check. Quiesce administrative edits during installation.
@@ -427,6 +430,7 @@ export async function withSystemdDefinitionMutation<T>(
         }
         await options?.definitionTransaction?.beforeWrite();
         await refresh(true);
+        await options?.definitionTransaction?.filePrepared(file, null);
         assertGatewayServiceUpdateCurrent();
         options?.definitionTransaction?.assertCurrent();
         await fs.unlink(file);

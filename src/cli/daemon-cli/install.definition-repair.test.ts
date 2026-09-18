@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
+import {
+  GatewayServiceDefinitionBackupReceiptSchema,
+  type GatewayServiceDefinitionBackupReceipt,
+} from "../../daemon/service-stage.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { resolveSystemdUnitPath } from "../../daemon/systemd-service-files.js";
@@ -281,6 +285,35 @@ function response() {
   return result;
 }
 
+async function expectDefinitionBackups(f: { source: string; original: string }) {
+  const directory = path.dirname(f.source);
+  const backups = (await fs.readdir(directory)).filter((file) =>
+    file.startsWith(`${path.basename(f.source)}.reconcile-`),
+  );
+  const originals = backups.filter(
+    (file) => file.endsWith(".bak") && !file.endsWith(".receipt.bak"),
+  );
+  const receipts = backups.filter((file) => file.endsWith(".receipt.bak"));
+  expect(originals).toHaveLength(1);
+  expect(receipts).toHaveLength(1);
+  const backup = path.join(directory, originals[0]!);
+  const checkpoint = path.join(directory, receipts[0]!);
+  expect(await fs.readFile(backup, "utf8")).toBe(f.original);
+  for (const file of [backup, checkpoint]) {
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  }
+  const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+    JSON.parse(await fs.readFile(checkpoint, "utf8")),
+  );
+  expect(backup).toBe(`${f.source}.reconcile-${receipt.id}.bak`);
+  expect(checkpoint).toBe(`${f.source}.reconcile-${receipt.id}.receipt.bak`);
+  expect(receipt.files[0]).toMatchObject({
+    sourcePath: f.source,
+    before: { sha256: createHash("sha256").update(f.original).digest("hex") },
+  });
+  return receipt;
+}
+
 it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as const)(
   "repairs a published-driver unit through the candidate installer with receipt and warning history (%s)",
   async (layout) => {
@@ -304,13 +337,7 @@ it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as c
     if (f.cliBinDir) {
       expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
     }
-    const backups = (await fs.readdir(path.dirname(f.source))).filter((file) =>
-      file.startsWith(`${path.basename(f.source)}.reconcile-`),
-    );
-    expect(backups).toHaveLength(1);
-    const backup = path.join(path.dirname(f.source), backups[0]!);
-    expect(await fs.readFile(backup, "utf8")).toBe(f.original);
-    expect((await fs.stat(backup)).mode & 0o777).toBe(0o600);
+    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
     expect(result.warnings).toContainEqual(
       expect.stringContaining("Reconciled Gateway service definition: Service.KillMode."),
     );
@@ -318,6 +345,50 @@ it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as c
       expect.objectContaining({
         step: expect.stringContaining("warning:managed-service-reconciliation"),
         detail: expect.stringContaining("Service.KillMode"),
+      }),
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves the previous definition and records recovery when a temporary unit write runs out of space",
+  async () => {
+    const f = await fixture();
+    const writeFile = fs.writeFile.bind(fs);
+    let injected = false;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [file, contents, options] = args;
+      if (
+        typeof file === "string" &&
+        file.startsWith(`${f.source}.`) &&
+        file.endsWith(".tmp") &&
+        typeof contents === "string" &&
+        contents.includes("KillMode=mixed")
+      ) {
+        injected = true;
+        await writeFile(file, contents.slice(0, 32), options);
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return writeFile(...args);
+    });
+    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
+    expect(injected).toBe(true);
+    const result = response();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("previous definition was restored");
+    expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
+    expect(result.definitionBackup).toBeUndefined();
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(/previous definition was restored:.*ENOSPC/u),
+    );
+    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    const receipt = await expectDefinitionBackups(f);
+    expect(receipt.files[0]?.after).toEqual(receipt.files[0]?.before);
+    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
+    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail: expect.stringMatching(/previous definition was restored:.*ENOSPC/u),
       }),
     );
   },

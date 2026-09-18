@@ -1,9 +1,12 @@
 /** Native writer facts are evidence, never serialized lifecycle authority. */
 import { createHash } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { constants } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
+import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 const fileState = z.strictObject({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -29,6 +32,7 @@ export const GatewayServiceStagedFilesSchema = z.strictObject({
 export type GatewayServiceStagedFiles = z.infer<typeof GatewayServiceStagedFilesSchema>;
 const definitionFile = GatewayServiceStagedFilesSchema.shape.files.element.extend({
   after: fileState.nullable(),
+  prepared: fileState.nullable().optional(),
 });
 export const GatewayServiceDefinitionBackupReceiptSchema = z.strictObject({
   id: z.uuid(),
@@ -47,10 +51,51 @@ export type GatewayServiceDefinitionBackupReceipt = z.infer<
 export type GatewayServiceDefinitionTransactionHooks = {
   assertCurrent: () => void;
   beforeWrite: () => Promise<void>;
+  filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;
   fileWritten: (sourcePath: string, contents: string | Uint8Array | null) => Promise<void>;
   taskWritten: (expectedXml: string) => Promise<void>;
 };
 type GatewayServiceFileState = z.infer<typeof fileState>;
+
+/** Keep the live file runnable until a complete replacement is ready. */
+export async function publishServiceFile(params: {
+  filePath: string;
+  contents: string | Uint8Array;
+  mode: number;
+  definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
+  beforeRename?: () => Promise<void>;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const hooks = params.definitionTransaction;
+  const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
+  assertGatewayServiceUpdateCurrent();
+  await replaceFileAtomic({
+    filePath: params.filePath,
+    content: params.contents,
+    mode: params.mode,
+    dirMode,
+    tempPrefix: `.${path.basename(params.filePath)}.openclaw`,
+    syncTempFile: true,
+    syncParentDir: true,
+    // Windows sharing violations must preserve the old launcher, never copy over it.
+    copyFallbackOnPermissionError: false,
+    fileSystem: {
+      promises: {
+        ...fs,
+        rename: async (temporary, target) => {
+          await params.beforeRename?.();
+          await hooks?.beforeWrite();
+          await hooks?.filePrepared(params.filePath, String(temporary));
+          assertGatewayServiceUpdateCurrent();
+          hooks?.assertCurrent();
+          params.assertCurrent?.();
+          await fs.rename(temporary, target);
+        },
+      },
+    },
+  });
+  await hooks?.fileWritten(params.filePath, params.contents);
+}
 
 /** Read one stable regular file; publication owners compare it to retained write facts. */
 export async function readServiceFileState(file: string): Promise<GatewayServiceFileState | null> {

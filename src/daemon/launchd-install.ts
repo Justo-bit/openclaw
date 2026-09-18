@@ -1,5 +1,4 @@
 /** Transactional LaunchAgent installation, staging, rollback, and removal. */
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
@@ -27,6 +26,7 @@ import {
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
@@ -171,6 +171,7 @@ async function restoreLaunchAgentOwnedFile(params: {
 }): Promise<void> {
   if (params.contents === null) {
     await params.definitionTransaction?.beforeWrite();
+    await params.definitionTransaction?.filePrepared(params.path, null);
     assertGatewayServiceUpdateCurrent();
     params.definitionTransaction?.assertCurrent();
     await fs.unlink(params.path).catch((error: unknown) => {
@@ -181,23 +182,12 @@ async function restoreLaunchAgentOwnedFile(params: {
     await params.definitionTransaction?.fileWritten(params.path, null);
     return;
   }
-  const temporaryPath = `${params.path}.openclaw-${randomUUID()}.rollback`;
-  try {
-    assertGatewayServiceUpdateCurrent();
-    await fs.writeFile(temporaryPath, params.contents, {
-      flag: "wx",
-      mode: params.mode,
-    });
-    await params.definitionTransaction?.beforeWrite();
-    assertGatewayServiceUpdateCurrent();
-    params.definitionTransaction?.assertCurrent();
-    await fs.rename(temporaryPath, params.path);
-    assertGatewayServiceUpdateCurrent();
-    await fs.chmod(params.path, params.mode).catch(() => undefined);
-    await params.definitionTransaction?.fileWritten(params.path, params.contents);
-  } finally {
-    await fs.unlink(temporaryPath).catch(() => undefined);
-  }
+  await publishServiceFile({
+    filePath: params.path,
+    contents: params.contents,
+    mode: params.mode,
+    definitionTransaction: params.definitionTransaction,
+  });
 }
 
 async function restoreLaunchAgentInstallArtifacts(params: {

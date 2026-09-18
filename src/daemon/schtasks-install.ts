@@ -42,6 +42,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
@@ -144,11 +145,12 @@ async function writeScheduledTaskScript({
     environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
   });
   const scriptBytes = encodeWindowsLauncherScript({ format: "cmd", content: script });
-  await definitionTransaction?.beforeWrite();
-  assertGatewayServiceUpdateCurrent();
-  definitionTransaction?.assertCurrent();
-  await fs.writeFile(scriptPath, scriptBytes);
-  await definitionTransaction?.fileWritten(scriptPath, scriptBytes);
+  await publishServiceFile({
+    filePath: scriptPath,
+    contents: scriptBytes,
+    mode: 0o600,
+    definitionTransaction,
+  });
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({
       description: taskDescription,
@@ -156,11 +158,12 @@ async function writeScheduledTaskScript({
       taskSupervisor: environment?.OPENCLAW_SERVICE_KIND === "gateway",
     });
     const launcherBytes = encodeWindowsLauncherScript({ format: "vbs", content: launcher });
-    await definitionTransaction?.beforeWrite();
-    assertGatewayServiceUpdateCurrent();
-    definitionTransaction?.assertCurrent();
-    await fs.writeFile(taskLaunchPath, launcherBytes);
-    await definitionTransaction?.fileWritten(taskLaunchPath, launcherBytes);
+    await publishServiceFile({
+      filePath: taskLaunchPath,
+      contents: launcherBytes,
+      mode: 0o600,
+      definitionTransaction,
+    });
   }
   return { scriptPath, taskLaunchPath, taskDescription };
 }
@@ -321,13 +324,14 @@ async function activateScheduledTask(params: {
             scriptPath: params.scriptPath,
           });
       assertGatewayServiceUpdateCurrent();
-      await fs.writeFile(
-        startupEntryPath,
-        encodeWindowsLauncherScript({
+      await publishServiceFile({
+        filePath: startupEntryPath,
+        contents: encodeWindowsLauncherScript({
           format: useHiddenLauncher ? "vbs" : "cmd",
           content: launcher,
         }),
-      );
+        mode: 0o600,
+      });
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,

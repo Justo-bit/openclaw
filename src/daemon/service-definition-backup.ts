@@ -5,7 +5,6 @@ import { Writable } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import {
@@ -25,6 +24,7 @@ import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
+  publishServiceFile,
   readServiceFileState,
   type GatewayServiceDefinitionBackupReceipt,
   type GatewayServiceDefinitionTransactionHooks,
@@ -53,6 +53,28 @@ const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
+  `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
+type FileState = GatewayServiceDefinitionBackupReceipt["files"][number]["after"];
+
+function matchesPreparedPublication(current: FileState, prepared: FileState): boolean {
+  // Rename may change ctime; the staged inode and payload still identify our write.
+  return current === null
+    ? prepared === null
+    : prepared !== null &&
+        (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
+          (key) => current[key] === prepared[key],
+        );
+}
+
+async function checkpointReceipt(params: Context, receipt: GatewayServiceDefinitionBackupReceipt) {
+  await publishServiceFile({
+    filePath: receiptPath(receipt),
+    contents: JSON.stringify(receipt),
+    mode: 0o600,
+    assertCurrent: params.assertCurrent,
+  });
+}
 
 function definitionFiles({ env, command }: Omit<Context, "assertCurrent">): string[] {
   const environment = resolveManagedGatewayServiceCommand(command)?.environment;
@@ -131,6 +153,17 @@ function mutationHooks(
         throw new Error("SERVICE_DEFINITION_UNKNOWN: Service definition disappeared.");
       }
       assertInventory({ ...params, command }, receipt);
+      for (const file of receipt.files) {
+        if (file.prepared !== undefined) {
+          const current = await readServiceFileState(file.sourcePath);
+          if (matchesPreparedPublication(current, file.prepared)) {
+            file.after = current;
+            delete file.prepared;
+          } else if (isDeepStrictEqual(current, file.after)) {
+            delete file.prepared;
+          }
+        }
+      }
       for (const { sourcePath, after } of [...receipt.files, ...receipt.guards]) {
         if (!isDeepStrictEqual(after, await readServiceFileState(sourcePath))) {
           throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
@@ -144,16 +177,40 @@ function mutationHooks(
       }
       assertCurrent();
     },
+    filePrepared: async (sourcePath, temporaryPath) => {
+      const file = receipt.files.find((entry) => entry.sourcePath === sourcePath);
+      const prepared = temporaryPath === null ? null : await readServiceFileState(temporaryPath);
+      assertCurrent();
+      if (
+        !file ||
+        (temporaryPath !== null &&
+          (!prepared ||
+            (await fs.realpath(path.dirname(temporaryPath))) !==
+              (await fs.realpath(path.dirname(sourcePath)))))
+      ) {
+        throw new Error("Service publication was not staged beside its managed target.");
+      }
+      file.prepared = prepared;
+      await checkpointReceipt(params, receipt);
+      assertCurrent();
+    },
     fileWritten: async (sourcePath, contents) => {
       const file = receipt.files.find((entry) => entry.sourcePath === sourcePath);
       const after = await readServiceFileState(sourcePath);
       assertCurrent();
-      if (!file || (contents === null ? after !== null : after?.sha256 !== sha256Hex(contents))) {
+      if (
+        !file ||
+        file.prepared === undefined ||
+        !matchesPreparedPublication(after, file.prepared) ||
+        (contents === null ? after !== null : after?.sha256 !== sha256Hex(contents))
+      ) {
         throw new Error(
           `SERVICE_DEFINITION_UNKNOWN: Could not verify service publication: ${sourcePath}`,
         );
       }
       file.after = after;
+      delete file.prepared;
+      await checkpointReceipt(params, receipt);
     },
     taskWritten: async (expectedXml) => {
       if (!receipt.task) {
@@ -174,6 +231,7 @@ function mutationHooks(
         );
       }
       receipt.task.afterPolicySha256 = taskPolicy(xml);
+      await checkpointReceipt(params, receipt);
     },
   };
 }
@@ -234,6 +292,8 @@ export async function captureGatewayServiceDefinitionBackup(
       return file;
     }),
   );
+  await checkpointReceipt(params, receipt);
+  backupPaths.push(receiptPath(receipt));
   await hooks.beforeWrite();
   return {
     backupPaths,
@@ -346,11 +406,10 @@ export async function restoreGatewayServiceDefinitionBackup(
           (a.index === 0 ? 1 : a.file.before ? 0 : 2) - (b.index === 0 ? 1 : b.file.before ? 0 : 2),
       );
     for (const { file, index } of order) {
-      if (isDeepStrictEqual(file.before, file.after)) {
+      if (file.before?.sha256 === file.after?.sha256 && file.before?.mode === file.after?.mode) {
         continue;
       }
       const content = contents[index]!;
-      const dirMode = (await fs.stat(path.dirname(file.sourcePath))).mode;
       await hooks.beforeWrite();
       if (native) {
         if (content) {
@@ -367,20 +426,20 @@ export async function restoreGatewayServiceDefinitionBackup(
         }
       } else {
         if (content) {
-          replaceFileAtomicSync({
+          await publishServiceFile({
             filePath: file.sourcePath,
-            content,
+            contents: content,
             mode: file.before!.mode,
-            dirMode,
-            syncTempFile: true,
-            syncParentDir: true,
-            beforeRename: hooks.assertCurrent,
+            definitionTransaction: hooks,
           });
         } else {
+          await hooks.filePrepared(file.sourcePath, null);
           hooks.assertCurrent();
           await fs.unlink(file.sourcePath);
         }
-        await hooks.fileWritten(file.sourcePath, content);
+        if (!content) {
+          await hooks.fileWritten(file.sourcePath, null);
+        }
       }
     }
   };
@@ -394,7 +453,10 @@ export async function restoreGatewayServiceDefinitionBackup(
   } else {
     await restoreFiles();
   }
-  if (task) {
+  if (
+    task &&
+    receipt.task!.afterPolicySha256 !== taskPolicy(task.subarray(2).toString("utf16le"))
+  ) {
     await restoreScheduledTaskDefinition({
       env: params.env,
       xml: task.subarray(2).toString("utf16le"),

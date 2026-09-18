@@ -3,6 +3,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "../cli/cli-process-child.test-helpers.js";
 import { stageLaunchAgent } from "./launchd-install.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { restartLaunchAgent } from "./launchd-lifecycle.js";
@@ -16,6 +20,7 @@ import { installScheduledTask } from "./schtasks-install.js";
 import {
   buildScheduledTaskXml,
   resolveTaskScriptPath,
+  readScheduledTaskCommand,
   resolveStartupEntryPaths,
 } from "./schtasks-layout.js";
 import {
@@ -264,6 +269,230 @@ async function fixture(
 }
 
 describe("service definition backup receipts", () => {
+  it("accepts already-restored bytes without replacing an open Windows launcher again", async () => {
+    const f = await fixture("win32");
+    await f.install();
+    await fs.writeFile(f.sourcePath, f.original);
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (args[1] === f.sourcePath) {
+        throw Object.assign(new Error("launcher is open"), { code: "EPERM" });
+      }
+      return rename(...args);
+    });
+    await f.capture.compensate();
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toBe(f.originalTask);
+  });
+
+  it("rejects an identical operator replacement before publication acknowledgement", async () => {
+    const f = await fixture("win32");
+    const acknowledge = f.capture.hooks.fileWritten;
+    vi.spyOn(f.capture.hooks, "fileWritten").mockImplementationOnce(async (source, contents) => {
+      const replacement = `${source}.operator`;
+      await fs.copyFile(source, replacement);
+      await fs.rename(replacement, source);
+      await acknowledge(source, contents);
+    });
+    await expect(f.install()).rejects.toThrow("Could not verify service publication");
+    const edited = await fs.readFile(f.sourcePath);
+    await expect(f.capture.compensate()).rejects.toThrow("Service definition changed");
+    expect(await fs.readFile(f.sourcePath)).toEqual(edited);
+  });
+
+  it.each(["EPERM", "EBUSY", "EEXIST"])(
+    "preserves a Windows launcher when rename-over is denied with %s",
+    async (code) => {
+      const f = await fixture("win32", true);
+      const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        if (args[1] === f.sourcePath) {
+          throw Object.assign(new Error(`launcher is open: ${code}`), { code });
+        }
+        return rename(...args);
+      });
+      await expect(f.install()).rejects.toThrow(code);
+      await f.capture.compensate();
+      expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+      expect(
+        native.task.mock.calls.some(([args]) => args[0] === "/Create" || args[0] === "/Run"),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["same bytes", "different bytes"])(
+    "preserves a later replacement with %s instead of adopting it as the prepared publication",
+    async (replacement) => {
+      const f = await fixture("win32");
+      const rename = fs.rename.bind(fs);
+      let interrupted = false;
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (!interrupted && args[1] === f.sourcePath) {
+          interrupted = true;
+          const edited = `${f.sourcePath}.operator`;
+          await fs.writeFile(
+            edited,
+            replacement === "same bytes" ? await fs.readFile(f.sourcePath) : "operator edit",
+            { mode: 0o600 },
+          );
+          await rename(edited, f.sourcePath);
+          throw new Error("interrupted after operator replacement");
+        }
+      });
+      await expect(f.install()).rejects.toThrow("interrupted after operator replacement");
+      const bytes = await fs.readFile(f.sourcePath);
+      const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"))!;
+      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+        JSON.parse(await fs.readFile(checkpoint, "utf8")),
+      );
+      await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+        "Service definition changed",
+      );
+      expect(await fs.readFile(f.sourcePath)).toEqual(bytes);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["partial-write", "before-rename"])(
+    "retains the runnable launcher and restorable receipt when its writer crashes at %s",
+    async (fault) => {
+      const f = await fixture("win32");
+      const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"));
+      const originalCommand = await readScheduledTaskCommand(f.env);
+      const script = `
+        import fs from "node:fs/promises";
+        import path from "node:path";
+        import { stageScheduledTask } from ${JSON.stringify(new URL("./schtasks-install.ts", import.meta.url).href)};
+        const target = ${JSON.stringify(f.sourcePath)};
+        const write = fs.writeFile.bind(fs);
+        const open = fs.open.bind(fs);
+        const rename = fs.rename.bind(fs);
+        const pause = async () => {
+          setInterval(() => {}, 1000);
+          process.stderr.write("PUBLICATION_WRITE_OPEN\\n");
+          await new Promise(() => {});
+        };
+        let temporary;
+        fs.open = async (...args) => {
+          const handle = await open(...args);
+          if (typeof args[0] === "string" && path.basename(args[0]).startsWith("." + path.basename(target) + ".openclaw.") && args[1] === "wx") temporary = handle;
+          return handle;
+        };
+        fs.writeFile = async (...args) => {
+          if (${JSON.stringify(fault)} === "partial-write" && (args[0] === target || (temporary && args[0] === temporary))) {
+            await write(args[0], "", args[2]);
+            await pause();
+          }
+          return write(...args);
+        };
+        fs.rename = async (...args) => {
+          if (${JSON.stringify(fault)} === "before-rename" && args[1] === target) await pause();
+          return rename(...args);
+        };
+        await stageScheduledTask({
+          env: ${JSON.stringify(f.env)}, stdout: process.stdout,
+          programArguments: [process.execPath, "candidate.js", "gateway"],
+        });
+      `;
+      const result = await runCliProcessChild({
+        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        env: {
+          PATH: process.env.PATH,
+          HOME: f.env.HOME,
+          OPENCLAW_STATE_DIR: f.env.OPENCLAW_STATE_DIR,
+        },
+        interact: async (child) => {
+          await waitForCliProcessStderrMarker(child, "PUBLICATION_WRITE_OPEN");
+          child.kill("SIGKILL");
+        },
+      });
+      expect(result.signal, result.stderr).toBe("SIGKILL");
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      expect(await readScheduledTaskCommand(f.env)).toEqual(originalCommand);
+      expect(checkpoint).toBeDefined();
+      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+        JSON.parse(await fs.readFile(checkpoint!, "utf8")),
+      );
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    },
+  );
+
+  it.each([
+    { platform: "win32", index: 0 },
+    { platform: "win32", index: 1 },
+    { platform: "darwin", index: 0 },
+    { platform: "darwin", index: 1 },
+    { platform: "darwin", index: 2 },
+    { platform: "linux", index: 0 },
+  ] as const)(
+    "restores a checkpoint after $platform artifact $index was renamed before acknowledgement",
+    async ({ platform, index }) => {
+      const f = await fixture(platform, true);
+      const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+      const rename = fs.rename.bind(fs);
+      let interrupted = false;
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (!interrupted && args[1] === f.files[index]) {
+          interrupted = true;
+          throw new Error("interrupted after rename");
+        }
+      });
+      await expect(f.install()).rejects.toThrow("interrupted after rename");
+      const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"));
+      expect(checkpoint).toBeDefined();
+      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+        JSON.parse(await fs.readFile(checkpoint!, "utf8")),
+      );
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+    },
+  );
+
+  it.each([
+    { platform: "win32", index: 0 },
+    { platform: "win32", index: 1 },
+    { platform: "darwin", index: 1 },
+    { platform: "darwin", index: 2 },
+  ] as const)(
+    "keeps live $platform artifact $index intact when publication runs out of space",
+    async ({ platform, index }) => {
+      const f = await fixture(platform, true);
+      const target = f.files[index]!;
+      const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+      const open = fs.open.bind(fs);
+      const write = fs.writeFile.bind(fs);
+      let temporary: Awaited<ReturnType<typeof fs.open>> | undefined;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          typeof args[0] === "string" &&
+          path.basename(args[0]).startsWith(`.${path.basename(target)}.openclaw.`) &&
+          args[1] === "wx"
+        ) {
+          temporary = handle;
+        }
+        return handle;
+      });
+      let failed = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        if (!failed && (args[0] === target || (temporary && args[0] === temporary))) {
+          failed = true;
+          await write(args[0], "partial", args[2]);
+          throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC" });
+        }
+        return write(...args);
+      });
+      await expect(f.install()).rejects.toThrow("ENOSPC");
+      expect(failed).toBe(true);
+      expect(await fs.readFile(target)).toEqual(before[index]);
+      await f.capture.compensate();
+      expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+    },
+  );
+
   it.each([false, true])(
     "reloads the restored systemd definition before retiring its old inputs (authority expires=%s)",
     async (expires) => {
@@ -466,7 +695,10 @@ describe("service definition backup receipts", () => {
         await fs.appendFile(f.sourcePath, "operator-edit");
       }
       if (fault === "damaged backup") {
-        await fs.writeFile(f.capture.backupPaths.at(-1)!, "damaged");
+        await fs.writeFile(
+          f.capture.backupPaths.filter((file) => !file.endsWith(".receipt.bak")).at(-1)!,
+          "damaged",
+        );
       }
       if (fault === "expired authority") {
         f.expire();
