@@ -50,6 +50,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** The node's selected source must explicitly support Chat continuation. */
+  canContinueCodex?: boolean;
   /** Internal provenance filtered before this page reaches the provider catalog. */
   managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
@@ -96,9 +98,11 @@ export type CodexSessionCatalogControlFactory = {
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
   /** Native default, with the shipped agent selector retained for explicitly configured sources. */
   forNode(agentId?: string): Promise<{
+    assertCurrent(): void;
     control: CodexSessionCatalogControl;
     sourceHomeId: string;
     codexHome: string;
+    transport: CodexAppServerRuntimeOptions["start"]["transport"];
   }>;
   homesForAgent(agentId: string): Promise<readonly CodexCatalogHome[]>;
   forUpstream(

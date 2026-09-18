@@ -472,6 +472,9 @@ export function parseCatalogPage(
   );
   return {
     sessions: value.sessions.map((session) => parseCatalogSession(session, options)),
+    ...(typeof value.canContinueCodex === "boolean"
+      ? { canContinueCodex: value.canContinueCodex }
+      : {}),
     ...(nextCursor ? { nextCursor } : {}),
     ...(backwardsCursor ? { backwardsCursor } : {}),
   };

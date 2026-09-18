@@ -10,7 +10,11 @@ import {
 import type { CodexThread } from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
 import { createCodexCliNodeConversationBindingData } from "./conversation-binding-data.js";
-import { CODEX_CLI_SESSION_RESUME_COMMAND } from "./node-cli-sessions.js";
+import {
+  CODEX_CLI_SESSION_RESUME_COMMAND,
+  CODEX_CLI_SESSION_SOURCE_CAPABILITY,
+  CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE,
+} from "./node-cli-sessions.js";
 import {
   createOrReuseNodeAdoptedSession,
   finalizeNodeAdoptedSession,
@@ -79,6 +83,7 @@ export function compareNodeLabels(left: CatalogNode, right: CatalogNode): number
 function canContinueCodexOnNode(node: CatalogNode): boolean {
   return (
     node.connected === true &&
+    node.caps?.includes(CODEX_CLI_SESSION_SOURCE_CAPABILITY) === true &&
     CODEX_NODE_CONTINUE_COMMANDS.every(
       (command) =>
         node.commands?.includes(command) === true &&
@@ -146,6 +151,7 @@ export async function listPairedNode(params: {
         ...common,
         connected: true,
         ...page,
+        canContinueCodex: common.canContinueCodex && page.canContinueCodex === true,
         sessions: page.sessions.map((session) => {
           const adopted = params.adoptedSessions.get(
             sessionCatalogAdoptedSourceKey(hostId, session.threadId),
@@ -190,6 +196,9 @@ async function requireNodeForCodexContinue(params: {
     (candidate) => candidate.nodeId === nodeId,
   );
   if (!node || !canContinueCodexOnNode(node)) {
+    if (node?.connected && !node.caps?.includes(CODEX_CLI_SESSION_SOURCE_CAPABILITY)) {
+      throw new CatalogParamsError(CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE);
+    }
     throw new CatalogParamsError("paired node does not permit Codex session continuation");
   }
   return { node, nodeId };
@@ -281,6 +290,11 @@ async function continueNodeCodexSessionInner(params: {
       lookup.kind === "cursor-cycle"
         ? "Codex session eligibility could not be verified"
         : "Codex session is unavailable on the paired node",
+    );
+  }
+  if (lookup.canContinueCodex !== true) {
+    throw new CatalogParamsError(
+      "Codex session source does not support Chat continuation; use a local stdio source or update the node.",
     );
   }
   const record = lookup.record;

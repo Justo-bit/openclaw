@@ -14,7 +14,7 @@ import type { CodexThread } from "./app-server/protocol.js";
 import { CatalogParamsError } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
-const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
+export const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
 
 type CatalogSessionEntry = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -81,7 +81,9 @@ function nodeAdoptionSessionKey(hostId: string, threadId: string): string {
   return sessionCatalogAdoptedSessionKey(CODEX_NODE_SESSION_KEY_PREFIX, source);
 }
 
-function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMarker | undefined {
+export function readNodeSessionMarker(
+  entry: CatalogSessionEntry,
+): CodexNodeSessionMarker | undefined {
   const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : undefined;
   const marker = codex && isRecord(codex.sessionCatalog) ? codex.sessionCatalog : undefined;
   if (

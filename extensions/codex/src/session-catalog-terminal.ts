@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
@@ -20,7 +21,10 @@ import {
   isInteractiveThreadSource,
 } from "./session-catalog-parsing.js";
 import { resolveNodeHostExecutable, runNodePtyCommand } from "./session-catalog-pty.runtime.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 export const CODEX_TERMINAL_START_COMMAND = "codex.terminal.start.v1";
@@ -84,6 +88,9 @@ function resolveCodexCatalogTerminalHome(
     sources.resolveRuntimeOptions({
       pluginConfig: sources.getPluginConfig(),
     }).start;
+  if (startOptions.transport !== "stdio") {
+    throw new CatalogParamsError("Native terminal requires a local Codex source");
+  }
   return resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
 }
 
@@ -118,8 +125,10 @@ export function codexNodeTerminalCapability(node: {
 
 export function createCodexTerminalNodeHostCommand(
   bindRequest: (paramsJSON?: string | null) => Promise<{
+    assertCurrent(): void;
     codexHome: string;
     control: CodexSessionCatalogControl;
+    transport: Awaited<ReturnType<CodexSessionCatalogControlFactory["forNode"]>>["transport"];
     paramsJSON: string;
   }>,
 ): OpenClawPluginNodeHostCommand {
@@ -128,7 +137,9 @@ export function createCodexTerminalNodeHostCommand(
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
-    isAvailable: ({ env }) =>
+    isAvailable: ({ config, env }) =>
+      (readCodexPluginConfig(config.plugins?.entries?.codex?.config).appServer?.transport ??
+        "stdio") === "stdio" &&
       Boolean(
         resolveNodeHostExecutable("codex", {
           env,
@@ -141,6 +152,9 @@ export function createCodexTerminalNodeHostCommand(
         throw new Error("Codex terminal command requires duplex transport");
       }
       const request = await bindRequest(paramsJSON);
+      if (request.transport !== "stdio") {
+        throw new CatalogParamsError("Native terminal requires a local Codex source");
+      }
       const resume = decodeNodePtyResumeParams(request.paramsJSON, (value) => {
         if (
           typeof value !== "string" ||
@@ -159,11 +173,13 @@ export function createCodexTerminalNodeHostCommand(
       if (!resolution) {
         throw new Error("Codex CLI is unavailable");
       }
+      request.assertCurrent();
       return JSON.stringify(
         await runNodePtyCommand(
           {
             file: resolution.executable,
             args: ["resume", resume.threadId],
+            assertCurrent: () => request.assertCurrent(),
             ...(record.cwd ? { cwd: record.cwd } : {}),
             env: {
               CODEX_HOME: request.codexHome,

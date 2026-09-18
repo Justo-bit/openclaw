@@ -289,6 +289,7 @@ struct MacNodeCodexThreadCatalogTests {
         let session = try #require(sessions.first)
 
         #expect(decoded["codexHome"] == nil)
+        #expect(decoded["canContinueCodex"] as? Bool == true)
         #expect(decoded["nextCursor"] as? String == "next-page")
         #expect(decoded["backwardsCursor"] as? String == "previous-page")
         #expect(session["threadId"] as? String == "thread-1")

@@ -92,7 +92,7 @@ export function createCodexSessionCatalogNodeHostCommands(
               : {}),
             searchTerm: pageParams.searchTerm,
           });
-          return JSON.stringify(page);
+          return JSON.stringify({ ...page, canContinueCodex: request.transport === "stdio" });
         } catch {
           // App-server stderr and transport details stay on the node boundary.
           throw new Error("Codex app-server catalog is unavailable");

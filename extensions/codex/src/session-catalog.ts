@@ -227,15 +227,16 @@ function catalogHostMapper(
     const diagnostics = currentCodexCatalogListDiagnostics();
     const started = diagnostics ? performance.now() : 0;
     try {
+      const localSourceAvailable =
+        localTerminalAvailable &&
+        localHomes.some(
+          (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
+        );
       return {
-        ...toGenericCatalogHost(host, localTerminalAvailable),
+        ...toGenericCatalogHost(host, localSourceAvailable),
         canStartTerminal:
           host.kind === "gateway"
-            ? localTerminalAvailable &&
-              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
-              localHomes.some(
-                (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-              )
+            ? localSourceAvailable && host.hostId === CODEX_LOCAL_SESSION_HOST_ID
             : host.canStartTerminal === true,
       };
     } finally {

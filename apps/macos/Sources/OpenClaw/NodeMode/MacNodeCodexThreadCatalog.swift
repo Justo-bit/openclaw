@@ -151,6 +151,7 @@ enum MacNodeCodexThreadCatalog {
     private static let maxSearchPageCalls = 4
 
     private struct WireResponse: Encodable {
+        let canContinueCodex = true
         var sessions: [WireSession]
         var nextCursor: String?
         var backwardsCursor: String?

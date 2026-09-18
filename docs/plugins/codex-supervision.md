@@ -239,6 +239,10 @@ home if it disappears. Commands accept only cwd, an optional prompt, and termina
 dimensions, not caller-supplied executables, argv, environment, or credentials.
 Closing the terminal cancels its node invocation. Disconnects and stale pairing
 or connection generations are handled by the same terminal relay as resume.
+Opening an existing session in a terminal also requires a local stdio source or
+a paired node that advertises terminal resume. Unix and WebSocket catalogs
+connected directly to the Gateway remain available for browsing and Chat
+continuation. For terminal access, open a native client configured for that server.
 See [native CLI creation](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli) for UI controls
 and prerequisites. Existing catalog viewing, resume, and Chat continuation keep
 their separate ownership contracts.
@@ -523,6 +527,14 @@ commands:
 - `codex.appServer.thread.turns.list.v1`
 - `codex.cli.session.resume`
 
+The node must also advertise support for resuming the selected catalog source.
+Paired-node Chat continuation requires that source to use local stdio; Unix and
+WebSocket sources remain browsable but cannot be continued through the node's CLI.
+If OpenClaw requests an upgrade, update the node and approve its refreshed
+capabilities. Older nodes remain available for browsing; the existing Chat is
+preserved. Legacy CLI bindings that resume the node's native user home retain
+their existing behavior.
+
 The CLI-resume command is a dangerous node command: it needs explicit Gateway
 command allowlisting (`gateway.nodes.commands.allow`) as well as approval of
 the node's command surface. A deny rule still blocks it. The native macOS catalog
@@ -544,7 +556,8 @@ events, approvals, tool calls, or structured attachments. Bound turns still
 require owner/admin authority and are blocked while OpenClaw sandboxing is active.
 
 Avoid running the same thread in another Codex client while using this Chat.
-The node prevents overlapping OpenClaw resume turns within its own process, but
+The node prevents overlapping OpenClaw resume turns for the same thread and
+canonical store within its own process, but
 `notLoaded` does not prove that another native client is idle and there is no
 cross-process runner lease. Paired-node **Archive** remains unavailable,
 regardless of continuation or terminal capabilities.

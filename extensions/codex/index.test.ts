@@ -209,7 +209,13 @@ describe("codex plugin", () => {
       const command = createCodexSessionCatalogNodeHostCommands(
         {
           forRequest: () => control,
-          forNode: async () => ({ control, sourceHomeId: "home", codexHome: "/synthetic" }),
+          forNode: async () => ({
+            control,
+            sourceHomeId: "home",
+            codexHome: "/synthetic",
+            transport: "stdio",
+            assertCurrent: () => {},
+          }),
           homesForAgent: async () => [],
           forUpstream: async () => undefined,
         },

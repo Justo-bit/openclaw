@@ -5011,6 +5011,7 @@ describe("codex command", () => {
       const stopTracking = trackCodexConversationActiveTurn({
         identity,
         client: harness.client,
+        requestTimeoutMs: 60_000,
         threadId: `thread-queued-${command}`,
         turnId: "turn-1",
       });
@@ -6209,7 +6210,6 @@ describe("codex command", () => {
 
   it("stops the active bound Codex turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const pluginConfig = { appServer: { homeScope: "agent" as const } };
     const stopCodexConversationTurn = vi.fn(async () => ({
       stopped: true,
       message: "Codex stop requested.",
@@ -6217,16 +6217,13 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createContext("stop", sessionFile), {
-        pluginConfig,
         deps: createDeps({ stopCodexConversationTurn }),
       }),
     ).resolves.toEqual({ text: "Codex stop requested." });
     expect(stopCodexConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         identity: { kind: "session", agentId: "main", sessionId: "session-1" },
-        pluginConfig,
-        agentDir: path.join(tempDir, "agents", "main", "agent"),
-        config: {},
+        assertCurrent: expect.any(Function),
       }),
     );
   });
@@ -6269,7 +6266,6 @@ describe("codex command", () => {
 
   it("steers the active bound Codex turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const pluginConfig = { appServer: { homeScope: "agent" as const } };
     const steerCodexConversationTurn = vi.fn(async () => ({
       steered: true,
       message: "Sent steer message to Codex.",
@@ -6277,7 +6273,6 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createContext("steer focus tests first", sessionFile), {
-        pluginConfig,
         deps: createDeps({ steerCodexConversationTurn }),
       }),
     ).resolves.toEqual({ text: "Sent steer message to Codex." });
@@ -6285,9 +6280,7 @@ describe("codex command", () => {
       expect.objectContaining({
         identity: { kind: "session", agentId: "main", sessionId: "session-1" },
         message: "focus tests first",
-        pluginConfig,
-        agentDir: path.join(tempDir, "agents", "main", "agent"),
-        config: {},
+        assertCurrent: expect.any(Function),
       }),
     );
   });
@@ -6979,6 +6972,7 @@ describe("codex command", () => {
               readCodexConversationActiveTurn: vi.fn(() => ({
                 identity: { kind: "conversation" as const, bindingId: "binding-data-1" },
                 client: { request: vi.fn() } as never,
+                requestTimeoutMs: 60_000,
                 threadId: "thread-123",
                 turnId: "turn-1",
                 interrupt: vi.fn(),

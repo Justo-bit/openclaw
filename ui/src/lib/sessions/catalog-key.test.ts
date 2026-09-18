@@ -18,10 +18,18 @@ describe("catalog session keys", () => {
     (value) => expect(parseCatalogSessionKey(value)).toBeNull(),
   );
 
-  it("round-trips a catalog thread URL target", () => {
-    const key = { catalogId: "claude", hostId: "node:abc", threadId: "thread:a/b" };
-    expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
-  });
+  it.each([undefined, "home:a/b"])(
+    "round-trips a catalog thread URL target for source %s",
+    (sourceHomeId) => {
+      const key = {
+        catalogId: "claude",
+        hostId: "node:abc",
+        threadId: "thread:a/b",
+        ...(sourceHomeId ? { sourceHomeId } : {}),
+      };
+      expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
+    },
+  );
 
   it("keeps the explicit agent owner across paginated lookup requests", async () => {
     const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };

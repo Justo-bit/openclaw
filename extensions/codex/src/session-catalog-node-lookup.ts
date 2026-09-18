@@ -17,7 +17,8 @@ export async function lookupNodeCodexCatalogRecord(params: {
   nodeId: string;
   threadId: string;
 }): Promise<
-  { kind: "found"; record: CodexSessionCatalogSession } | { kind: "missing" | "cursor-cycle" }
+  | { kind: "found"; record: CodexSessionCatalogSession; canContinueCodex?: boolean }
+  | { kind: "missing" | "cursor-cycle" }
 > {
   const deadline = performance.now() + NODE_INVOKE_TIMEOUT_MS;
   const unverified = () =>
@@ -53,7 +54,7 @@ export async function lookupNodeCodexCatalogRecord(params: {
     const page = parseCatalogPage(unwrapNodeInvokePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
     if (record) {
-      return { kind: "found", record };
+      return { kind: "found", record, canContinueCodex: page.canContinueCodex };
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
