@@ -1,3 +1,4 @@
+import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   ErrorCodes,
   errorShape,
@@ -5,6 +6,8 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveExecConfigState } from "../../agents/exec-defaults.js";
+import { resolveAgentHarnessExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -12,9 +15,11 @@ import {
   resolveAllowedModelRef,
   type ModelRef,
 } from "../../agents/model-selection.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
@@ -33,7 +38,9 @@ export function persistSessionPatchModelSelection(params: {
   sessionKey: string;
   targetAgentId: string;
 }): void {
-  if (typeof params.patch.model !== "string") {
+  // Combined execution-policy recovery is explicitly scoped to this chat, even
+  // when ordinary model selections normally update agent/global defaults.
+  if (typeof params.patch.model !== "string" || params.patch.sandboxMode !== undefined) {
     return;
   }
   const policy = resolveGatewayModelSelectionPolicy({
@@ -160,6 +167,8 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   entry: SessionEntry;
   placement?: { context: SessionWorkerPlacementContext; sessionKey: string };
   catalog?: readonly ModelCatalogEntry[];
+  callerCanRunUnsandboxed?: boolean;
+  expectedEntry?: SessionEntry;
 }): Promise<
   { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
 > {
@@ -168,6 +177,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     error: errorShape(ErrorCodes.INVALID_REQUEST, message),
   });
   let validateRuntime: (() => string | undefined) | undefined;
+  let validateEnvironment: (() => ErrorShape | undefined) | undefined;
   if (typeof params.patch.agentRuntime === "string" || typeof params.patch.model === "string") {
     const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
     const choice = await prepareModelSelectionRuntime({
@@ -188,8 +198,72 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     }
     applyModelRuntimeDirective(params.entry, choice.runtime);
     validateRuntime = choice.validateRuntimeSelection;
+    if (choice.executionEnvironment && choice.runtime.kind === "set") {
+      const runtimeId = choice.runtime.runtime;
+      const runtimeLabel = choice.executionEnvironment.label;
+      validateEnvironment = () => {
+        const sandbox = resolveSandboxRuntimeStatus({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.placement?.sessionKey ?? params.patch.key,
+          preparedSessionEntry: params.entry,
+        });
+        const exec = resolveExecConfigState({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.patch.key,
+          sessionEntry: params.entry,
+        });
+        const restriction = resolveAgentHarnessExecutionRestriction(
+          { label: runtimeLabel, executionEnvironment: "host-only" },
+          {
+            sandboxed: sandbox.sandboxed || exec.host === "sandbox",
+            sandboxRequired: sandbox.sandboxRequired,
+            workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({
+              cfg: params.cfg,
+              agentId: params.agentId,
+            }),
+            permissionMode: params.entry.permissionMode,
+            remoteExecution: exec.host === "node",
+          },
+        );
+        if (!restriction) {
+          return undefined;
+        }
+        const expected = params.expectedEntry;
+        const canRecover =
+          params.callerCanRunUnsandboxed === true &&
+          expected !== undefined &&
+          exec.host !== "sandbox" &&
+          (restriction.reason === "sandbox" || restriction.reason === "permission-mode");
+        const details: AgentRuntimeRestrictionErrorDetails = {
+          code: "AGENT_RUNTIME_RESTRICTED",
+          runtimeId,
+          runtimeLabel,
+          reason: restriction.reason,
+          ...(canRecover
+            ? {
+                recovery: {
+                  action: "run-without-sandbox" as const,
+                  sessionId: expected.sessionId,
+                  ...(expected.lifecycleRevision
+                    ? { lifecycleRevision: expected.lifecycleRevision }
+                    : {}),
+                  expectedPermissionMode: expected.permissionMode ?? null,
+                  expectedSandboxMode: expected.sandboxMode ?? null,
+                },
+              }
+            : {}),
+        };
+        return errorShape(ErrorCodes.INVALID_REQUEST, restriction.message, { details });
+      };
+    }
   }
   const validate = () => {
+    const environmentError = validateEnvironment?.();
+    if (environmentError) {
+      return environmentError;
+    }
     const message =
       validateRuntime?.() ??
       (params.placement

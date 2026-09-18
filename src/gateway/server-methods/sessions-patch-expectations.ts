@@ -5,6 +5,9 @@ import { sessionToolOverridesEqual } from "../session-tool-overrides.js";
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
 ): string | undefined {
+  if (patch.expectedSandboxMode !== undefined && patch.sandboxMode === undefined) {
+    return "expectedSandboxMode requires a sandboxMode replacement.";
+  }
   if (patch.expectedPermissionMode !== undefined && patch.permissionMode === undefined) {
     return "expectedPermissionMode requires a permissionMode replacement.";
   }
@@ -19,6 +22,8 @@ export function sessionPatchExpectationsChanged(
   patch: SessionsPatchParams,
 ): boolean {
   return (
+    (patch.expectedSandboxMode !== undefined &&
+      (entry?.sandboxMode ?? null) !== patch.expectedSandboxMode) ||
     (patch.expectedPermissionMode !== undefined &&
       (entry?.permissionMode ?? null) !== patch.expectedPermissionMode) ||
     (patch.expectedToolOverrides !== undefined &&
@@ -38,6 +43,9 @@ export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
       : {}),
     ...(patch.expectedPermissionMode !== undefined
       ? { expectedPermissionMode: patch.expectedPermissionMode }
+      : {}),
+    ...(patch.expectedSandboxMode !== undefined
+      ? { expectedSandboxMode: patch.expectedSandboxMode }
       : {}),
     ...(patch.expectedToolOverrides !== undefined
       ? { expectedToolOverrides: patch.expectedToolOverrides }

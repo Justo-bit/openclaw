@@ -244,7 +244,12 @@ export async function preparePublishedModelRuntimeChoice(params: {
   >;
 }): Promise<
   | { kind: "unavailable"; message: string }
-  | { kind: "ready"; runtimeId: string; validate: () => string | undefined }
+  | {
+      kind: "ready";
+      runtimeId: string;
+      executionEnvironment?: { kind: "host-only"; label: string };
+      validate: () => string | undefined;
+    }
 > {
   const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     await import("./prepared-model-catalog.js");
@@ -360,5 +365,15 @@ export async function preparePublishedModelRuntimeChoice(params: {
       ? undefined
       : unavailable;
 
-  return { kind: "ready", runtimeId, validate };
+  const harness = owner.pluginRegistry?.agentHarnesses.find(
+    (registration) => registration.harness.id === runtimeId,
+  )?.harness;
+  return {
+    kind: "ready",
+    runtimeId,
+    validate,
+    ...(harness?.executionEnvironment === "host-only"
+      ? { executionEnvironment: { kind: "host-only" as const, label: harness.label } }
+      : {}),
+  };
 }

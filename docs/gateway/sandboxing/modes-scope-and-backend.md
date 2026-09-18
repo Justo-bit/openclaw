@@ -29,6 +29,35 @@ execution or Gateway/node host overrides cannot bypass it. The default
 `"inherit"` preserves existing agent-mode behavior. See
 [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
+### Per-chat sandbox opt-out
+
+An administrator can opt one idle chat out of configured sandboxing without
+changing the agent or global configuration. `sessions.patch` accepts
+`sandboxMode: "off"`; `sandboxMode: null` clears that choice and restores the
+configured policy. Both mutations require `operator.admin` and existing access
+to the target session. A creator-role requirement (`sandbox: "required"`) is
+immutable and always takes precedence: even an administrator cannot opt that
+session out.
+
+For race-safe updates, include `expectedSessionId`, `expectedLifecycleRevision`,
+and `expectedSandboxMode` (`null` means no override). A stale expectation rejects
+the mutation rather than changing a replaced chat or overwriting another choice.
+`sessions.patchMany` supports the same sandbox mutation with expectations on each
+target. Stop any active run before changing the sandbox mode; the Gateway checks
+again before committing and never changes containment underneath a running turn.
+
+The choice persists with that chat across restarts and resets. A newly forked chat
+does not inherit the opt-out; restoring a checkpoint in the same chat retains it.
+Clearing the override does not remove sandbox containers or change other chats.
+Older versions that do not support this preference follow their configured
+sandbox policy instead.
+
+Where native runtime selection offers **Run without sandbox**, that action is an
+explicit per-chat change, not a global switch. Other tool, workspace-only,
+permission, and execution-placement restrictions remain independently enforced.
+
+### Scope and backend
+
 **Scope** controls how many containers/environments are created:
 
 - `agent`: one container per agent.

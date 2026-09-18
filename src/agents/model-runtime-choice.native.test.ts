@@ -92,6 +92,7 @@ it.each(["catalog", "configured", "literal"] as const)(
           id: `native-${i}`,
           label: entry.name,
           authBootstrap: "harness",
+          executionEnvironment: "host-only",
           supports: ({ modelId }) => ({ supported: modelId === entry.id }),
           readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
           runAttempt: vi.fn(),
@@ -115,6 +116,7 @@ it.each(["catalog", "configured", "literal"] as const)(
       expect(result).toMatchObject({
         status: "ready",
         runtime: { kind: "set", runtime: `native-${i}` },
+        executionEnvironment: { kind: "host-only", label: entry.name },
       });
       if (result.status !== "ready") {
         throw new Error("Native selection failed");

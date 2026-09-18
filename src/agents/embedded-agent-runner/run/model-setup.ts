@@ -4,6 +4,7 @@ import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
+import { assertAgentHarnessExecutionEnvironment } from "../../harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../../harness/selection.js";
@@ -181,6 +182,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
           agentHarnessId: runParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
+  assertAgentHarnessExecutionEnvironment(agentHarness, runParams);
   const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const expectedHarnessArtifact = runParams.expectedAgentHarnessRuntimeArtifact;
   if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {

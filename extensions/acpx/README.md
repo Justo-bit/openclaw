@@ -39,9 +39,21 @@ and catalog discovery without interrupting a running turn or deleting history. C
 commands and `acp.allowedAgents` keep their existing behavior. Detection checks installed
 executables; it does not prove that an agent is logged in or can serve a model.
 
-The picker runtime cannot enforce OpenClaw's Read Only, Guarded, or Workspace permission modes.
-It rejects those explicit modes before starting the agent. Use Full access with the agent's own
-permission policy, or choose another runtime for those OpenClaw restrictions.
+Native picker runtimes run on the Gateway host and use the native app's permissions.
+OpenClaw checks that execution choice before dispatching a chat turn; ACP runners do not
+implement OpenClaw sandboxing or workspace-only filesystem confinement.
+
+When an administrator selects a native model in an optionally sandboxed chat,
+**Run without sandbox** explicitly selects the model and grants Full access for that
+chat only. Cancel keeps the existing selection and restrictions. This does not
+change agent-wide or global sandbox settings. Stop an active run before changing
+its sandbox setting.
+
+A creator-role-required sandbox cannot be removed, even by this action. Configured
+workspace-only access, remote execution placement, and other tool restrictions
+still apply; choose a compatible runtime when those boundaries must remain.
+OpenClaw's Read Only, Guarded, and Workspace permission modes are not supported
+by these native runtimes.
 
 Catalog refresh closes its local connection. The native agent owns any history it creates.
 Reset and deletion close the local session and prevent its reuse, including after a Gateway restart.

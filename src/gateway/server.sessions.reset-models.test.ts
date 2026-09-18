@@ -38,6 +38,7 @@ type ResetSessionEntry = {
   createdActor?: { type: string; id?: string };
   createdAt?: number;
   sandbox?: "required";
+  sandboxMode?: "off";
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   previousSessionId?: string;
   forkedFromParent?: boolean;
@@ -349,6 +350,21 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
+});
+
+test("sessions.reset retains this chat's authorized sandbox opt-out", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sandbox-opt-out", { sandboxMode: "off" }),
+    },
+  });
+  const reset = await directSessionReq<{ entry: ResetSessionEntry }>("sessions.reset", {
+    key: "main",
+  });
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sandboxMode).toBe("off");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.sandboxMode).toBe("off");
 });
 
 test("sessions.reset clears stale estimated context budget status", async () => {

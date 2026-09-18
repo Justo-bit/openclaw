@@ -78,6 +78,7 @@ import { createGatewaySession } from "../session-create-service.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
+import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
 const defaultAgents: AgentConfig[] = [
   { id: "main", default: true },
@@ -269,6 +270,12 @@ afterAll(async () => {
 });
 
 describe("sessions.patch sticky model persistence", () => {
+  registerSessionSandboxStickyModelTests({
+    getConfig: () => cfg,
+    patchSession,
+    configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
+    getPersistedConfig: () => persistedConfig,
+  });
   it.each([
     { scope: undefined, agentId: "main", target: undefined },
     { scope: undefined, agentId: "work", target: undefined },

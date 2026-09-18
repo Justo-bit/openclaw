@@ -319,3 +319,45 @@ it.each([
   },
   60000,
 );
+
+it.each([
+  {
+    label: "sandbox with unrestricted tool names",
+    config: {
+      agents: { defaults: { sandbox: { mode: "all" as const } } },
+      tools: { profile: "full" as const, sandbox: { tools: { allow: ["*"], deny: [] } } },
+    },
+    reason: "outside the sandbox",
+  },
+  {
+    label: "configured node execution",
+    config: { tools: { profile: "full" as const, exec: { host: "node" as const } } },
+    reason: "remote execution",
+  },
+  {
+    label: "workspace-only files",
+    config: { tools: { profile: "full" as const, fs: { workspaceOnly: true } } },
+    reason: "workspace-only",
+  },
+])(
+  "rejects host-only ACP before native effects: $label",
+  async ({ config: restrictions, reason }) => {
+    await withOpenClawTestState({ label: "acp-native-containment" }, async (state) => {
+      const config: OpenClawConfig = {
+        ...restrictions,
+        session: { store: path.join(state.sessionsDir(), "sessions.json") },
+      };
+      const native = await registerNative(state, config, "owner-agent.mjs");
+      const attempt = await attemptFor(state, config, "opencode", "full");
+      try {
+        await expect(runAgentHarnessAttempt(attempt.input)).rejects.toThrow(reason);
+        expect(await peerStates(native.peerDirectory)).toEqual([]);
+        expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
+      } finally {
+        attempt.close();
+        await native.service.stop?.(native.context);
+      }
+    });
+  },
+  60000,
+);

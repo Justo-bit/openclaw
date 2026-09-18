@@ -30,6 +30,19 @@ model discovery, auth preparation, or Responses parameters. An explicit
 observation, not a native ownership claim. Bound native sessions use the separate
 ownership contract below.
 
+### Host-only execution
+
+A harness that launches an unsandboxed local application declares
+`executionEnvironment: "host-only"`. Core rejects sandbox-required, sandboxed,
+workspace-only, and unsupported session-permission contexts before native
+preparation and invocation. The harness does not implement a second sandbox
+policy or silently reinterpret a working directory as confinement.
+
+The Control UI may offer an administrator an explicit per-chat recovery action
+for optional sandboxing. The Gateway owns that mutation and revalidates the
+original session and permission state; the capability declaration never grants
+permission to remove a required sandbox or other configured restrictions.
+
 ### Native tool-policy enforcement
 
 Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every

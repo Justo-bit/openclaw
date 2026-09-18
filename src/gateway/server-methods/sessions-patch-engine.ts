@@ -22,7 +22,6 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -44,6 +43,7 @@ import {
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
 import {
+  assertSessionPatchCommitAllowed,
   invalidSessionPatchOutcome,
   sessionChangedError,
   unexpectedPatchError,
@@ -88,12 +88,14 @@ export async function executeSessionPatchMutations(params: {
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const permissionRuntime =
     "permissionMode" in params.patch
       ? await import("./sessions-patch-permissions.runtime.js")
       : undefined;
+  const sandboxRuntime =
+    "sandboxMode" in params.patch ? await import("./sessions-patch-sandbox.runtime.js") : undefined;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
@@ -458,12 +460,31 @@ export async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push(projected);
                           continue;
                         }
+                        const validateSandbox = sandboxRuntime
+                          ? () =>
+                              sandboxRuntime.validateSessionPatchSandboxChange({
+                                client,
+                                context: params.context,
+                                existingEntry,
+                                entry: projected.entry,
+                                sessionKey: primaryKey,
+                                storePath: target.storePath,
+                                lifecycleIdentities: target.lifecycleIdentities,
+                              })
+                          : undefined;
+                        const sandboxError = validateSandbox?.();
+                        if (sandboxError) {
+                          projectedOutcomes.push({ ok: false, error: sandboxError });
+                          continue;
+                        }
                         const runtimeSelection =
                           await modelSelection.prepareSessionPatchRuntimeSelection({
                             cfg,
                             agentId: target.targetAgentId,
                             patch: target.fullPatch,
                             entry: projected.entry,
+                            expectedEntry: existingEntry,
+                            callerCanRunUnsandboxed: callerIsAdmin,
                             catalog: (await catalogs.available(target.targetAgentId))?.entries,
                             placement: { context: params.context, sessionKey: primaryKey },
                           });
@@ -521,6 +542,9 @@ export async function executeSessionPatchMutations(params: {
                           (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],
                         );
                         commitGuards.add(params.targets[target.index]!.commitGuard);
+                        if (validateSandbox) {
+                          commitGuards.add(validateSandbox);
+                        }
                         if (runtimeSelection.validate) {
                           commitGuards.add(runtimeSelection.validate);
                         }
@@ -558,20 +582,12 @@ export async function executeSessionPatchMutations(params: {
                     };
                   };
                   const groupStore = {
-                    assertCommitAllowed: () => {
-                      // Fresh selections remain human-owned through the final commit;
-                      // existing session pins are intentionally not rebound to the caller.
-                      personalModelSelection?.assertCurrent();
-                      for (const guard of commitGuards) {
-                        const error = guard();
-                        if (error) {
-                          throw new SessionMutationAuthorizationChangedError(error);
-                        }
-                      }
-                      for (const transition of archiveTransitions.values()) {
-                        transition.assertCommitAllowed();
-                      }
-                    },
+                    assertCommitAllowed: () =>
+                      assertSessionPatchCommitAllowed({
+                        personalModelSelection,
+                        guards: commitGuards,
+                        archiveTransitions: archiveTransitions.values(),
+                      }),
                     agentId: first.targetAgentId,
                     sessionKeys: selectedSessionKeys,
                     ...(requestedLabel.ok ? { includeLabelOwners: requestedLabel.label } : {}),
@@ -707,7 +723,7 @@ export async function executeSessionPatchMutations(params: {
     cfg,
     context: params.context,
     callerScopes,
-    callerCanManageCron,
+    callerCanManageCron: callerIsAdmin,
     category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];

@@ -435,6 +435,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
           return null;
         }
       }
+      if (options.canDispatch?.() === false) {
+        settleOptimisticPatch(false);
+        return null;
+      }
       startOptimisticPatch();
       if (Object.hasOwn(patchParams, "permissionMode")) {
         permissionProjection = host.claimPermissionProjection(

@@ -100,6 +100,7 @@ type ModelSelectionPreparation =
       catalog: ModelCatalogEntry[];
       runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
       validateRuntimeSelection?: () => string | undefined;
+      executionEnvironment?: { kind: "host-only"; label: string };
     }
   | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
 
@@ -144,6 +145,7 @@ export async function prepareModelSelectionRuntime(params: {
     };
   }
   let validateRuntimeSelection: (() => string | undefined) | undefined;
+  let executionEnvironment: { kind: "host-only"; label: string } | undefined;
   let inheritedCliRuntime: string | undefined;
   let needsRuntimeChoice = runtime.kind === "set";
   if (!params.rawRuntime) {
@@ -192,6 +194,7 @@ export async function prepareModelSelectionRuntime(params: {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };
     }
     validateRuntimeSelection = choice.validate;
+    executionEnvironment = choice.executionEnvironment;
     runtime = { kind: "set", runtime: choice.runtimeId };
   }
   const runtimeEntry = { ...sessionEntry };
@@ -209,7 +212,13 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   if (!needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)) {
-    return { status: "ready", runtime, catalog: [...params.catalog], validateRuntimeSelection };
+    return {
+      status: "ready",
+      runtime,
+      catalog: [...params.catalog],
+      validateRuntimeSelection,
+      executionEnvironment,
+    };
   }
   // The selected route owns its capabilities. A prepared default-provider row cannot
   // supply thinking or context metadata for an explicit cross-provider selection.
@@ -228,6 +237,7 @@ export async function prepareModelSelectionRuntime(params: {
     status: "ready",
     runtime,
     validateRuntimeSelection,
+    executionEnvironment,
     catalog: resolved
       ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],

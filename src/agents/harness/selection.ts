@@ -46,6 +46,7 @@ import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./bui
 import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { AgentHarnessPreflightError } from "./errors.js";
+import { assertAgentHarnessExecutionEnvironment } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -236,6 +237,7 @@ export async function runAgentHarnessAttempt(
         })
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  assertAgentHarnessExecutionEnvironment(harness, params);
   if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
     throw new AgentHarnessPreflightError(
       "Native session runtime changed before dispatch. Reattach the original native session before retrying.",

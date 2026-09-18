@@ -4313,6 +4313,23 @@ export const en: TranslationMap & {
       closeVideoPreview: "Close video preview",
     },
     modelControls: {},
+    nativeRuntimeRecovery: {
+      title: "Run {runtime} without a sandbox?",
+      confirm: "Run without sandbox",
+      confirmMessage:
+        "This gives {runtime} full access with its native permissions on the Gateway host, outside the OpenClaw sandbox. It changes execution permissions for only this chat, not your global settings. No message will be sent automatically.",
+      chooseAnother: "Choose another model to keep this chat’s current execution restrictions.",
+      failed: "Could not change this chat’s execution permissions: {error}",
+      refreshFailed:
+        "The model and permissions were saved, but refreshing this chat failed: {error}",
+      reasons: {
+        "sandbox-required": "{runtime} cannot run because this chat requires a sandbox.",
+        sandbox: "{runtime} uses native tools that cannot run inside the OpenClaw sandbox.",
+        "workspace-only": "{runtime} cannot enforce this chat’s workspace-only restriction.",
+        "permission-mode": "{runtime} cannot enforce this chat’s current execution permissions.",
+        "remote-execution": "{runtime} cannot use this chat’s remote execution target.",
+      },
+    },
     permissionControls: {
       label: "Execution permissions",
       help: "Choose what available tools may do in this session. This does not change the tool profile.",

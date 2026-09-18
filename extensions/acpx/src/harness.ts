@@ -95,6 +95,7 @@ export function createAcpAgentHarness(params: {
     label: params.label,
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
+    executionEnvironment: "host-only",
     conversationToolPolicyNativeTools: NATIVE_TOOL_REQUIREMENTS[params.agent],
     supports: ({ requestedRuntime, modelProvider }) => {
       if (!params.isEnabled()) {
@@ -162,11 +163,6 @@ export function createAcpAgentHarness(params: {
       if (!params.isEnabled()) {
         throw new Error(
           `${params.label} is disabled. Enable it in Models settings to start a turn.`,
-        );
-      }
-      if (input.permissionMode && input.permissionMode !== "full") {
-        throw new Error(
-          `${params.label} cannot enforce this permission mode. Choose Full access or another runtime.`,
         );
       }
       const inspection = inspectAgent();

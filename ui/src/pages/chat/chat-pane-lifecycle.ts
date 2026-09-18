@@ -59,6 +59,7 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
+import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
@@ -572,6 +573,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
+    if (
+      this.state &&
+      ((changedProperties.has("selected") && !this.selected) ||
+        (changedProperties.has("presented") && !this.presented))
+    ) {
+      cancelChatModelRecovery(this.state);
+    }
     if (!this.state || !isSidebarSlotVisible(this.state.sidebarLayout, "companion")) {
       // A later opening owns fresh presentation focus, even if this rail never mounted.
       this.sessionCompanionFocusGeneration += 1;
@@ -682,6 +690,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;
     if (this.state) {
+      cancelChatModelRecovery(this.state);
       retireInitialChatSnapshot(this.state);
       chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
