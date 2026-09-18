@@ -48,6 +48,7 @@ import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
   findSystemdGatewayInstallation,
@@ -876,8 +877,9 @@ export async function maybeRepairGatewayServiceConfig(
   const repairService =
     updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
   try {
-    const install = () =>
+    const install = (assertCurrent = options.serviceMaintenance?.assertCurrent) =>
       repairService({
+        assertCurrent,
         runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
         env: serviceRepairEnv,
         stdout: process.stdout,
@@ -925,6 +927,9 @@ export async function maybeRepairGatewayServiceConfig(
       note("Restarted the repaired gateway for a legacy update parent.", "Gateway");
     }
   } catch (err) {
+    if (err instanceof GatewayServiceAuthorityError) {
+      throw err;
+    }
     runtime.error(`Gateway service update failed: ${String(err)}`);
   }
   return cfgForServiceInstall;

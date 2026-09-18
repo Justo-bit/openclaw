@@ -29,6 +29,7 @@ import {
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
+import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
   assertSystemdAvailable,
@@ -267,14 +268,16 @@ async function writeSystemdUnit(
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
-  await assertSystemdAvailable(env);
-  await assertNoSystemGatewayOwnership(env);
+  await withGatewayServiceInstallationRecovery(
+    async () => {
+      await assertSystemdAvailable(env);
+      await assertNoSystemGatewayOwnership(env);
+    },
+    async () => false,
+  );
 
   const unitPath = resolveSystemdUnitPath(env);
   return await withSystemdDefinitionMutation(env, environment ?? env, async (mutation) => {
-    const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
-      resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
-    );
     const stateDir = resolveStateDir({ ...env, ...environment });
     const environmentFilePath = resolveSystemdEnvironmentFilePath({ stateDir, environment });
     const environmentFileSnapshot = isNodeSystemdEnvironment(env)
@@ -284,34 +287,66 @@ async function writeSystemdUnit(
     const backupPath = `${unitPath}.bak`;
     const existingBackup = mutation.snapshots.get(backupPath) ?? null;
     const recovery =
-      load && !beforeLoad ? await captureSystemdInstallRecovery(env, existingUnit !== null) : null;
-    const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
-      readStateDirDotEnvFromStateDir(stateDir);
-    const stateDirDotEnvVars = new Map(
-      Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
-        const inlineValue = environment?.[key];
-        return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
-      }),
-    );
-    const inlineManagedKeys = collectSystemdInlineManagedKeys({
-      environment,
-      environmentValueSources,
-    });
-    const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
-    const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
-
-    const backupSource = existingUnit ?? existingBackup;
-    if (backupSource) {
-      await mutation.publish(
-        backupPath,
-        sanitizeSystemdUnitBackupContent({
-          content: backupSource.contents.toString("utf8"),
-          fileManagedKeys,
-        }),
-        restrictSystemdArtifactMode(backupSource.mode),
+      load && !beforeLoad
+        ? await withGatewayServiceInstallationRecovery(
+            () => captureSystemdInstallRecovery(env, existingUnit !== null),
+            async () => false,
+          )
+        : null;
+    const restore = async () => {
+      let restored = false;
+      const errors: unknown[] = [];
+      const files = [
+        [unitPath, existingUnit],
+        [environmentFilePath, environmentFileSnapshot],
+        [backupPath, existingBackup],
+      ] as const;
+      for (const [file, snapshot] of files) {
+        if (snapshot === undefined) {
+          continue;
+        }
+        try {
+          restored = (await mutation.restore(file, snapshot)) || restored;
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length) {
+        throw new AggregateError(errors, "Systemd rollback could not restore all owned artifacts.");
+      }
+      await recovery?.restore();
+      return restored;
+    };
+    await withGatewayServiceInstallationRecovery(async () => {
+      const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+        resolveManagedGatewayServiceCommand(await readSystemdServiceExecStart(env))?.environment,
       );
-    }
-    try {
+      const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
+        readStateDirDotEnvFromStateDir(stateDir);
+      const stateDirDotEnvVars = new Map(
+        Object.entries(stateDirDotEnvEntries).filter(([key, value]) => {
+          const inlineValue = environment?.[key];
+          return typeof inlineValue !== "string" || inlineValue.trim() === value.trim();
+        }),
+      );
+      const inlineManagedKeys = collectSystemdInlineManagedKeys({
+        environment,
+        environmentValueSources,
+      });
+      const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
+      const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
+
+      const backupSource = existingUnit ?? existingBackup;
+      if (backupSource) {
+        await mutation.publish(
+          backupPath,
+          sanitizeSystemdUnitBackupContent({
+            content: backupSource.contents.toString("utf8"),
+            fileManagedKeys,
+          }),
+          restrictSystemdArtifactMode(backupSource.mode),
+        );
+      }
       const incoming = collectSystemdFileBackedEnvironment({ environment, fileManagedKeys });
       for (const [key, value] of Object.entries(incoming)) {
         if (/[\r\n]/.test(value)) {
@@ -374,36 +409,8 @@ async function writeSystemdUnit(
       });
       await assertNoSystemGatewayOwnership(env);
       await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
-      try {
-        await assertNoSystemGatewayOwnership(env);
-      } catch (ownershipError) {
-        await mutation.restore(unitPath, existingUnit);
-        throw ownershipError;
-      }
-    } catch (error) {
-      let rollbackError: unknown;
-      try {
-        await mutation.restore(backupPath, existingBackup);
-      } catch (cause) {
-        rollbackError = cause;
-      }
-      if (environmentFileSnapshot !== undefined) {
-        try {
-          await mutation.restore(environmentFilePath, environmentFileSnapshot);
-        } catch (cause) {
-          rollbackError ??= cause;
-        }
-      }
-      if (rollbackError) {
-        const failureDetail = error instanceof Error ? error.message : String(error);
-        const rollbackDetail =
-          rollbackError instanceof Error ? rollbackError.message : "unknown rollback error";
-        throw new Error(`${failureDetail}\nSystemd rollback failed: ${rollbackDetail}`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
+      await assertNoSystemGatewayOwnership(env);
+    }, restore);
     // Do not catch a seal refusal as publication failure: retain staged material,
     // leave native state untouched, and let recovery reconcile the pending intent.
     if (load) {
@@ -411,28 +418,10 @@ async function writeSystemdUnit(
         await beforeLoad({ files: structuredClone(mutation.stagedFiles) });
         await mutation.assertCurrent();
       }
-      try {
-        await load(recovery?.beforeAction);
-      } catch (error) {
-        // A sealed update has its own recovery owner and must retain its staged identities.
-        if (recovery) {
-          try {
-            await mutation.assertCurrent();
-            await mutation.restore(unitPath, existingUnit);
-            if (environmentFileSnapshot !== undefined) {
-              await mutation.restore(environmentFilePath, environmentFileSnapshot);
-            }
-            await mutation.restore(backupPath, existingBackup);
-            await recovery.restore();
-          } catch (rollbackError) {
-            throw new AggregateError(
-              [error, rollbackError],
-              `${error instanceof Error ? error.message : "Systemd activation failed"}\nThe previous service could not be fully restored.`,
-              { cause: rollbackError },
-            );
-          }
-        }
-        throw error;
+      if (recovery) {
+        await withGatewayServiceInstallationRecovery(() => load(recovery.beforeAction), restore);
+      } else {
+        await load();
       }
     }
     return { unitPath, backedUp: existingUnit !== null };

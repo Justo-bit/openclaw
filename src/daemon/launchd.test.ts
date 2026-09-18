@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortListener } from "../infra/ports-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -556,90 +556,18 @@ vi.mock("./gateway-service-probe-hosts.js", () => ({
   resolveGatewayServiceProbeHosts: (params: unknown) => resolveGatewayServiceProbeHosts(params),
 }));
 
+vi.mock("./service-stage.js", async (importOriginal) => {
+  const { readLaunchdFixtureFileState } = await import("./launchd-filesystem.test-support.js");
+  return {
+    ...(await importOriginal<typeof import("./service-stage.js")>()),
+    readServiceFileState: async (file: string) => readLaunchdFixtureFileState(state, file),
+  };
+});
+
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  const { createLaunchdFileReadMocks } = await import("./launchd-filesystem.test-support.js");
-  const wrapped = {
-    ...actual,
-    ...createLaunchdFileReadMocks(state),
-    access: vi.fn(async (p: string) => {
-      const key = p;
-      if (
-        (state.files.has(key) && state.files.get(key) !== "dangling-launchagent-symlink") ||
-        state.dirs.has(key)
-      ) {
-        return;
-      }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, access '${key}'`), {
-        code: "ENOENT",
-      });
-    }),
-    lstat: vi.fn(async (p: string) => {
-      const key = p;
-      if (state.files.has(key) || state.dirs.has(key)) {
-        return {
-          isSymbolicLink: () => state.files.get(key) === "dangling-launchagent-symlink",
-        };
-      }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${key}'`), {
-        code: "ENOENT",
-      });
-    }),
-    mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
-      const key = p;
-      state.dirs.add(key);
-      state.dirModes.set(key, opts?.mode ?? 0o777);
-    }),
-    stat: vi.fn(async (p: string) => {
-      const key = p;
-      if (state.dirs.has(key)) {
-        return { mode: state.dirModes.get(key) ?? 0o777 };
-      }
-      if (state.files.has(key)) {
-        return { mode: state.fileModes.get(key) ?? 0o666 };
-      }
-      throw new Error(`ENOENT: no such file or directory, stat '${key}'`);
-    }),
-    chmod: vi.fn(async (p: string, mode: number) => {
-      const key = p;
-      if (state.dirs.has(key)) {
-        state.dirModes.set(key, mode);
-        return;
-      }
-      if (state.files.has(key)) {
-        state.fileModes.set(key, mode);
-        return;
-      }
-      throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
-    }),
-    unlink: vi.fn(async (p: string) => {
-      state.files.delete(p);
-    }),
-    rename: vi.fn(async (from: string, to: string) => {
-      const data = state.files.get(from);
-      if (data === undefined) {
-        throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${from}'`), {
-          code: "ENOENT",
-        });
-      }
-      state.files.delete(from);
-      state.files.set(to, data);
-      const mode = state.fileModes.get(from);
-      state.fileModes.delete(from);
-      if (mode !== undefined) {
-        state.fileModes.set(to, mode);
-      }
-      state.fileWrites.push({ path: to, data });
-    }),
-    writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
-      const key = p;
-      state.files.set(key, data);
-      state.fileWrites.push({ path: key, data });
-      state.dirs.add(key.split("/").slice(0, -1).join("/"));
-      state.fileModes.set(key, opts?.mode ?? 0o666);
-    }),
-  };
-  return { ...wrapped, default: wrapped };
+  const { buildLaunchdFileSystemFixture } = await import("./launchd-filesystem.test-support.js");
+  return buildLaunchdFileSystemFixture(actual, state);
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -2056,15 +1984,13 @@ describe("launchd install", () => {
       (caught: unknown) => caught,
     );
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "launchctl bootstrap failed: Operation not permitted",
-    );
-    expect((error as Error).message).toContain(
-      "The previous LaunchAgent supervision could not be restored.",
-    );
-    expect((error as Error).cause).toBeInstanceOf(Error);
-    expect(((error as Error).cause as Error).message).toContain("could not determine whether");
+    assert(error instanceof AggregateError);
+    expect(error.errors).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("launchctl bootstrap failed: Operation not permitted"),
+      }),
+      expect.objectContaining({ message: expect.stringContaining("could not determine whether") }),
+    ]);
     expect(state.files.has(plistPath)).toBe(true);
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
   });

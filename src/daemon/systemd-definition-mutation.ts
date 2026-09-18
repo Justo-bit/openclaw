@@ -18,7 +18,11 @@ import {
   type SystemdServiceReadBinding,
   type SystemdServiceReadTarget,
 } from "./service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  GatewayServiceAuthorityError,
+  withGatewayServiceInstallationRecovery,
+} from "./service-update-authority.js";
 import {
   readSystemdServiceExecStart,
   resolveSystemdEnvironmentFilePath,
@@ -32,7 +36,7 @@ type SystemdDefinitionMutation = {
   stagedFiles: GatewayServiceStagedFiles["files"];
   assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
-  restore: (file: string, snapshot: Snapshot) => Promise<void>;
+  restore: (file: string, snapshot: Snapshot) => Promise<boolean>;
 };
 const identity = (stat: Stats, contents?: Buffer) =>
   [stat.dev, stat.ino, stat.uid, stat.gid, stat.mode, contents && sha256Hex(contents)].join(":");
@@ -186,7 +190,10 @@ async function inspect(
       }
     }
     return result({ kind: "writable" });
-  } catch {
+  } catch (error) {
+    if (error instanceof GatewayServiceAuthorityError) {
+      throw error;
+    }
     return result({ kind: "unknown", reason: "inspection-failed", artifact });
   }
 }
@@ -264,17 +271,24 @@ export async function withSystemdDefinitionMutation<T>(
     options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
   const remainingTimeoutMs = () =>
     deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now());
-  let initial = await inspect(env, environment, remainingTimeoutMs());
-  assertServiceDefinitionWritable(initial.capability);
   const { unit, generated } = resolveMutationTargets(env, environment);
-  // Group-writable umasks must not create directories that inspect() would reject.
-  assertGatewayServiceUpdateCurrent();
-  await fs.mkdir(path.dirname(unit), { recursive: true, mode: 0o755 });
-  assertGatewayServiceUpdateCurrent();
-  await fs.mkdir(path.dirname(generated), { recursive: true, mode: 0o700 });
   const canonicalTargets = () =>
     Promise.all([unit, generated].map(canonicalPathFromExistingAncestor));
-  const lockedTargets = await canonicalTargets();
+  const preparation = await withGatewayServiceInstallationRecovery(
+    async () => {
+      const initial = await inspect(env, environment, remainingTimeoutMs());
+      assertServiceDefinitionWritable(initial.capability);
+      // Group-writable umasks must not create directories that inspect() would reject.
+      assertGatewayServiceUpdateCurrent();
+      await fs.mkdir(path.dirname(unit), { recursive: true, mode: 0o755 });
+      assertGatewayServiceUpdateCurrent();
+      await fs.mkdir(path.dirname(generated), { recursive: true, mode: 0o700 });
+      return { initial, lockedTargets: await canonicalTargets() };
+    },
+    async () => false,
+  );
+  let initial = preparation.initial;
+  const { lockedTargets } = preparation;
   const targets = lockedTargets
     .map((target) => path.join(path.dirname(target), `.openclaw-${sha256Hex(target)}`))
     .toSorted();
@@ -297,11 +311,16 @@ export async function withSystemdDefinitionMutation<T>(
       }
       initial = current;
     };
-    await refresh();
-    // Waiting may admit another writer's artifacts, never another directory's locks.
-    if (!isDeepStrictEqual(await canonicalTargets(), lockedTargets)) {
-      throw new Error("Managed service lock targets changed during acquisition.");
-    }
+    await withGatewayServiceInstallationRecovery(
+      async () => {
+        await refresh();
+        // Waiting may admit another writer's artifacts, never another directory's locks.
+        if (!isDeepStrictEqual(await canonicalTargets(), lockedTargets)) {
+          throw new Error("Managed service lock targets changed during acquisition.");
+        }
+      },
+      async () => false,
+    );
     const allowed = new Set([unit, generated, `${unit}.bak`]);
     const publications = new Map<string, string>();
     const stagedFiles: GatewayServiceStagedFiles["files"] = [];
@@ -344,27 +363,24 @@ export async function withSystemdDefinitionMutation<T>(
         const published = identity(written, Buffer.from(contents));
         initial.fingerprint.set(file, published);
         publications.set(file, published);
-        try {
-          await refresh(true, file === unit && previous === null);
-          const after = await readServiceFileState(file);
-          if (
-            !after ||
-            after.dev !== written.dev ||
-            after.ino !== written.ino ||
-            after.sha256 !== sha256Hex(Buffer.from(contents)) ||
-            after.mode !== mode
-          ) {
-            throw new Error("Managed service artifact changed after publication.");
-          }
-          await refresh(true);
-          stagedFiles.push({ sourcePath: file, before, after });
-        } catch (error) {
-          // Roll back only our unchanged publication; a failing rollback must not recurse.
-          if (rollback) {
-            await restore(file, previous);
-          }
-          throw error;
-        }
+        await withGatewayServiceInstallationRecovery(
+          async () => {
+            await refresh(true, file === unit && previous === null);
+            const after = await readServiceFileState(file);
+            if (
+              !after ||
+              after.dev !== written.dev ||
+              after.ino !== written.ino ||
+              after.sha256 !== sha256Hex(Buffer.from(contents)) ||
+              after.mode !== mode
+            ) {
+              throw new Error("Managed service artifact changed after publication.");
+            }
+            await refresh(true);
+            stagedFiles.push({ sourcePath: file, before, after });
+          },
+          async () => (rollback ? restore(file, previous) : false),
+        );
       } finally {
         await fs.unlink(temporary).catch(() => undefined);
       }
@@ -375,12 +391,14 @@ export async function withSystemdDefinitionMutation<T>(
       }
       const published = publications.get(file);
       if (published === undefined) {
-        return;
+        return false;
       }
       const current = await inspect(env, environment, remainingTimeoutMs());
       // A refreshed global snapshot never grants ownership of another artifact's edit.
       if (current.capability.kind !== "writable" || current.fingerprint.get(file) !== published) {
-        return;
+        throw new Error(
+          `Managed service artifact changed during publication: ${file}; retained for inspection.`,
+        );
       }
       initial = current;
       if (snapshot) {
@@ -393,6 +411,7 @@ export async function withSystemdDefinitionMutation<T>(
         await refresh(true);
       }
       publications.delete(file);
+      return true;
     };
     return await run({
       snapshots: initial.snapshots,
