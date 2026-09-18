@@ -38,11 +38,12 @@ process owner; the application `worker.mjs` runs as its child. The owner survive
 an application crash and retains nested command cleanup before releasing capacity.
 After a node-host restart, recovery briefly observes that exact owner without
 terminating its cleanup observer. Unfinished cleanup keeps its slot reserved
-while other free slots remain available. While a turn receipt is retained, later
-status, launch replay, or cancellation retries physical cleanup, even after that
-turn completes.
-Completed turn results stay unchanged; the slot is released only after recorded
-lineage completion and physical process-tree extinction. This protection requires
+while other free slots remain available. The node supervisor continues observing
+that cleanup and automatically returns the slot after recorded lineage completion
+and physical process-tree extinction. Closing the supervisor abandons and joins
+its observation without releasing unfinished ownership. Status, launch replay,
+and cancellation share the same recovery while a turn receipt is retained;
+completed turn results stay unchanged. This protection requires
 an updated node host as well as the current worker bundle; updating the Gateway
 alone does not replace an older node's supervision path.
 

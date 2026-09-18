@@ -46,7 +46,10 @@ import {
   type NodeWorkerStopState,
   type NodeWorkerSupervisorOptions,
 } from "./node-worker-supervisor-ownership.js";
-import { recoverNodeWorkerLaunch } from "./node-worker-supervisor-recovery.js";
+import {
+  createNodeWorkerLaunchRecovery,
+  type NodeWorkerRecovery,
+} from "./node-worker-supervisor-recovery.js";
 import {
   inspectOwnedNodeWorkerTree,
   signalOwnedNodeWorkerTree,
@@ -68,6 +71,8 @@ const FORCE_STOP_WAIT_MS = 4_000;
 class NodeWorkerSupervisor {
   private readonly active = new Map<string, NodeWorkerActiveOwnership>();
   private readonly starting = new Map<string, Promise<NodeWorkerLaunchReceipt>>();
+  private readonly recoveries = new Map<string, NodeWorkerRecovery>();
+  private readonly recoverRunning: ReturnType<typeof createNodeWorkerLaunchRecovery>;
   private readonly bundleRoot: string;
   private readonly store: NodeWorkerLaunchStore;
   private readonly turns: NodeWorkerTurnStore;
@@ -104,6 +109,13 @@ class NodeWorkerSupervisor {
       options.workspace ??
       new NodeWorkerWorkspaceRuntime({ root: this.bundleRoot, env: this.workerEnv });
     this.capacity = new NodeWorkerCapacity(this.store, options);
+    this.recoverRunning = createNodeWorkerLaunchRecovery({
+      store: this.store,
+      capacity: this.capacity,
+      containerLifecycle: this.containerLifecycle,
+      recoveries: this.recoveries,
+      isRecoveryActive: () => !this.closed,
+    });
   }
 
   initialize(): Promise<void> {
@@ -134,6 +146,7 @@ class NodeWorkerSupervisor {
       !this.initialized ||
       this.admissions.size > 0 ||
       this.starting.size > 0 ||
+      this.recoveries.size > 0 ||
       this.active.size > 0 ||
       this.stoppingEnvironments.size > 0 ||
       this.store.nonterminalCount() > 0
@@ -583,11 +596,12 @@ class NodeWorkerSupervisor {
       await this.initializationPromise?.catch((error: unknown) => errors.push(error));
       await Promise.allSettled([...this.admissions.values()].map((admission) => admission.done));
       await Promise.allSettled(this.starting.values());
-      const stopped = await Promise.allSettled(
-        [...this.active.values()]
+      const stopped = await Promise.allSettled([
+        ...[...this.recoveries.values()].map((recovery) => recovery.done),
+        ...[...this.active.values()]
           .filter((active): active is NodeWorkerRunningChild => active.state === "running")
           .map((active) => this.stopChild(active, "interrupted")),
-      );
+      ]);
       errors.push(...stopped.flatMap((r) => (r.status === "rejected" ? [r.reason] : [])));
       for (const active of this.active.values()) {
         if (active.state !== "observed") {
@@ -629,22 +643,6 @@ class NodeWorkerSupervisor {
       this.active.delete(active.launchId);
     }
     return receipt;
-  }
-
-  private async recoverRunning(
-    receipt: NodeWorkerLaunchReceipt,
-    notifyCapacity = true,
-    state?: NodeWorkerStopState,
-  ): Promise<NodeWorkerLaunchReceipt> {
-    return await recoverNodeWorkerLaunch({
-      receipt,
-      store: this.store,
-      capacity: this.capacity,
-      containerLifecycle: this.containerLifecycle,
-      notifyCapacity,
-      state,
-      isRecoveryActive: () => !this.closed,
-    });
   }
 
   private async observeChild(active: NodeWorkerRunningChild): Promise<void> {
