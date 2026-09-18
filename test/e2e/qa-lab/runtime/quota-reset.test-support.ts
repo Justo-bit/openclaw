@@ -30,6 +30,7 @@ const PROFILE_ID = "openai:quota";
 export const ACCOUNT_ID = "quota-test-account";
 export const MARKER = "QUOTA_TURN_OK";
 const RECHECK_ADVANCE_MS = 300_100;
+const SYNTHETIC_ACCESS_EXPIRES_AT = Date.UTC(2036, 0, 1);
 type BlockSource = "wham" | "codex_rate_limits";
 type Phase =
   | "healthy"
@@ -72,7 +73,10 @@ type HeldProviderResponse = {
   releaseReason?: "explicit" | "deadline" | "aborted";
 };
 
-export function syntheticAccessToken(expires = Date.UTC(2036, 0, 1), accountId = ACCOUNT_ID) {
+export function syntheticAccessToken(
+  expires = SYNTHETIC_ACCESS_EXPIRES_AT,
+  accountId = ACCOUNT_ID,
+) {
   return [
     { alg: "none" },
     {
@@ -353,7 +357,8 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
           json(200, {
             access_token: syntheticAccessToken(),
             refresh_token: "synthetic-rotated-refresh",
-            expires_in: 3600,
+            // Match the fixed JWT preserved by same-account recovery assertions.
+            expires_in: Math.floor((SYNTHETIC_ACCESS_EXPIRES_AT - Date.now()) / 1000),
           });
         }
       } else if (requestPath === "/catalog/models") {
@@ -672,7 +677,7 @@ export async function createQuotaResetFixture(
   context.onTestFinished(() => gateway.cleanup());
   context.onTestFailed(() => console.error(gateway.logs()));
   // Doctor imports without refreshing a credential outside its one-day warning window.
-  const expires = expiresDuringBlock ? Date.now() + 2 * 86_400_000 : Date.UTC(2036, 0, 1);
+  const expires = expiresDuringBlock ? Date.now() + 2 * 86_400_000 : SYNTHETIC_ACCESS_EXPIRES_AT;
   const access = syntheticAccessToken(expires);
   const alternateProfileId = "openai:quota-alternate";
   const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
