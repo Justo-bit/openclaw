@@ -54,7 +54,10 @@ export function getTaskExecutionObservation(
     state: currentActivity?.executionState ?? "unknown",
     ...(currentActivity?.executionWait ? { wait: currentActivity.executionWait } : {}),
   };
-  if (execution.state === "running" && currentActivity?.executionWait) {
+  if (
+    execution.state === "running" &&
+    (currentActivity?.executionState || currentActivity?.executionWait)
+  ) {
     execution.state = currentActivity.executionState ?? "waiting";
     execution.wait = currentActivity.executionWait;
   }

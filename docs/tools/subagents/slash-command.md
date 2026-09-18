@@ -24,6 +24,14 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
+`/status` keeps full sub-agent counts but shows at most three current detail rows.
+Each row distinguishes running (with a safe tool name when available), queued,
+waiting for approval, input, children, agent messages, or external work,
+and finished execution with settlement still pending. Pending children may have
+finished but still owe completion delivery; they are not necessarily executing.
+“Current activity unavailable” means no current execution is observable, not that
+the task failed. These observations do not change retained active/done counts.
+
 In the Control UI, parent sessions with recent child runs have an expandable
 sidebar row. Subagents appear only under an expanded parent, including when a
 custom group is assigned. The nested rows show child status and runtime, and
