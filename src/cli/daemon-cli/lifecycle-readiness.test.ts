@@ -165,7 +165,7 @@ describe("Gateway service readiness", () => {
     { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },
   ])(
     "reports progressing startup with the caller's response contract (json=$json, update=$updateMarker)",
-    async ({ json, updateMarker, code, result }) => {
+    async ({ json, updateMarker, code: expectedExitCode, result }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       const { defaultRuntime } = await import("../../runtime.js");
       const { createDaemonActionContext } = await import("./response.js");
@@ -193,9 +193,9 @@ describe("Gateway service readiness", () => {
         startupPhase: "startup migration",
       });
 
-      await expect(runDaemonRestart({ json })).rejects.toThrow(`exit ${code}`);
+      await expect(runDaemonRestart({ json })).rejects.toThrow(`exit ${expectedExitCode}`);
 
-      expect(exit).toHaveBeenCalledExactlyOnceWith(code);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(expectedExitCode);
       if (json) {
         expect(writeJson).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
