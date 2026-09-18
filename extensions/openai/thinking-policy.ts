@@ -104,7 +104,7 @@ function buildOpenAIThinkingProfile(params: {
     return { levels: buildCodexLevels(efforts) };
   }
   const resolvedCodexEfforts =
-    params.api === "openai-chatgpt-responses"
+    params.api === undefined || params.api === "openai-chatgpt-responses"
       ? resolveOpenAICodexReasoningEfforts(modelId, codexEfforts)
       : undefined;
   const knownCodexEfforts = resolveOpenAICodexReasoningEfforts(modelId, undefined);

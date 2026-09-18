@@ -63,7 +63,7 @@ defineDiscordVoiceTests(
             "voice capture stream",
           );
           getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-owner", "speaker end");
-          expect(entry.capture.get("u-owner")?.finalizeTimer).toBeDefined();
+          expect(entry.capture.captureFinalizeTimers.has("u-owner")).toBe(true);
           const turn = beginSpeakerTurn(entry);
           const { bridgeParams: provider, session: oldProvider } = lastRealtimeBridge();
           const player = getLastAudioPlayer();
@@ -82,7 +82,9 @@ defineDiscordVoiceTests(
           expect(entry.transcripts).toBeUndefined();
           expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
-          expect(entry.capture.size).toBe(0);
+          expect(entry.capture.activeSpeakers.size).toBe(0);
+          expect(entry.capture.activeCaptureStreams.size).toBe(0);
+          expect(entry.capture.captureFinalizeTimers.size).toBe(0);
           expect(oldConnection.destroy).toHaveBeenCalledTimes(boundary === "leave" ? 1 : 0);
           expect(oldProvider.close).toHaveBeenCalledOnce();
           expect(loggerErrorMock).not.toHaveBeenCalled();

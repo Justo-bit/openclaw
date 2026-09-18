@@ -82,8 +82,10 @@ export class DiscordRealtimeConsults {
   isIdle(): boolean {
     return (
       this.talkback.isIdle() &&
-      this.providerDeliveries.size === 0 &&
-      this.params.harness.forcedConsults.handles().every((handle) => handle.context?.result)
+      this.params.harness.forcedConsults.handles().every((handle) => {
+        const state = handle.context;
+        return Boolean(state?.result) && state?.settleProviderDelivery === undefined;
+      })
     );
   }
 
