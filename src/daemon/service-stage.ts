@@ -27,6 +27,29 @@ export const GatewayServiceStagedFilesSchema = z.strictObject({
     .max(16),
 });
 export type GatewayServiceStagedFiles = z.infer<typeof GatewayServiceStagedFilesSchema>;
+const definitionFile = GatewayServiceStagedFilesSchema.shape.files.element.extend({
+  after: fileState.nullable(),
+});
+export const GatewayServiceDefinitionBackupReceiptSchema = z.strictObject({
+  id: z.uuid(),
+  files: z.array(definitionFile).min(1).max(4),
+  guards: z.array(definitionFile.pick({ sourcePath: true, after: true })),
+  task: z
+    .strictObject({
+      beforeSha256: fileState.shape.sha256,
+      afterPolicySha256: fileState.shape.sha256,
+    })
+    .optional(),
+});
+export type GatewayServiceDefinitionBackupReceipt = z.infer<
+  typeof GatewayServiceDefinitionBackupReceiptSchema
+>;
+export type GatewayServiceDefinitionTransactionHooks = {
+  assertCurrent: () => void;
+  beforeWrite: () => Promise<void>;
+  fileWritten: (sourcePath: string, contents: string | Uint8Array | null) => Promise<void>;
+  taskWritten: (expectedXml: string) => Promise<void>;
+};
 type GatewayServiceFileState = z.infer<typeof fileState>;
 
 /** Read one stable regular file; publication owners compare it to retained write facts. */

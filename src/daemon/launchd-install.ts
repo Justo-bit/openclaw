@@ -139,6 +139,7 @@ type LaunchAgentInstallSnapshot = {
   envFileContents: Buffer | null;
   wrapperContents: Buffer | null;
   loaded: boolean;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 };
 
 async function snapshotLaunchAgentLoadedState(
@@ -166,27 +167,34 @@ async function restoreLaunchAgentOwnedFile(params: {
   path: string;
   contents: Buffer | null;
   mode: number;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<void> {
   if (params.contents === null) {
+    await params.definitionTransaction?.beforeWrite();
     assertGatewayServiceUpdateCurrent();
+    params.definitionTransaction?.assertCurrent();
     await fs.unlink(params.path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
     });
+    await params.definitionTransaction?.fileWritten(params.path, null);
     return;
   }
   const temporaryPath = `${params.path}.openclaw-${randomUUID()}.rollback`;
   try {
     assertGatewayServiceUpdateCurrent();
-    await fs.writeFile(temporaryPath, params.contents.toString("utf8"), {
+    await fs.writeFile(temporaryPath, params.contents, {
       flag: "wx",
       mode: params.mode,
     });
+    await params.definitionTransaction?.beforeWrite();
     assertGatewayServiceUpdateCurrent();
+    params.definitionTransaction?.assertCurrent();
     await fs.rename(temporaryPath, params.path);
     assertGatewayServiceUpdateCurrent();
     await fs.chmod(params.path, params.mode).catch(() => undefined);
+    await params.definitionTransaction?.fileWritten(params.path, params.contents);
   } finally {
     await fs.unlink(temporaryPath).catch(() => undefined);
   }
@@ -198,16 +206,36 @@ async function restoreLaunchAgentInstallArtifacts(params: {
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
 }): Promise<void> {
-  await restoreLaunchAgentOwnedFile({
-    path: resolveLaunchAgentEnvFilePath(params.env, params.label),
-    contents: params.snapshot.envFileContents,
-    mode: LAUNCH_AGENT_ENV_FILE_MODE,
-  });
-  await restoreLaunchAgentOwnedFile({
-    path: resolveLaunchAgentEnvWrapperPath(params.env, params.label),
-    contents: params.snapshot.wrapperContents,
-    mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
-  });
+  await assertNoSystemLaunchDaemonOwnership(params.label);
+  const ancillary = [
+    {
+      path: resolveLaunchAgentEnvFilePath(params.env, params.label),
+      contents: params.snapshot.envFileContents,
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    },
+    {
+      path: resolveLaunchAgentEnvWrapperPath(params.env, params.label),
+      contents: params.snapshot.wrapperContents,
+      mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
+    },
+  ];
+  const restoreAncillary = async (present: boolean) => {
+    for (const file of ancillary.filter((entry) => (entry.contents !== null) === present)) {
+      await restoreLaunchAgentOwnedFile({
+        ...file,
+        definitionTransaction: params.snapshot.definitionTransaction,
+      });
+    }
+  };
+  await restoreAncillary(true);
+  if (params.snapshot.plistContents !== null) {
+    await publishLaunchAgentPlist({
+      label: params.label,
+      plistPath: params.plistPath,
+      contents: params.snapshot.plistContents,
+      definitionTransaction: params.snapshot.definitionTransaction,
+    });
+  }
   if (params.snapshot.plistContents === null) {
     assertGatewayServiceUpdateCurrent();
     await fs.unlink(params.plistPath).catch((error: unknown) => {
@@ -215,13 +243,8 @@ async function restoreLaunchAgentInstallArtifacts(params: {
         throw error;
       }
     });
-    return;
   }
-  await publishLaunchAgentPlist({
-    label: params.label,
-    plistPath: params.plistPath,
-    contents: params.snapshot.plistContents.toString("utf8"),
-  });
+  await restoreAncillary(false);
 }
 
 async function restoreLaunchAgentInstall(params: {
@@ -334,6 +357,7 @@ export async function installLaunchAgent(
   // Plist, generated environment files, and launchd registration form one cutover.
   // Capture every prior owner before publication so any later failure can restore it.
   const snapshot: LaunchAgentInstallSnapshot = {
+    definitionTransaction: args.definitionTransaction,
     plistContents: previousContents,
     envFileContents: await readExistingLaunchAgentPlist(
       resolveLaunchAgentEnvFilePath(args.env, label),

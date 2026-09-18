@@ -20,11 +20,14 @@ export { formatRuntimeStatus };
 export { parsePort };
 
 /** Create install action context with JSON flag normalization. */
-export function createDaemonInstallActionContext(jsonFlag: unknown) {
+export function createDaemonInstallActionContext(
+  jsonFlag: unknown,
+  definitionBackup?: Parameters<typeof createDaemonActionContext>[0]["definitionBackup"],
+) {
   const json = Boolean(jsonFlag);
   return {
     json,
-    ...createDaemonActionContext({ action: "install", json }),
+    ...createDaemonActionContext({ action: "install", json, definitionBackup }),
   };
 }
 

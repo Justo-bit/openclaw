@@ -581,6 +581,14 @@ describe("installScheduledTask", () => {
     });
   });
 
+  it("reports a failed policy upgrade instead of running an unchanged older task", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);
+      await expect(installDefaultGatewayTask(env)).rejects.toThrow("definition upgrade failed");
+      expect(schtasksCalls.map((call) => call[0])).toEqual(["/Query", "/Change", "/Create"]);
+    });
+  });
+
   it.each([
     {
       kind: "existing",

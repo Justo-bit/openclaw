@@ -70,7 +70,7 @@ function buildLaunchAgentEnvironmentFile(entries: Array<[string, string]>): stri
   ].join("\n");
 }
 
-function buildLaunchAgentEnvironmentWrapper(): string {
+export function buildLaunchAgentEnvironmentWrapper(): string {
   return `#!/bin/sh
 set -eu
 env_file="$1"
@@ -133,6 +133,7 @@ async function prepareLaunchAgentProgramArguments(params: {
   environment: GatewayServiceEnv | undefined;
   stdout?: NodeJS.WritableStream;
   warn?: (message: string) => void;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<{
   programArguments: string[];
   inlineEnvironment?: GatewayServiceEnv;
@@ -149,25 +150,32 @@ async function prepareLaunchAgentProgramArguments(params: {
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
   const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
+  await params.definitionTransaction?.beforeWrite();
   assertGatewayServiceUpdateCurrent();
-  await fs.writeFile(envFilePath, buildLaunchAgentEnvironmentFile(entries), {
+  params.definitionTransaction?.assertCurrent();
+  const environmentFile = buildLaunchAgentEnvironmentFile(entries);
+  await fs.writeFile(envFilePath, environmentFile, {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_FILE_MODE,
   });
   assertGatewayServiceUpdateCurrent();
   await fs.chmod(envFilePath, LAUNCH_AGENT_ENV_FILE_MODE).catch(() => undefined);
+  await params.definitionTransaction?.fileWritten(envFilePath, environmentFile);
   const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
     wrapperPath,
     generatedWrapper,
   });
   writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
+  await params.definitionTransaction?.beforeWrite();
   assertGatewayServiceUpdateCurrent();
+  params.definitionTransaction?.assertCurrent();
   await fs.writeFile(wrapperPath, generatedWrapper, {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
   });
   assertGatewayServiceUpdateCurrent();
   await fs.chmod(wrapperPath, LAUNCH_AGENT_ENV_WRAPPER_MODE).catch(() => undefined);
+  await params.definitionTransaction?.fileWritten(wrapperPath, generatedWrapper);
 
   if (
     isLaunchAgentEnvironmentWrapperArgs({
@@ -221,7 +229,8 @@ export async function readExistingLaunchAgentPlist(plistPath: string): Promise<B
 export async function publishLaunchAgentPlist(params: {
   label: string;
   plistPath: string;
-  contents: string;
+  contents: string | Buffer;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<void> {
   const previousContents = await readExistingLaunchAgentPlist(params.plistPath);
   const temporaryPath = `${params.plistPath}.openclaw-${randomUUID()}.tmp`;
@@ -235,7 +244,9 @@ export async function publishLaunchAgentPlist(params: {
     // The temporary filename does not end in .plist, so launchd cannot discover
     // it before the final ownership check and atomic publication.
     await assertNoSystemLaunchDaemonOwnership(params.label);
+    await params.definitionTransaction?.beforeWrite();
     assertGatewayServiceUpdateCurrent();
+    params.definitionTransaction?.assertCurrent();
     await fs.rename(temporaryPath, params.plistPath);
     try {
       await assertNoSystemLaunchDaemonOwnership(params.label);
@@ -272,6 +283,7 @@ export async function publishLaunchAgentPlist(params: {
     await fs.unlink(temporaryPath).catch(() => undefined);
   }
   await ensureLaunchAgentPlistReadable(params.plistPath);
+  await params.definitionTransaction?.fileWritten(params.plistPath, params.contents);
 }
 
 async function ensureSecureDirectory(
@@ -311,6 +323,7 @@ export async function writeLaunchAgentPlist({
   description,
   stdout,
   warn,
+  definitionTransaction,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string; stdoutPath: string }> {
   const label = resolveLaunchAgentLabel(env);
   await assertNoSystemLaunchDaemonOwnership(label);
@@ -332,6 +345,7 @@ export async function writeLaunchAgentPlist({
     environment,
     stdout,
     warn,
+    definitionTransaction,
   });
 
   const serviceDescription = resolveGatewayServiceDescription({ env, description });
@@ -346,7 +360,7 @@ export async function writeLaunchAgentPlist({
     stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
-  await publishLaunchAgentPlist({ label, plistPath, contents: plist });
+  await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });
   return { plistPath, stdoutPath };
 }
 export async function rewriteLaunchAgentPlistForRestart({

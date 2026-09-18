@@ -1,0 +1,660 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { stageLaunchAgent } from "./launchd-install.js";
+import { resolveLaunchAgentLabel } from "./launchd-label.js";
+import { restartLaunchAgent } from "./launchd-lifecycle.js";
+import { buildLaunchAgentPlist } from "./launchd-plist.js";
+import {
+  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvWrapperPath,
+  resolveLaunchAgentPlistPath,
+} from "./launchd-service-files.js";
+import { installScheduledTask } from "./schtasks-install.js";
+import {
+  buildScheduledTaskXml,
+  resolveTaskScriptPath,
+  resolveStartupEntryPaths,
+} from "./schtasks-layout.js";
+import {
+  captureGatewayServiceDefinitionBackup,
+  restoreGatewayServiceDefinitionBackup,
+} from "./service-definition-backup.js";
+import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
+import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { stageSystemdService } from "./systemd-install.js";
+import { restartSystemdService } from "./systemd-lifecycle.js";
+import { resolveSystemdUnitPath } from "./systemd-service-files.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
+
+const native = vi.hoisted(() => ({
+  command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
+  task: vi.fn(),
+  identity: vi.fn<typeof import("./exec-file.js").execFileUtf8>(),
+  launchctl: vi.fn<typeof import("./launchd-exec.js").execLaunchctl>(),
+  transport: vi.fn<typeof import("./systemd-user-transport.js").resolveSystemdUserTransport>(),
+}));
+vi.mock("./service.js", () => ({ resolveGatewayService: () => ({ readCommand: native.command }) }));
+vi.mock("./systemd-service-files.js", async (original) => ({
+  ...(await original<typeof import("./systemd-service-files.js")>()),
+  readSystemdServiceExecStart: native.command,
+}));
+vi.mock("./systemd-system.js", () => ({
+  assertNoSystemSystemdOwnership: async () => {},
+  isSystemSystemdOwnershipError: () => false,
+}));
+vi.mock("./systemd-exec.js", async (original) => ({
+  ...(await original<typeof import("./systemd-exec.js")>()),
+  assertSystemdAvailable: async () => {},
+}));
+vi.mock("./systemd-user-transport.js", async (original) => ({
+  ...(await original<typeof import("./systemd-user-transport.js")>()),
+  resolveSystemdUserTransport: native.transport,
+}));
+vi.mock("./systemd-scope.js", async (original) => ({
+  ...(await original<typeof import("./systemd-scope.js")>()),
+  findInstalledSystemdGatewayScope: async () => {
+    const unitPath = (await native.command()).sourcePath!;
+    return { scope: "user", unitPath, unitName: path.basename(unitPath) };
+  },
+}));
+vi.mock("./launchd-system.js", async (original) => ({
+  ...(await original<typeof import("./launchd-system.js")>()),
+  assertNoSystemLaunchDaemonOwnership: async () => {},
+  inspectSystemLaunchDaemonOwnership: async (label: string) => ({
+    status: "absent",
+    serviceTarget: `system/${label}`,
+  }),
+}));
+vi.mock("./launchd-exec.js", async (original) => ({
+  ...(await original<typeof import("./launchd-exec.js")>()),
+  execLaunchctl: native.launchctl,
+}));
+vi.mock("./launchd-current-service.js", async (original) => ({
+  ...(await original<typeof import("./launchd-current-service.js")>()),
+  isCurrentProcessInsideLaunchdService: async () => false,
+}));
+vi.mock("./launchd-runtime.js", async (original) => ({
+  ...(await original<typeof import("./launchd-runtime.js")>()),
+  resolveLaunchAgentGatewayContext: async (env: GatewayServiceEnv) => ({
+    env,
+    port: null,
+    probeHosts: [],
+  }),
+}));
+vi.mock("../infra/restart-stale-pids.js", async (original) => ({
+  ...(await original<typeof import("../infra/restart-stale-pids.js")>()),
+  cleanStaleGatewayProcessesSync: vi.fn(),
+}));
+vi.mock("../infra/ports-probe.js", async (original) => ({
+  ...(await original<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage: async () => "free",
+}));
+vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+vi.mock("./exec-file.js", async (original) => ({
+  ...(await original<typeof import("./exec-file.js")>()),
+  execFileUtf8: native.identity,
+}));
+vi.mock("./schtasks-runtime.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-runtime.js")>()),
+  readScheduledTaskRuntime: async () => ({ status: "running" }),
+  resolveFallbackRuntime: async () => ({ status: "stopped" }),
+  waitForScheduledTaskRunningEvidence: async () => true,
+}));
+vi.mock("../infra/ports-inspect.js", async (original) => ({
+  ...(await original<typeof import("../infra/ports-inspect.js")>()),
+  inspectPortUsage: async (port: number) => ({ port, status: "free", listeners: [], hints: [] }),
+}));
+vi.mock("../infra/windows-encoding.js", async (original) => ({
+  ...(await original<typeof import("../infra/windows-encoding.js")>()),
+  resolveWindowsOemCodePage: () => 437,
+  resolveWindowsOemEncoding: () => null,
+}));
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  native.command.mockReset();
+  native.task.mockReset();
+  native.transport.mockReset().mockResolvedValue(undefined);
+  native.launchctl.mockReset().mockResolvedValue({
+    code: 113,
+    stdout: "",
+    stderr: "Could not find service",
+    termination: "exit",
+  });
+  native.identity.mockReset().mockResolvedValue({
+    code: 0,
+    stdout: "S-1-5-21-1-2-3-1001\n",
+    stderr: "",
+    termination: "exit",
+  });
+});
+
+async function fixture(
+  platform: "linux" | "darwin" | "win32",
+  ancillary = false,
+  originalDefinition?: Buffer,
+) {
+  const root = await fs.realpath(dirs.make("service-definition-backup-"));
+  const env: GatewayServiceEnv = {
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_SYSTEMD_UNIT: "openclaw-owned",
+    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.receipt-fixture",
+    USERNAME: "operator",
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+  };
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  const readFile = fs.readFile.bind(fs);
+  if (platform === "linux") {
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      if (typeof args[0] === "string" && args[0].startsWith("/proc/self/fdinfo/")) {
+        return "mnt_id:\t1\n";
+      }
+      if (args[0] === "/proc/self/mountinfo") {
+        return "1 0 0:1 / / rw - tmpfs tmpfs rw\n";
+      }
+      return readFile(...args);
+    });
+  }
+  const sourcePath =
+    platform === "linux"
+      ? resolveSystemdUnitPath(env)
+      : platform === "darwin"
+        ? resolveLaunchAgentPlistPath(env)
+        : resolveTaskScriptPath(env);
+  const command: GatewayServiceCommandConfig = {
+    programArguments: ["/usr/bin/node", "/old/index.js", "gateway"],
+    sourcePath,
+    definitionPaths: [sourcePath],
+    environment: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR! },
+  };
+  native.command.mockImplementation(async () => command);
+  const original =
+    originalDefinition ??
+    (platform === "linux"
+      ? Buffer.from(buildSystemdUnit(command).replace("KillMode=mixed\n", ""))
+      : platform === "darwin"
+        ? Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30, 0xff, 0x81])
+        : Buffer.from("@echo off\r\nnode old.js gateway\r\n"));
+  const files = [
+    sourcePath,
+    ...(platform === "linux"
+      ? [path.join(env.OPENCLAW_STATE_DIR!, "gateway.systemd.env")]
+      : platform === "darwin"
+        ? [
+            resolveLaunchAgentEnvFilePath(env, resolveLaunchAgentLabel(env)),
+            resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env)),
+          ]
+        : [sourcePath.replace(/\.cmd$/, ".vbs")]),
+  ];
+  for (const file of files) {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  }
+  await fs.writeFile(sourcePath, original, { mode: 0o600 });
+  if (ancillary) {
+    for (const file of files.slice(1)) {
+      await fs.writeFile(file, "OPERATOR_SETTING=old-value\n", { mode: 0o600 });
+    }
+  }
+  let task = buildScheduledTaskXml({
+    taskDescription: "old",
+    launchPath: "old.cmd",
+    taskUser: "operator",
+  })
+    .replace("<Count>3</Count>", "<Count>0</Count>")
+    .replace("<RunLevel>LeastPrivilege</RunLevel>", "");
+  const originalTask = task;
+  native.task.mockImplementation(async (args: string[]) => {
+    if (args[0] === "/Query") {
+      return { code: 0, stderr: "", stdout: args.includes("/XML") ? task : "" };
+    }
+    if (args[0] === "/Create") {
+      task = (await fs.readFile(args[args.indexOf("/XML") + 1]!)).subarray(2).toString("utf16le");
+    }
+    return { code: 0, stderr: "", stdout: "" };
+  });
+  let current = true;
+  const context = {
+    env,
+    command,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("expired authority");
+      }
+    },
+  };
+  const capture = await captureGatewayServiceDefinitionBackup(context);
+  const install = async () => {
+    const args = {
+      env,
+      programArguments: ["/usr/bin/node", "/new/index.js", "gateway"],
+      environment: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR, OPERATOR_SETTING: "new-value" },
+      stdout: new PassThrough(),
+      definitionTransaction: capture.hooks,
+    };
+    if (platform === "linux") {
+      await stageSystemdService(args);
+    } else if (platform === "darwin") {
+      await stageLaunchAgent(args);
+    } else {
+      await installScheduledTask(args);
+    }
+  };
+  return {
+    ...context,
+    capture,
+    install,
+    sourcePath,
+    files,
+    original,
+    originalTask,
+    task: () => task,
+    setTask: (value: string) => {
+      task = value;
+    },
+    expire: () => {
+      current = false;
+    },
+  };
+}
+
+describe("service definition backup receipts", () => {
+  it.each([false, true])(
+    "reloads the restored systemd definition before retiring its old inputs (authority expires=%s)",
+    async (expires) => {
+      const f = await fixture("linux");
+      await stageSystemdService({
+        env: f.env,
+        stdout: new PassThrough(),
+        programArguments: ["/usr/bin/node", "/new/index.js", "gateway"],
+        environment: { ...f.command.environment, OPERATOR_SETTING: "candidate" },
+        environmentValueSources: { OPERATOR_SETTING: "file" },
+        definitionTransaction: f.capture.hooks,
+      });
+      const receipt = await f.capture.finish();
+      let loaded = await fs.readFile(f.sourcePath, "utf8");
+      expect(loaded).toContain("EnvironmentFile=");
+      const loadedArguments = () => parseSystemdExecStart(/^ExecStart=(.*)$/mu.exec(loaded)![1]!);
+      native.command.mockImplementation(async () => {
+        if (loaded.includes("EnvironmentFile=")) {
+          await fs.access(f.files[1]!);
+        }
+        return { ...f.command, programArguments: loadedArguments() };
+      });
+      let started: string[] | undefined;
+      native.identity.mockImplementation(async (command, args) => {
+        expect(command).toBe("systemctl");
+        if (args.includes("daemon-reload")) {
+          expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+          await fs.access(f.files[1]!);
+          loaded = await fs.readFile(f.sourcePath, "utf8");
+        } else if (args.includes("restart")) {
+          started = loadedArguments();
+        } else {
+          expect(args).toContain("reset-failed");
+        }
+        return { code: 0, stdout: "", stderr: "", termination: "exit" };
+      });
+      if (expires) {
+        native.transport.mockImplementation(async () => {
+          f.expire();
+          return undefined;
+        });
+        await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+          "expired authority",
+        );
+        expect(native.identity).not.toHaveBeenCalled();
+        await fs.access(f.files[1]!);
+        return;
+      }
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(loaded).toBe(f.original.toString("utf8"));
+      await expect(fs.stat(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+      await restartSystemdService({
+        env: f.env,
+        stdout: new PassThrough(),
+        preserveDefinition: true,
+        assertCurrent: f.assertCurrent,
+      });
+      expect(started).toEqual(f.command.programArguments);
+    },
+  );
+
+  it.each(["stopped", "absent", "unknown"])(
+    "restores launchd disk and cached definition with a %s job",
+    async (job) => {
+      const original = Buffer.from(
+        buildLaunchAgentPlist({
+          label: "ai.openclaw.receipt-fixture",
+          programArguments: ["/usr/bin/node", "/old/index.js", "gateway"],
+          stdoutPath: "/fixture/gateway.log",
+          stderrPath: "/fixture/gateway.log",
+        }),
+      );
+      const f = await fixture("darwin", false, original);
+      await f.install();
+      const receipt = await f.capture.finish();
+      const candidate = await fs.readFile(f.sourcePath);
+      let cached: Buffer | null = job === "absent" ? null : candidate;
+      let started: Buffer | undefined;
+      native.launchctl.mockImplementation(async (args) => {
+        expect(args.some((arg) => arg.includes("ai.openclaw.receipt-fixture"))).toBe(true);
+        const ok = { code: 0, stdout: "", stderr: "", termination: "exit" as const };
+        const missing = { ...ok, code: 113, stderr: "Could not find service" };
+        if (args[0] === "print") {
+          return job === "unknown"
+            ? { ...ok, code: 13, stderr: "Access denied" }
+            : cached
+              ? { ...ok, stdout: "state = waiting\n" }
+              : missing;
+        }
+        if (args[0] === "bootout") {
+          expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+          cached = null;
+        } else if (args[0] === "bootstrap") {
+          cached = await fs.readFile(f.sourcePath);
+        } else if (args[0] === "kickstart") {
+          if (!cached) {
+            return missing;
+          }
+          started = cached;
+        } else {
+          expect(args[0]).toBe("enable");
+        }
+        return ok;
+      });
+      if (job === "unknown") {
+        await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+          "Cached LaunchAgent definition",
+        );
+        expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+        expect(cached).toEqual(candidate);
+        expect(native.launchctl.mock.calls.every(([args]) => args[0] === "print")).toBe(true);
+        return;
+      }
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(cached).toBeNull();
+      expect(native.launchctl.mock.calls.some(([args]) => args[0] === "bootout")).toBe(
+        job === "stopped",
+      );
+      expect(
+        native.launchctl.mock.calls.some(([args]) =>
+          ["enable", "bootstrap", "kickstart"].includes(args[0]!),
+        ),
+      ).toBe(false);
+      await restartLaunchAgent({ env: f.env, stdout: new PassThrough(), preserveDefinition: true });
+      expect(started).toEqual(original);
+    },
+  );
+  it.each(["linux", "darwin", "win32"] as const)(
+    "backs up before native %s publication and restores exact bytes from a serialized receipt",
+    async (platform) => {
+      const f = await fixture(platform);
+      expect(await fs.readFile(f.capture.backupPaths[0]!)).toEqual(f.original);
+      expect((await fs.stat(f.capture.backupPaths[0]!)).mode & 0o777).toBe(0o600);
+      await f.install();
+      const serializedReceipt = JSON.stringify(await f.capture.finish());
+      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+        JSON.parse(serializedReceipt),
+      );
+      expect(await fs.readFile(f.sourcePath)).not.toEqual(f.original);
+      if (platform === "linux") {
+        expect(await fs.readFile(f.sourcePath, "utf8")).toContain("KillMode=mixed");
+      }
+      if (platform === "win32") {
+        expect(f.task()).toContain("<Count>3</Count>");
+        f.setTask(
+          f
+            .task()
+            .replace(/(<Settings>[\s\S]*?)<Enabled>true<\/Enabled>/u, "$1<Enabled>false</Enabled>"),
+        );
+      }
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      expect((await fs.stat(f.sourcePath)).mode & 0o777).toBe(0o600);
+      for (const file of f.files.slice(1)) {
+        await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (platform === "win32") {
+        expect(f.task()).toBe(
+          f.originalTask.replace(
+            /(<Settings>[\s\S]*?)<Enabled>true<\/Enabled>/u,
+            "$1<Enabled>false</Enabled>",
+          ),
+        );
+      }
+    },
+  );
+
+  it.each(["linux", "darwin"] as const)(
+    "restores prior %s ancillary contents and modes",
+    async (platform) => {
+      const f = await fixture(platform, true);
+      await f.install();
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt: await f.capture.finish() });
+      for (const file of f.files.slice(1)) {
+        expect(await fs.readFile(file, "utf8")).toBe("OPERATOR_SETTING=old-value\n");
+        expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
+
+  it.each(["linux", "darwin", "win32"] as const)(
+    "rejects edits between capture and the native %s writer",
+    async (platform) => {
+      const f = await fixture(platform);
+      await fs.appendFile(f.sourcePath, "operator-edit");
+      await expect(f.install()).rejects.toThrow("Service definition changed");
+      expect(await fs.readFile(f.sourcePath)).toEqual(
+        Buffer.concat([f.original, Buffer.from("operator-edit")]),
+      );
+    },
+  );
+
+  it.each(["later edit", "damaged backup", "expired authority", "foreign path"])(
+    "refuses rollback for %s before changing any file",
+    async (fault) => {
+      const f = await fixture("darwin", true);
+      await f.install();
+      const receipt = await f.capture.finish();
+      if (fault === "later edit") {
+        await fs.appendFile(f.sourcePath, "operator-edit");
+      }
+      if (fault === "damaged backup") {
+        await fs.writeFile(f.capture.backupPaths.at(-1)!, "damaged");
+      }
+      if (fault === "expired authority") {
+        f.expire();
+      }
+      if (fault === "foreign path") {
+        receipt.files[0]!.sourcePath = `${f.sourcePath}.foreign`;
+      }
+      const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+      await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow();
+      expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+    },
+  );
+
+  it("preserves later Scheduled Task XML edits during rollback", async () => {
+    const f = await fixture("win32");
+    await f.install();
+    const receipt = await f.capture.finish();
+    f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
+    const script = await fs.readFile(f.sourcePath);
+    await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+      "Scheduled Task changed",
+    );
+    expect(f.task()).toContain("<Count>7</Count>");
+    expect(await fs.readFile(f.sourcePath)).toEqual(script);
+  });
+
+  it.each([
+    "Settings.RestartOnFailure.Count",
+    "Actions.Exec.Command",
+    "RegistrationInfo.Description",
+  ])(
+    "rejects an intervening native publication edit to %s without absorbing it into rollback",
+    async (key) => {
+      const f = await fixture("win32");
+      const execute = native.task.getMockImplementation()!;
+      native.task.mockImplementation(async (args: string[]) => {
+        const result = await execute(args);
+        if (args[0] === "/Create") {
+          f.setTask(
+            key === "Settings.RestartOnFailure.Count"
+              ? f.task().replace("<Count>3</Count>", "<Count>7</Count>")
+              : key === "Actions.Exec.Command"
+                ? f
+                    .task()
+                    .replace(
+                      /<Command>[^<]*<\/Command>/u,
+                      "<Command>operator-private.cmd</Command>",
+                    )
+                : f
+                    .task()
+                    .replace(
+                      /<Description>[^<]*<\/Description>/u,
+                      "<Description>operator-private</Description>",
+                    ),
+          );
+        }
+        return result;
+      });
+      await expect(f.install()).rejects.toThrow(key);
+      const observed = f.task();
+      expect(
+        native.task.mock.calls.some(([args]) => args[0] === "/Change" || args[0] === "/Run"),
+      ).toBe(false);
+      await expect(f.capture.compensate()).rejects.toThrow("Scheduled Task changed");
+      expect(f.task()).toBe(observed);
+      expect(native.task.mock.calls.filter(([args]) => args[0] === "/Create")).toHaveLength(1);
+    },
+  );
+
+  it("verifies the submitted policy across native SID, default and registration normalization", async () => {
+    const f = await fixture("win32");
+    const execute = native.task.getMockImplementation()!;
+    native.task.mockImplementation(async (args: string[]) => {
+      const result = await execute(args);
+      if (args[0] === "/Create") {
+        f.setTask(
+          f
+            .task()
+            .replaceAll("<UserId>operator</UserId>", "<UserId>S-1-5-21-1-2-3-1001</UserId>")
+            .replace("<RunLevel>LeastPrivilege</RunLevel>", "")
+            .replace(
+              "<Settings>",
+              "<Settings><UseUnifiedSchedulingEngine>false</UseUnifiedSchedulingEngine>",
+            )
+            .replace(
+              "<RegistrationInfo>",
+              "<RegistrationInfo><Date>2026-09-04T00:00:00Z</Date><Author>operator</Author><URI>\\OpenClaw Gateway</URI>",
+            )
+            .replace(/(<Settings>[\s\S]*?)<Enabled>true<\/Enabled>/u, "$1<Enabled>false</Enabled>"),
+        );
+      }
+      return result;
+    });
+    await f.install();
+    expect(f.task()).toContain("<Count>3</Count>");
+    expect(f.task()).toContain("<Interval>PT1M</Interval>");
+    expect(native.identity).toHaveBeenCalled();
+    expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(true);
+    await expect(f.capture.finish()).resolves.toMatchObject({
+      task: { afterPolicySha256: expect.any(String) },
+    });
+  });
+
+  it("pins the verified XML snapshot and rechecks it before running the task", async () => {
+    const f = await fixture("win32");
+    const execute = native.task.getMockImplementation()!;
+    let published = false;
+    let edited = false;
+    native.task.mockImplementation(async (args: string[]) => {
+      const result = await execute(args);
+      if (args[0] === "/Create") {
+        published = true;
+      } else if (published && !edited && args[0] === "/Query" && args.includes("/XML")) {
+        edited = true;
+        f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
+      }
+      return result;
+    });
+    await expect(f.install()).rejects.toThrow("Scheduled Task changed");
+    const observed = f.task();
+    expect(edited).toBe(true);
+    expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(false);
+    await expect(f.capture.compensate()).rejects.toThrow("Scheduled Task changed");
+    expect(f.task()).toBe(observed);
+    expect(native.task.mock.calls.filter(([args]) => args[0] === "/Create")).toHaveLength(1);
+  });
+
+  it("preserves coexisting Startup files during a receipt-owned Scheduled Task install", async () => {
+    const f = await fixture("win32");
+    f.env.OPENCLAW_GATEWAY_PORT = "19305";
+    const startupFiles = resolveStartupEntryPaths(f.env).map((file, index) => ({
+      file,
+      contents: Buffer.from(`operator login item ${index}\r\n`),
+    }));
+    for (const { file, contents } of startupFiles) {
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      await fs.writeFile(file, contents, { mode: 0o600 });
+    }
+    await f.install();
+    await expect(f.capture.finish()).resolves.toMatchObject({
+      task: { afterPolicySha256: expect.any(String) },
+    });
+    for (const { file, contents } of startupFiles) {
+      expect(await fs.readFile(file)).toEqual(contents);
+    }
+    expect(native.task.mock.calls.filter(([args]) => args[0] === "/Run")).toHaveLength(1);
+    expect(native.task.mock.calls.some(([args]) => args[0] === "/End")).toBe(false);
+  });
+
+  it("denies Startup fallback for a receipt-owned install without an executor", async () => {
+    const f = await fixture("win32");
+    const execute = native.task.getMockImplementation()!;
+    native.task.mockImplementation(async (args: string[]) =>
+      args[0] === "/Create" || (args[0] === "/Query" && !args.includes("/XML"))
+        ? { code: 1, stdout: "", stderr: "ERROR: Access is denied." }
+        : execute(args),
+    );
+    await expect(f.install()).rejects.toThrow("startup fallback is unsupported");
+    expect(f.task()).toBe(f.originalTask);
+    for (const file of resolveStartupEntryPaths(f.env)) {
+      await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(native.task.mock.calls.some(([args]) => args[0] === "/Run")).toBe(false);
+  });
+
+  it("does not admit a new systemd drop-in after capture", async () => {
+    const f = await fixture("linux");
+    const dropIn = `${f.sourcePath}.d/operator.conf`;
+    await fs.mkdir(path.dirname(dropIn));
+    await fs.writeFile(dropIn, "[Service]\nNice=7\n");
+    f.command.definitionPaths!.push(dropIn);
+    await expect(f.install()).rejects.toThrow("different managed artifacts");
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(await fs.readFile(dropIn, "utf8")).toContain("Nice=7");
+  });
+
+  it("compensates proven script publication after a failed Scheduled Task policy write", async () => {
+    const f = await fixture("win32");
+    const execute = native.task.getMockImplementation()!;
+    native.task.mockImplementation(async (args: string[]) =>
+      args[0] === "/Create" ? { code: 1, stderr: "access denied", stdout: "" } : execute(args),
+    );
+    await expect(f.install()).rejects.toThrow("definition upgrade failed");
+    expect(await fs.readFile(f.sourcePath)).not.toEqual(f.original);
+    native.task.mockImplementation(execute);
+    await f.capture.compensate();
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toBe(f.originalTask);
+    await expect(fs.stat(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});

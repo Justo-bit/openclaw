@@ -2154,10 +2154,11 @@ describe("launchd install", () => {
 
   it("rolls back a post-publication ownership race before activation", async () => {
     const env = createDefaultLaunchdEnv();
-    launchdSystemState.assertNoSystemLaunchDaemonOwnership
-      .mockResolvedValueOnce()
-      .mockResolvedValueOnce()
-      .mockRejectedValueOnce(createSystemOwnershipError("installed"));
+    launchdSystemState.assertNoSystemLaunchDaemonOwnership.mockImplementation(async () => {
+      if (state.files.has(resolveLaunchAgentPlistPath(env))) {
+        throw createSystemOwnershipError("installed");
+      }
+    });
 
     await expect(
       installLaunchAgent({
@@ -2167,7 +2168,6 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("system ownership blocked: installed");
 
-    expect(launchdSystemState.assertNoSystemLaunchDaemonOwnership).toHaveBeenCalledTimes(3);
     expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
     expect(launchctlCommandNames()).toEqual(["print", "print"]);
   });
