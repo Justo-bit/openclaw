@@ -162,6 +162,7 @@ async function runProcess(
     interruptRemote: remoteExec.interrupt,
   });
   managed.child = owner;
+  void owner.exited.then(({ exitCode }) => emitProcessExited(managed, exitCode));
   void owner.closed.then(({ exitCode }) => emitProcessClosed(managed, exitCode));
   if ("pty" in owner) {
     owner.pty.onData((chunk) => appendProcessChunk(managed, "pty", Buffer.from(chunk)));
@@ -225,7 +226,7 @@ function appendProcessChunk(
   notifyProcessWaiters(managed);
 }
 
-function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): void {
+function emitProcessExited(managed: ManagedProcess, exitCode: number | null): void {
   if (!managed.exited) {
     const exitSeq = managed.nextSeq;
     managed.nextSeq += 1;
@@ -240,6 +241,11 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
       });
     }
   }
+  notifyProcessWaiters(managed);
+}
+
+function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): void {
+  emitProcessExited(managed, exitCode);
   if (!managed.closed) {
     const closeSeq = managed.nextSeq;
     managed.nextSeq += 1;
@@ -285,7 +291,7 @@ export async function readProcess(
   const managed = requireProcess(processes, processId);
   const afterSeq = typeof record.afterSeq === "number" ? record.afterSeq : 0;
   const waitMs = typeof record.waitMs === "number" && record.waitMs > 0 ? record.waitMs : 0;
-  if (!managed.exited && !hasChunksAtOrAfter(managed, afterSeq) && waitMs > 0) {
+  if (!managed.closed && managed.nextSeq - 1 <= afterSeq && waitMs > 0) {
     await waitForProcessUpdate(managed, waitMs);
   }
   const chunks = limitProcessChunks(
@@ -386,10 +392,6 @@ function notifyProcessWaiters(managed: ManagedProcess): void {
   for (const waiter of waiters) {
     waiter();
   }
-}
-
-function hasChunksAtOrAfter(managed: ManagedProcess, afterSeq: number): boolean {
-  return managed.chunks.some((chunk) => chunk.seq > afterSeq);
 }
 
 function requireProcess(processes: Map<string, ManagedProcess>, processId: string): ManagedProcess {

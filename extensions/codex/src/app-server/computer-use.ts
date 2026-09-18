@@ -146,6 +146,7 @@ type CodexComputerUseInspectionParams = {
   timeoutMs?: number;
   signal?: AbortSignal;
   computerUseConfig: ResolvedCodexComputerUseConfig;
+  runLiveTest: boolean;
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
@@ -210,6 +211,7 @@ export async function readCodexComputerUseStatus(
     return await inspectCodexComputerUse({
       ...params,
       computerUseConfig: config,
+      runLiveTest: true,
       installPlugin: false,
     });
   } catch (error) {
@@ -222,8 +224,8 @@ export async function readCodexComputerUseStatus(
 }
 
 /**
- * Ensures Computer Use is ready when enabled, optionally installing when config
- * allows safe auto-install.
+ * Ensures installation and MCP exposure before a turn, optionally installing when
+ * config allows safe auto-install. Only strict startup waits for a live probe.
  */
 export async function ensureCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
@@ -235,12 +237,10 @@ export async function ensureCodexComputerUse(
   const status = await inspectCodexComputerUse({
     ...params,
     computerUseConfig: config,
+    runLiveTest: config.strictReadiness,
     installPlugin: false,
   });
   if (status.ready) {
-    return status;
-  }
-  if (isNonStrictLiveTestStartupAllowed(status, config)) {
     return status;
   }
   if (config.autoInstall) {
@@ -251,11 +251,9 @@ export async function ensureCodexComputerUse(
     const installedStatus = await inspectCodexComputerUse({
       ...params,
       computerUseConfig: config,
+      runLiveTest: config.strictReadiness,
       installPlugin: true,
     });
-    if (isNonStrictLiveTestStartupAllowed(installedStatus, config)) {
-      return installedStatus;
-    }
     if (!installedStatus.ready) {
       throw new CodexComputerUseSetupError(installedStatus);
     }
@@ -279,6 +277,7 @@ export async function installCodexComputerUse(
   const status = await inspectCodexComputerUse({
     ...params,
     computerUseConfig: config,
+    runLiveTest: true,
     installPlugin: true,
   });
   if (!status.ready) {
@@ -482,6 +481,7 @@ async function inspectCodexComputerUseWithoutFence(
     signal: params.signal,
     config: params.computerUseConfig,
     plugin: pluginInspection.plugin,
+    runLiveTest: params.runLiveTest,
     installPlugin: params.installPlugin,
     releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
@@ -627,6 +627,7 @@ async function readComputerUseTools(params: {
   signal?: AbortSignal;
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
+  runLiveTest: boolean;
   installPlugin: boolean;
   releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
@@ -663,6 +664,11 @@ async function readComputerUseTools(params: {
     reason: "ready",
     message: "Computer Use is ready.",
   });
+  // Non-strict turns need installation and exposure, not a desktop round trip.
+  // Explicit diagnostics and the client-owned health monitor still probe live use.
+  if (!params.runLiveTest) {
+    return status;
+  }
   // The readiness thread reacquires this fence before loading native config.
   params.releaseNativeConfigFence?.();
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
@@ -694,21 +700,6 @@ async function readComputerUseTools(params: {
         ? `${liveTest.message} Startup is allowed because computerUse.strictReadiness is false.`
         : liveTest.message,
   };
-}
-
-function isNonStrictLiveTestStartupAllowed(
-  status: CodexComputerUseStatus,
-  config: ResolvedCodexComputerUseConfig,
-): boolean {
-  return (
-    !config.strictReadiness &&
-    status.reason === "live_test_failed" &&
-    status.installed &&
-    status.pluginEnabled &&
-    status.mcpServerAvailable &&
-    status.installation.ok &&
-    status.exposure.ok
-  );
 }
 
 async function resolveMarketplaceRef(params: {

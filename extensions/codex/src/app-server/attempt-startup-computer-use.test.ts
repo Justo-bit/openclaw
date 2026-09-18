@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
@@ -22,7 +22,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { createInferenceReadyClientHarness, waitForHarnessRequest } from "./test-support.js";
+import { createInferenceReadyClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.mock("./desktop-generation.js", () => ({
@@ -37,6 +37,7 @@ const threadStartResult = (threadId = "thread-1") => createThreadStartResult(thr
 
 describe("Computer Use attempt startup", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     await clearSharedCodexAppServerClientAndWait();
@@ -46,6 +47,7 @@ describe("Computer Use attempt startup", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await clearSharedCodexAppServerClientAndWait();
     setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
@@ -191,73 +193,110 @@ describe("Computer Use attempt startup", () => {
   );
 
   it.each([false, true])(
-    "reports failed Computer Use readiness at startup (strict: %s)",
+    "does not await optional live probes at turn startup (strictReadiness: %s)",
     async (strictReadiness) => {
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      vi.useFakeTimers();
+      const probeStarts: number[] = [];
+      const userStarts: number[] = [];
+      const harness = createInferenceReadyClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as {
+            id: number;
+            method: string;
+            params?: { ephemeral?: boolean };
+          };
+          switch (request.method) {
+            case "configRequirements/read":
+              send({ id: request.id, result: { requirements: null } });
+              break;
+            case "plugin/read":
+              send({
+                id: request.id,
+                result: { plugin: { summary: { installed: true, enabled: true } } },
+              });
+              break;
+            case "mcpServerStatus/list":
+              send({
+                id: request.id,
+                result: {
+                  data: [{ name: "computer-use", tools: { list_apps: {} } }],
+                  nextCursor: null,
+                },
+              });
+              break;
+            case "thread/start":
+              (request.params?.ephemeral ? probeStarts : userStarts).push(Date.now());
+              send({ id: request.id, result: threadStartResult() });
+              break;
+            case "thread/unsubscribe":
+              send({ id: request.id, result: { status: "unsubscribed" } });
+              break;
+            // Leave mcpServer/tool/call unanswered to exercise the real 60s timeout.
+          }
+        },
+      });
+      const { run } = startThreadWithHarness(180_000, new AbortController().signal, {
+        harness,
         pluginConfig: {
           ...pluginConfig,
           computerUse: {
             enabled: true,
             marketplacePath: "/marketplaces/desktop-tools/marketplace.json",
             strictReadiness,
+            autoRepair: false,
           },
         },
       });
-      void run.catch(() => undefined);
-      await answerInitialize(harness);
-      const pluginRead = await waitForRequest(harness, "plugin/read");
-      harness.send({
-        id: pluginRead.id,
-        result: {
-          plugin: {
-            marketplaceName: "desktop-tools",
-            summary: { installed: true, enabled: true },
-          },
-        },
-      });
-      const serverStatus = await waitForRequest(harness, "mcpServerStatus/list");
-      harness.send({
-        id: serverStatus.id,
-        result: { data: [{ name: "computer-use", tools: { list_apps: {} } }], nextCursor: null },
-      });
-      let requestOffset = harness.writes.length;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const probe = await waitForHarnessRequest(harness, "thread/start", requestOffset);
-        harness.send({ id: probe.id, result: threadStartResult(`probe-${attempt}`) });
-        const toolCall = await waitForHarnessRequest(harness, "mcpServer/tool/call", requestOffset);
-        harness.send({
-          id: toolCall.id,
-          error: { code: -32000, message: "desktop bridge unavailable" },
+      let settled = false;
+      const outcome = run
+        .then(
+          (result) => ({ result, error: undefined }),
+          (error: unknown) => ({ result: undefined, error }),
+        )
+        .finally(() => {
+          settled = true;
         });
-        const unsubscribe = await waitForHarnessRequest(
-          harness,
-          "thread/unsubscribe",
-          requestOffset,
-        );
-        harness.send({ id: unsubscribe.id, result: { status: "unsubscribed" } });
-        expect(readHarnessRequestMethods(harness)).not.toContain("thread/archive");
-        requestOffset = harness.writes.length;
-      }
-
+      await answerInitialize(harness);
       if (strictReadiness) {
-        await expect(run).rejects.toThrow("desktop bridge unavailable");
-        expect(warn).not.toHaveBeenCalled();
+        await waitForRequest(harness, "mcpServer/tool/call");
+        const firstProbeStart = probeStarts[0];
+        if (firstProbeStart === undefined) {
+          throw new Error("The strict readiness probe did not start");
+        }
+        await vi.advanceTimersByTimeAsync(firstProbeStart + 59_999 - Date.now());
+        expect(settled).toBe(false);
+        expect(probeStarts).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+        expect(probeStarts).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
+        const { error } = await outcome;
+        expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+        expect(error).toMatchObject({
+          cause: {
+            status: {
+              reason: "live_test_failed",
+              liveTest: { attempts: 2, durationMs: 120_000 },
+            },
+          },
+        });
+        expect(userStarts).toHaveLength(0);
+        expect(
+          readHarnessRequestMethods(harness).filter((method) => method === "thread/unsubscribe"),
+        ).toHaveLength(2);
       } else {
-        const threadStart = await waitForHarnessRequest(harness, "thread/start", requestOffset);
-        harness.send({ id: threadStart.id, result: threadStartResult() });
-        const result = await run;
-        result.turnRoute.release();
-        result.releaseSharedClientLease();
-        expect(warn).toHaveBeenCalledWith(
-          "codex computer-use readiness warning",
-          expect.objectContaining({
-            mcpServerName: "computer-use",
-            reason: "live_test_failed",
-            message: expect.stringContaining("desktop bridge unavailable"),
-          }),
-        );
+        await vi.waitFor(() => expect(settled).toBe(true), { interval: 1, timeout: 1_000 });
+        const { result, error } = await outcome;
+        expect(error).toBeUndefined();
+        expect(userStarts).toHaveLength(1);
+        expect(probeStarts).toHaveLength(0);
+        expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
+        result?.turnRoute.release();
+        result?.releaseSharedClientLease();
       }
+      expect(readHarnessRequestMethods(harness)).not.toContain("thread/archive");
+      expect(readHarnessRequestMethods(harness)).not.toContain("config/mcpServer/reload");
     },
   );
 });

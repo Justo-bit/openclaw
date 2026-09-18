@@ -31,6 +31,7 @@ export function readResidentSessionRow(
     context: SessionListRowContext;
     subagentInputs: SessionListRowContext["subagentRuns"]["inputs"];
     gatewayContext: Parameters<typeof readSessionRowFacts>[0]["context"];
+    placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
   },
@@ -97,6 +98,7 @@ export function readResidentSessionRow(
       target: row,
       entry: row.entry,
       context: params.gatewayContext,
+      placementFactsReader: params.placementFactsReader,
       activitySummaryEnabled,
     }),
     membership: new Set(

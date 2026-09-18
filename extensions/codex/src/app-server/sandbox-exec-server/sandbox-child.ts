@@ -1,6 +1,7 @@
 /** Owns one sandbox subprocess tree through close, reaping, and backend finalization. */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   killProcessTree,
@@ -12,11 +13,14 @@ import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 const SANDBOX_CHILD_TERM_GRACE_MS = 1_000;
 // Covers the post-TERM tree kill plus Windows taskkill completion before failure is reported.
 const SANDBOX_CHILD_REAP_TIMEOUT_MS = 4_500;
+const SANDBOX_CHILD_INTERRUPT_POLL_MS = 50;
+const SANDBOX_REMOTE_PROCESS_PENDING_EXIT_CODE = 75;
 const SANDBOX_EXEC_MARKER = "CODEX_SANDBOX_EXEC_ID";
 
 type SandboxChildOutcome = { exitCode: number; signal: NodeJS.Signals | number | null };
 
 export type SandboxChildOwner = {
+  exited: Promise<SandboxChildOutcome>;
   closed: Promise<SandboxChildOutcome>;
   settled: Promise<SandboxChildOutcome>;
   terminate: () => Promise<SandboxChildOutcome>;
@@ -46,7 +50,7 @@ type SandboxChildStartParams = {
   onFinalizeError: (error: unknown) => void;
   owners: Set<SandboxChildOwner>;
   terminateRemote?: () => Promise<void>;
-  interruptRemote?: () => Promise<void>;
+  interruptRemote?: (timeoutMs: number) => Promise<boolean>;
 };
 
 export function spawnSandboxChild(
@@ -68,10 +72,18 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   }
   let child: ChildProcessWithoutNullStreams | undefined;
   let pty: TerminalPtyHandle | undefined;
+  let exitOutcome: SandboxChildOutcome | undefined;
   let outcome: SandboxChildOutcome | undefined;
   const ready = createDeferred<void>();
+  const exited = createDeferred<SandboxChildOutcome>();
   const closed = createDeferred<SandboxChildOutcome>();
+  const recordExit = (exitCode: number, signal: SandboxChildOutcome["signal"]) => {
+    if (!exitOutcome) {
+      exited.resolve((exitOutcome = { exitCode, signal }));
+    }
+  };
   const recordClose = (exitCode: number, signal: SandboxChildOutcome["signal"]) => {
+    recordExit(exitCode, signal);
     closed.resolve((outcome = { exitCode, signal }));
   };
   let startFailed = false;
@@ -79,9 +91,15 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   let terminationRequested = false;
   let terminationCleanup: Promise<void> | undefined;
   let terminationError: Error | undefined;
+  let settlementStarted = false;
+  const interruptions = new Set<Promise<void>>();
   const settled = closed.promise.then(async (result) => {
+    settlementStarted = true;
     await terminationCleanup;
-    child?.stdin.destroy();
+    if (interruptions.size > 0) {
+      await Promise.allSettled(interruptions);
+    }
+    child?.stdin?.destroy();
     await finalize(
       startFailed ? "failed" : params.finalizeStatus(result),
       startFailed ? null : result.exitCode,
@@ -92,6 +110,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
 
   let terminationPromise: Promise<SandboxChildOutcome> | undefined;
   const owner: SandboxChildOwner = {
+    exited: exited.promise,
     closed: closed.promise,
     settled,
     terminate: () =>
@@ -100,10 +119,10 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
         if (startupPending) {
           await ready.promise;
         }
-        if (startFailed) {
+        if (startFailed || settlementStarted) {
           return await settled;
         }
-        child?.stdin.destroy();
+        child?.stdin?.destroy();
         terminationCleanup = params.terminateRemote?.().catch((error: unknown) => {
           terminationError = error instanceof Error ? error : new Error(String(error));
         });
@@ -156,8 +175,39 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   };
   const interrupt = async () => {
     await ready.promise;
-    if (!outcome) {
-      await params.interruptRemote?.();
+    const interruptRemote = params.interruptRemote;
+    if (exitOutcome || terminationRequested || !interruptRemote) {
+      return;
+    }
+    const interruption = (async () => {
+      const deadline = performance.now() + SANDBOX_CHILD_REAP_TIMEOUT_MS;
+      // The local transport can be ready before the marked process exists on its target.
+      while (true) {
+        if (exitOutcome || terminationRequested) {
+          return;
+        }
+        const remainingMs = Math.ceil(deadline - performance.now());
+        if (remainingMs <= 0) {
+          throw new Error(
+            "Sandbox process interrupt timed out waiting for remote process admission",
+          );
+        }
+        if (await interruptRemote(remainingMs)) {
+          return;
+        }
+        await Promise.race([
+          delay(
+            Math.min(SANDBOX_CHILD_INTERRUPT_POLL_MS, Math.max(0, deadline - performance.now())),
+          ),
+          exited.promise,
+        ]);
+      }
+    })();
+    interruptions.add(interruption);
+    try {
+      await interruption;
+    } finally {
+      interruptions.delete(interruption);
     }
   };
   try {
@@ -184,11 +234,23 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
       cwd: params.cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    child.once("exit", (code, signal) => recordExit(code ?? 1, signal));
     child.once("close", (code, signal) => recordClose(code ?? 1, signal));
+    const markStartFailed = () => {
+      startFailed = true;
+    };
+    child.once("error", markStartFailed);
+    try {
+      await once(child, "spawn");
+    } finally {
+      child.off("error", markStartFailed);
+    }
     return { ...owner, process: child, interrupt };
   } catch (error) {
     startFailed = true;
-    recordClose(1, null);
+    if (!child) {
+      recordClose(1, null);
+    }
     await settled.catch(() => undefined);
     throw error;
   } finally {
@@ -200,20 +262,28 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
 export function prepareSandboxChildExec(
   backend: NonNullable<SandboxContext["backend"]>,
   env: Record<string, string>,
-): { env: Record<string, string>; terminate: () => Promise<void>; interrupt: () => Promise<void> } {
+): {
+  env: Record<string, string>;
+  terminate: () => Promise<void>;
+  interrupt: (timeoutMs: number) => Promise<boolean>;
+} {
   const marker = randomUUID();
   return {
     env: { ...env, [SANDBOX_EXEC_MARKER]: marker },
-    interrupt: async () => {
+    interrupt: async (timeoutMs) => {
       const result = await backend.runShellCommand({
-        script: `${SANDBOX_REMOTE_FIND_OWNED_PIDS}\nowned="$(find_owned_pids "$1")"\n[ -z "$owned" ] || kill -INT $owned 2>/dev/null || true`,
+        script: `${SANDBOX_REMOTE_FIND_OWNED_PIDS}\nowned="$(find_owned_pids "$1")"\n[ -n "$owned" ] || exit ${SANDBOX_REMOTE_PROCESS_PENDING_EXIT_CODE}\nkill -INT $owned 2>/dev/null || true`,
         args: [`${SANDBOX_EXEC_MARKER}=${marker}`],
         allowFailure: true,
-        signal: AbortSignal.timeout(SANDBOX_CHILD_REAP_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
+      if (result.code === SANDBOX_REMOTE_PROCESS_PENDING_EXIT_CODE) {
+        return false;
+      }
       if (result.code !== 0) {
         throw new Error(`Sandbox process interrupt failed with code ${result.code}`);
       }
+      return true;
     },
     terminate: async () => {
       const result = await backend.runShellCommand({

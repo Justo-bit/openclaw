@@ -326,14 +326,6 @@ export async function startCodexAttemptThread(params: {
                 signal: startupAbandonController.signal,
               });
               computerUseTools = computerUseStatus.tools;
-              if (computerUseStatus.warnings.length > 0) {
-                embeddedAgentLog.warn("codex computer-use readiness warning", {
-                  mcpServerName: computerUseStatus.mcpServerName,
-                  reason: computerUseStatus.reason,
-                  message: computerUseStatus.message,
-                  warnings: computerUseStatus.warnings,
-                });
-              }
             } catch (error) {
               if (
                 startupAbandonController.signal.aborted ||
