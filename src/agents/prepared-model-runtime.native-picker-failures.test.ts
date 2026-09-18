@@ -42,7 +42,7 @@ afterEach(async ({ task }) => {
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
-async function fixture(standalone = false) {
+async function fixture(standalone = false, cold = false) {
   const { resolveAgentEffectiveModelPrimary } =
     await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   mocks.resolveAgentEffectiveModelPrimary.mockImplementation(resolveAgentEffectiveModelPrimary);
@@ -80,18 +80,24 @@ async function fixture(standalone = false) {
   mocks.configuredAgentIds = ["pro"];
   mocks.runPreparedModelCatalogWorker.mockResolvedValue({ entries: [], routeVariants: [] });
   if (!standalone) {
+    // Gateway commits start background discovery. Publish the cold owner separately after activation.
+    if (cold) {
+      mocks.configuredAgentIds = [];
+    }
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
     });
+    mocks.configuredAgentIds = ["pro"];
   }
-  const owner = standalone
-    ? await publishPreparedModelRuntimeSnapshot(input, {
-        catalogMode: "static",
-        provenance: "standalone",
-      })
-    : getPreparedModelRuntimeSnapshot(input)!;
+  const owner =
+    standalone || cold
+      ? await publishPreparedModelRuntimeSnapshot(input, {
+          catalogMode: "static",
+          provenance: standalone ? "standalone" : "configured",
+        })
+      : getPreparedModelRuntimeSnapshot(input)!;
   return { input, owner, a, b, loadA, loadB };
 }
 
@@ -189,7 +195,7 @@ it("reuses published native facts without renewing providers during warm API and
 it.each([false, true])(
   "carries a cold native selection into a stable run lease (standalone=%s)",
   async (standalone) => {
-    const { input, owner, b, loadA, loadB } = await fixture(standalone);
+    const { input, owner, b, loadA, loadB } = await fixture(standalone, true);
     expect(loadA).not.toHaveBeenCalled();
     expect(loadB).not.toHaveBeenCalled();
     const selected = {

@@ -3286,6 +3286,8 @@ jobs:
         if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && needs.preflight.outputs.startup_corpus_node_revision && needs.preflight.outputs.startup_corpus_node_revision == needs.preflight.outputs.checkout_revision)
         run: |
           set -euo pipefail
+          # Prepare once before five Vitest launchers compete for the build heap.
+          pnpm build qaRuntime
           run_startup_corpus() {
             if [[ "${{ needs.preflight.outputs.frozen_target }}" == "true" ]]; then
               node scripts/run-vitest.mjs run --config test/vitest/vitest.runtime-config.config.ts "$@"

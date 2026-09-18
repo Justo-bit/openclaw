@@ -13,6 +13,7 @@ import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -20,6 +21,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import * as sessionOrder from "./session-list-order.js";
 import * as projectionWork from "./session-projection-work.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -46,6 +48,46 @@ import { writeResidentEntries } from "./session-utils.perf.test-support.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test("bounds first-page comparisons while preserving the latest-row order", async () => {
+    await withStateDirEnv("openclaw-list-order-work-", async () => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const count = 256;
+      const store = Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `agent:main:ordered-${index}`,
+          { sessionId: `ordered-${index}`, updatedAt: ((index * 71) % count) + 1 },
+        ]),
+      );
+      writeResidentEntries(store);
+      const projection = await createSessionRowProjection({ cfg });
+      try {
+        await projection.ensureMaterialized();
+        const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
+        try {
+          const result = await listProjectedSessions({ projection, opts: { limit: 5 } });
+          expect(result.sessions.map((row) => row.key)).toEqual(
+            Object.entries(store)
+              .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+              .slice(0, 5)
+              .map(([key]) => key),
+          );
+          expect(result.totalCount).toBe(count);
+          expect(compare.mock.calls.length).toBeLessThanOrEqual(count * 4);
+        } finally {
+          compare.mockRestore();
+        }
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
   test.each(["entries", "list"] as const)(
     "bounds owner roster traversal for %s and observes the next request's roster",
     (kind) => {
@@ -223,9 +265,14 @@ describe("session list resolver cache", () => {
     },
   );
 
-  test.each(["startup", "dirty refresh"])(
-    "yields during expensive %s materialization",
-    async (phase) => {
+  test.each([
+    { phase: "startup", cost: "acquisition" },
+    { phase: "startup", cost: "materialization" },
+    { phase: "dirty refresh", cost: "acquisition" },
+    { phase: "dirty refresh", cost: "materialization" },
+  ])(
+    "yields during expensive $phase $cost without reacquiring unchanged rows",
+    async ({ phase, cost }) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -234,8 +281,9 @@ describe("session list resolver cache", () => {
         };
         resetConfigRuntimeState();
         setRuntimeConfigSnapshot(cfg);
+        const rowCount = 96;
         const store = Object.fromEntries(
-          Array.from({ length: 32 }, (_, index) => [
+          Array.from({ length: rowCount }, (_, index) => [
             `agent:main:budget-${index}`,
             { sessionId: `budget-${index}`, updatedAt: index + 1 },
           ]),
@@ -247,15 +295,28 @@ describe("session list resolver cache", () => {
         }
         let workMs = 0;
         let projectedRows = 0;
+        let acquiredRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const readEntryCache = entryCache.readCommittedSessionEntryCache;
+        const acquisitions = vi
+          .spyOn(entryCache, "readCommittedSessionEntryCache")
+          .mockImplementation((...args) => {
+            acquiredRows++;
+            if (cost === "acquisition") {
+              workMs += 20;
+            }
+            return readEntryCache(...args);
+          });
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
           .mockImplementation((params) => {
             const result = readInputs(params);
-            workMs += 20;
+            if (cost === "materialization") {
+              workMs += 20;
+            }
             projectedRows++;
             if (projectedRows === 1) {
               control = new Promise<void>((resolve) => {
@@ -275,15 +336,18 @@ describe("session list resolver cache", () => {
             projection = await createSessionRowProjection({ cfg });
           }
           await control;
+          await projection.ensureMaterialized();
           expect(rowsAtControl).toBeGreaterThan(0);
-          expect(rowsAtControl).toBeLessThan(32);
-          expect(projectedRows).toBe(32);
+          expect(rowsAtControl).toBeLessThan(rowCount);
+          expect(projectedRows).toBe(rowCount);
+          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
           rows.mockClear();
-          const result = await listProjectedSessions({ projection, opts: { limit: 32 } });
+          const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rows).not.toHaveBeenCalled();
         } finally {
           rows.mockRestore();
+          acquisitions.mockRestore();
           clock.mockRestore();
           await control;
           projection?.dispose();
@@ -389,6 +453,7 @@ describe("session list resolver cache", () => {
         let projection: SessionRowProjection | undefined;
         try {
           projection = await createSessionRowProjection({ cfg });
+          await projection.ensureMaterialized();
           expect(resolver).toHaveBeenCalledTimes(2);
           resolver.mockClear();
           for (let request = 0; request < 2; request++) {

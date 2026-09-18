@@ -8,12 +8,19 @@ import type {
 } from "../config/io.health-state.types.js";
 import type { CronStoreWorkerOperations } from "../cron/store/load-worker.types.js";
 import type { CronStoreSaveWorkerOperations } from "../cron/store/save-worker.types.js";
+import type {
+  ManagedImageRecord,
+  ManagedImageRecordEntry,
+} from "../gateway/managed-image-record-store.types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
+import type { ApnsRegistration } from "../infra/push-apns-store.types.js";
+import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
@@ -35,7 +42,9 @@ import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations &
+export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
+  NativeHookRelayStoreWorkerOperations &
+  TelemetryWorkerOperations &
   HostedCatalogSnapshotWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
@@ -44,6 +53,8 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TaskRegistryWorkerOperations & {
+    "apns.registration.read": { input: string; output: ApnsRegistration | null };
+    "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
     "agentProvenance.read": {
       input: { agentId: string };
       output: AgentProvenance | undefined;
@@ -56,6 +67,9 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
       output: SessionStateNotice[];
     };
     "sessionState.prune": { input: { now: number }; output: void };
+    "managedImages.read": { input: { attachmentId: string }; output: ManagedImageRecord | null };
+    "managedImages.entries": { input: { sessionKey?: string }; output: ManagedImageRecordEntry[] };
+    "managedImages.originalMediaIds": { input: undefined; output: string[] };
     "doctor.databaseBloat": {
       input: undefined;
       output: ReturnType<typeof readSqliteDatabaseBloat>;
