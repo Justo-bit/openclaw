@@ -109,19 +109,21 @@ function resolveAgentRuntimePluginRegistryLoad(
     metadataSnapshot,
     ...(params.purpose ? { purpose: params.purpose } : {}),
   });
+  // No-op plans keep the captured authored fleet by identity. Changed plans must
+  // project policy edits onto that capture, not the current global generation.
+  let activationSourceConfig = loadOptions.activationSourceConfig;
+  if (plan.config !== params.config) {
+    const projectedSource =
+      params.config && activationSourceConfig
+        ? projectRuntimeChangesOntoSource(activationSourceConfig, params.config, plan.config)
+        : plan.config;
+    // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
+    activationSourceConfig = projectedSource as OpenClawConfig;
+  }
   return {
     ...loadOptions,
     config: plan.config,
-    // Planning may clone a captured config; keep its original authored generation
-    // while projecting the planner's activation/allowlist changes.
-    activationSourceConfig:
-      params.config && loadOptions.activationSourceConfig
-        ? (projectRuntimeChangesOntoSource(
-            loadOptions.activationSourceConfig,
-            params.config,
-            plan.config,
-          ) as OpenClawConfig)
-        : plan.config,
+    activationSourceConfig,
     workspaceDir,
     discovery: metadataSnapshot.discovery,
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),

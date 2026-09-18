@@ -52,7 +52,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import {
+  captureRuntimeConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
+} from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -191,9 +194,14 @@ describe("agent runtime plugin registries", () => {
     }
   });
 
-  it.each([false, true])(
-    "validates captured SecretRefs through a projected load plan (snapshot rotated: %s)",
-    (rotated) => {
+  it.each([
+    { rotated: false, projected: false },
+    { rotated: true, projected: false },
+    { rotated: false, projected: true },
+    { rotated: true, projected: true },
+  ])(
+    "validates captured SecretRefs (snapshot rotated: $rotated, policy projected: $projected)",
+    ({ rotated, projected }) => {
       const source: OpenClawConfig = {
         plugins: {
           entries: {
@@ -211,6 +219,7 @@ describe("agent runtime plugin registries", () => {
       };
       setRuntimeConfigSnapshot(runtime, source);
       const captured = captureRuntimeConfig(runtime);
+      const capturedSource = projectConfigOntoRuntimeSourceSnapshot(captured);
       if (rotated) {
         setRuntimeConfigSnapshot(
           {
@@ -233,7 +242,9 @@ describe("agent runtime plugin registries", () => {
         );
       }
       hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ config }) => ({
-        config: { ...config, plugins: { ...config.plugins, allow: ["fixture"] } },
+        config: projected
+          ? { ...config, plugins: { ...config.plugins, allow: ["fixture"] } }
+          : config,
         pluginIds: ["fixture"],
       }));
       hoisted.loadPluginRegistryHandle.mockImplementation((options) => {
@@ -248,7 +259,12 @@ describe("agent runtime plugin registries", () => {
           sourceValue: options.activationSourceConfig.plugins.entries.fixture.config,
         });
         expect(result).toEqual({ ok: true, value: { apiKey: "synthetic-prepared" } });
-        expect(options.activationSourceConfig.plugins.allow).toEqual(["fixture"]);
+        expect(options.activationSourceConfig.plugins.allow).toEqual(
+          projected ? ["fixture"] : undefined,
+        );
+        if (!projected) {
+          expect(options.activationSourceConfig).toBe(capturedSource);
+        }
         expect(options.activationSourceConfig.plugins.entries.fixture.config).toEqual(
           source.plugins?.entries?.fixture?.config,
         );
