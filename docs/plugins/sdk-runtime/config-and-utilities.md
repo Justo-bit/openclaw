@@ -86,6 +86,15 @@ Native command probes should use `runCommandWithTimeout` from
 before returning. For commands whose output is always UTF-8, such as JSON status
 probes, use `runUtf8CommandWithTimeout` from the same subpath.
 
+Interactive process adapters can use `spawnTerminalPty` from the same subpath.
+It owns platform-specific terminal creation, including the Node helper on Bun.
+Pass the caller's construction signal and current-authority check through its
+second argument. The caller owns output subscriptions, termination, and waiting
+for the terminal's exit before releasing its backend resources.
+
+Sandbox command adapters retain the sandbox owner's per-stream output bound,
+`SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
 This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent

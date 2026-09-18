@@ -53,7 +53,6 @@ export async function spawnNodeTerminalPty(
       return;
     }
     startupError ??= error;
-    ready.reject(error);
     if (child.connected) {
       child.disconnect();
     }
@@ -137,7 +136,9 @@ export async function spawnNodeTerminalPty(
       }
     } else if (message.type === "ready") {
       ptyPid = message.pid;
-      ready.resolve(message.pid);
+      if (!startupError) {
+        ready.resolve(message.pid);
+      }
     } else if (message.type === "error") {
       fail(new Error(message.message));
     } else {

@@ -5,7 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -199,7 +200,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       {
         jsonrpc: "2.0",
         method: "process/exited",
-        params: { processId: "direct-session", seq: 2, exitCode: 0 },
+        params: { processId: "direct-session", seq: 2, exitCode: 0, sandboxDenied: false },
       },
       {
         jsonrpc: "2.0",
@@ -404,6 +405,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       ),
       notifications,
       streamingHttpParams("http-resistant"),
+      new Set(),
     );
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
     (child.stdout as PassThrough).write(
@@ -423,6 +425,165 @@ describe("Codex sandbox exec-server lifecycle", () => {
       token: "http-terminate-token",
     });
   });
+
+  it.each([true, false])(
+    "joins pending HTTP preparation without launching after close (stream=%s)",
+    async (streamResponse) => {
+      let preparing = false;
+      const releasePreparation = createDeferred<void>();
+      const child = createFakeChild();
+      spawnMock.mockImplementation(() => {
+        setImmediate(() => child.emit("close", 0, null));
+        return child;
+      });
+      const finalizeExec = vi.fn(async () => undefined);
+      const session = new CodexSandboxExecSession(
+        createExecServer(
+          createSandboxContext({
+            buildExecSpec: async () => {
+              preparing = true;
+              await releasePreparation.promise;
+              return {
+                argv: ["sandbox-http-child"],
+                env: {},
+                finalizeToken: "cancelled-http-preparation",
+                stdinMode: "pipe-closed",
+              };
+            },
+            finalizeExec,
+          }),
+        ),
+        { send: vi.fn(), isOpen: () => true },
+      );
+      const request = session.handleRequest({
+        id: 1,
+        method: "http/request",
+        params: { ...streamingHttpParams("preparing-http"), streamResponse },
+      });
+      try {
+        await vi.waitFor(() => expect(preparing).toBe(true));
+        let closed = false;
+        const cleanup = session.close().then(() => {
+          closed = true;
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(closed).toBe(false);
+        releasePreparation.resolve();
+        await Promise.all([request, cleanup]);
+
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+          token: "cancelled-http-preparation",
+        });
+      } finally {
+        releasePreparation.resolve();
+        await Promise.all([request, session.close()]);
+      }
+    },
+  );
+
+  it("joins streaming HTTP finalization after returning headers", async () => {
+    let finalizing = false;
+    const releaseFinalization = createDeferred<void>();
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    const session = new CodexSandboxExecSession(
+      createExecServer(
+        createSandboxContext({
+          finalizeExec: async () => {
+            finalizing = true;
+            await releaseFinalization.promise;
+          },
+        }),
+      ),
+      { send: vi.fn(), isOpen: () => true },
+    );
+    const request = session.handleRequest({
+      id: 1,
+      method: "http/request",
+      params: streamingHttpParams("finalizing-http"),
+    });
+    try {
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+      (child.stdout as PassThrough).write(
+        `${JSON.stringify({ type: "headers", status: 200, headers: [] })}\n`,
+      );
+      await request;
+      let closed = false;
+      const cleanup = session.close().then(() => {
+        closed = true;
+      });
+      await vi.waitFor(() => expect(finalizing).toBe(true));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closed).toBe(false);
+      releaseFinalization.resolve();
+      await cleanup;
+    } finally {
+      releaseFinalization.resolve();
+      await Promise.all([request, session.close()]);
+    }
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "preserves the nonstreaming HTTP byte limit for %s and settles overflow cleanup",
+    async (stream) => {
+      const child = createFakeChild();
+      spawnMock.mockReturnValue(child);
+      killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+      const finalizeExec = vi.fn(async () => undefined);
+      const operations = new Set<Promise<void>>();
+      const request = httpRequest(
+        createExecServer(createSandboxContext({ finalizeExec })),
+        createFakeNotifications(),
+        { ...streamingHttpParams("http-buffer-limit"), streamResponse: false },
+        operations,
+      );
+      const response = request.catch((error: unknown) => error);
+      try {
+        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+        const output = child[stream] as PassThrough;
+        // Reuse backing memory while exercising the real per-stream byte threshold.
+        const chunk = Buffer.alloc(1024 * 1024, "x");
+        for (
+          let remaining = SANDBOX_COMMAND_MAX_BUFFER_BYTES;
+          remaining > 0;
+          remaining -= chunk.length
+        ) {
+          output.write(chunk.subarray(0, Math.min(remaining, chunk.length)));
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
+
+        output.write(Buffer.from("x"));
+
+        await vi.waitFor(() => expect(killProcessTreeMock).toHaveBeenCalledOnce());
+        expect(await response).toMatchObject({
+          message: `sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
+        });
+        await Promise.all(operations);
+        expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
+          status: "failed",
+          exitCode: 143,
+          timedOut: false,
+          token: undefined,
+        });
+      } finally {
+        child.emit("close", 143, "SIGTERM");
+        await response;
+        await Promise.allSettled(operations);
+      }
+    },
+  );
 
   it("retains the process backend lease after child error until close", async () => {
     const child = createFakeChild();
@@ -514,9 +675,11 @@ describe("Codex sandbox exec-server lifecycle", () => {
     });
   });
 
-  it("retains the streaming HTTP backend lease after child error until close", async () => {
+  it("retains the streaming HTTP backend lease through close and remote cleanup after child error", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
+    const releaseRemoteCleanup = createDeferred<void>();
+    let remoteCleanupStarted = false;
     const finalizeExec = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
@@ -526,11 +689,18 @@ describe("Codex sandbox exec-server lifecycle", () => {
         stdinMode: "pipe-closed",
       }),
       finalizeExec,
+      runShellCommand: async () => {
+        remoteCleanupStarted = true;
+        await releaseRemoteCleanup.promise;
+        return { code: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      },
     });
+    const operations = new Set<Promise<void>>();
     const request = httpRequest(
       createExecServer(sandbox),
       createFakeNotifications(),
       streamingHttpParams("http-error"),
+      operations,
     );
     let settled = false;
     void request.then(
@@ -550,16 +720,25 @@ describe("Codex sandbox exec-server lifecycle", () => {
     expect(settled).toBe(false);
     expect(finalizeExec).not.toHaveBeenCalled();
 
-    const rejection = expect(request).rejects.toThrow("HTTP child transport failed");
-    child.emit("close", 29, null);
-    await rejection;
-    await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
-    expect(finalizeExec).toHaveBeenCalledWith({
-      status: "failed",
-      exitCode: 29,
-      timedOut: false,
-      token: "http-token",
-    });
+    try {
+      const rejection = expect(request).rejects.toThrow("HTTP child transport failed");
+      child.emit("close", 29, null);
+      await rejection;
+      await vi.waitFor(() => expect(remoteCleanupStarted).toBe(true));
+      expect(finalizeExec).not.toHaveBeenCalled();
+
+      releaseRemoteCleanup.resolve();
+      await Promise.all(operations);
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
+        status: "failed",
+        exitCode: 29,
+        timedOut: false,
+        token: "http-token",
+      });
+    } finally {
+      releaseRemoteCleanup.resolve();
+      await Promise.all(operations);
+    }
   });
 
   it.each([
@@ -591,6 +770,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
         createExecServer(sandbox),
         createFakeNotifications(),
         streamingHttpParams("http-start-failure"),
+        new Set(),
       ),
     ).rejects.toThrow(spawnError ?? "did not provide a command");
     expect(finalizeExec).toHaveBeenCalledOnce();

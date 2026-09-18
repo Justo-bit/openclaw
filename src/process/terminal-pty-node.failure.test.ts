@@ -1,6 +1,11 @@
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { spawnNodeTerminalPty } from "./terminal-pty-node.js";
 
@@ -23,15 +28,14 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 vi.mock("../infra/executable-path.js", () => ({ resolveExecutablePath: () => process.execPath }));
-vi.mock("../infra/runtime-worker-url.js", () => ({
-  resolveRuntimeWorkerUrl: () => new URL("file:///fixture/terminal-worker.js"),
-  resolveRuntimeWorkerArgv: () => [],
-}));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllTimers();
   vi.useRealTimers();
+  spawnMock.mockReset();
 });
 
 it("force-stops a failed terminal worker when procfs identity is unavailable", async () => {
@@ -60,11 +64,80 @@ it("force-stops a failed terminal worker when procfs identity is unavailable", a
       cols: 80,
       rows: 24,
     });
+    let settled = false;
+    void starting.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     child.emit("error", new Error("worker failed before startup"));
-    await expect(starting).rejects.toThrow("worker failed before startup");
+    await Promise.resolve();
+    expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(signals.mock.calls).toEqual([[7777, "SIGKILL"]]);
+    child.emit("exit", null, "SIGKILL");
+    child.emit("message", { type: "ready", pid: 8888 });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    child.stdout.end();
+    await expect(starting).rejects.toThrow("worker failed before startup");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(signals.mock.calls).toEqual([[7777, "SIGKILL"]]);
   });
+});
+
+it.runIf(process.platform !== "win32")(
+  "joins the real helper before releasing cancelled PTY startup",
+  async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const helperExit = createDeferredCore();
+    let helper: ChildProcess | undefined;
+    let helperExited = false;
+    spawnMock.mockImplementation((...args: Parameters<typeof actual.spawn>) => {
+      helper = actual.spawn(...args);
+      helper.once("exit", () => {
+        helperExited = true;
+        helperExit.resolve();
+      });
+      return helper;
+    });
+    try {
+      await expect(
+        spawnNodeTerminalPty(
+          { file: "/bin/sh", args: [], cwd: os.tmpdir(), cols: 80, rows: 24 },
+          () => {
+            throw new Error("PTY policy revoked");
+          },
+        ),
+      ).rejects.toThrow("PTY policy revoked");
+      expect(helperExited).toBe(true);
+      expect(helper?.stdout?.readableEnded || helper?.stdout?.destroyed).toBe(true);
+      expect(helper?.connected).toBe(false);
+    } finally {
+      if (helper && !helperExited) {
+        helper.kill("SIGKILL");
+        await helperExit.promise;
+      }
+    }
+  },
+);
+
+it("settles a real helper spawn failure without requiring an exit event", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const missingNode = path.join(tempDirs.make("openclaw-pty-missing-node-"), "missing-node");
+  let helper: ChildProcess | undefined;
+  spawnMock.mockImplementation(
+    (_file: string, args: string[], options: Parameters<typeof actual.spawn>[2]) => {
+      helper = actual.spawn(missingNode, args, options);
+      return helper;
+    },
+  );
+  await expect(
+    spawnNodeTerminalPty({ file: "/bin/sh", args: [], cols: 80, rows: 24 }),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  expect(helper?.pid).toBeUndefined();
+  expect(helper?.stdout?.readableEnded || helper?.stdout?.destroyed).toBe(true);
 });
