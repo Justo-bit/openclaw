@@ -35,7 +35,9 @@ const modelCatalogMocks = vi.hoisted(() => ({
     >(),
 }));
 const modelAuthLabelMocks = vi.hoisted(() => ({
-  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+  resolveModelAuthLabel: vi.fn<
+    typeof import("../../agents/model-auth-label.js").resolveModelAuthLabel
+  >(() => undefined),
 }));
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 const pluginMetadataMocks = vi.hoisted(() => ({
@@ -177,7 +179,8 @@ function preparedAuthCheckerParams() {
 }
 
 describe("handleModelsCommand", () => {
-  it("shows a simple providers menu on text surfaces", async () => {
+  it("shows a simple providers menu using passive, scoped catalog and auth reads", async () => {
+    pluginMetadataMocks.getCurrent.mockReturnValue(createPluginMetadataSnapshotFixture());
     const result = await handleModelsCommand(buildParams("/models"), true);
 
     expect(result?.shouldContinue).toBe(false);
@@ -190,18 +193,18 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Add: /models add");
     const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
-  });
-
-  it("acquires catalog inventory and uses static auth checks for default browse", async () => {
-    await handleModelsCommand(buildParams("/models"), true);
-
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
       "refreshFullCatalog",
     );
-    const authCheckerParams = preparedAuthCheckerParams();
     expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
     expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
     expect(authCheckerParams?.allowPreparedRuntimeAuth).toBe(true);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).toMatchObject({
+      workspaceDir: "/tmp",
+    });
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "metadataSnapshot",
+    );
   });
 
   it("reports failed catalog acquisition without displaying partial inventory", async () => {
@@ -225,17 +228,6 @@ describe("handleModelsCommand", () => {
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.workspaceDir).toBe(
       "/tmp/spawned-workspace",
     );
-  });
-
-  it("scopes the prepared catalog without passing plugin metadata", async () => {
-    const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    pluginMetadataMocks.getCurrent.mockReturnValue(metadataSnapshot);
-
-    await handleModelsCommand(buildParams("/models"), true);
-
-    const params = modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0];
-    expect(params).toMatchObject({ workspaceDir: "/tmp" });
-    expect(params).not.toHaveProperty("metadataSnapshot");
   });
 
   it("loads the selected agent lifecycle catalog", async () => {
@@ -596,9 +588,6 @@ describe("handleModelsCommand", () => {
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
-      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
     ]);
     modelProviderAuthMocks.authenticatedProviders = new Set(["claude-cli"]);
 
@@ -606,7 +595,7 @@ describe("handleModelsCommand", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          // User only declared 2 of claude-cli's 6 supported models.
+          // User only declared 2 of claude-cli's 3 supported models.
           // For claude-cli this narrowing must be ignored.
           models: {
             "claude-cli/claude-opus-4-6": {},
@@ -617,11 +606,8 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual([
-      "claude-haiku-4-5",
-      "claude-opus-4-5",
       "claude-opus-4-6",
       "claude-opus-4-7",
-      "claude-sonnet-4-5",
       "claude-sonnet-4-6",
     ]);
   });
@@ -779,12 +765,7 @@ describe("handleModelsCommand", () => {
 
   it("keeps non-CLI configured provider model lists scoped to user config", async () => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
-      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
-      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "minimax", id: "abab-7", name: "Abab 7" },
       { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
@@ -876,7 +857,30 @@ describe("handleModelsCommand", () => {
     ]);
   });
 
-  it("keeps the telegram provider picker browse-only", async () => {
+  it.each([
+    {
+      surface: "telegram",
+      channelData: {
+        telegram: {
+          buttons: [
+            [{ text: "anthropic", callback_data: "models:anthropic" }],
+            [{ text: "claude-cli", callback_data: "models:claude-cli" }],
+            [{ text: "google", callback_data: "models:google" }],
+            [{ text: "openai", callback_data: "models:openai" }],
+          ],
+        },
+      },
+    },
+    {
+      surface: "menuonly",
+      channelData: {
+        menuonly: {
+          providerIds: ["anthropic", "claude-cli", "google", "openai"],
+          labels: ["anthropic:2", "claude-cli:1", "google:1", "openai:2"],
+        },
+      },
+    },
+  ])("keeps the $surface provider picker browse-only", async ({ surface, channelData }) => {
     modelCatalogMocks.loadModelCatalog.mockReturnValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
       { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
@@ -892,78 +896,24 @@ describe("handleModelsCommand", () => {
       "openai",
     ]);
     const params = buildParams("/models");
-    params.ctx.Surface = "telegram";
-    params.command.channel = "telegram";
-    params.command.surface = "telegram";
-
+    params.ctx.Surface = surface;
+    params.command.channel = surface;
+    params.command.surface = surface;
     const result = await handleModelsCommand(params, true);
-
     expect(result?.reply?.text).toBe("Select a provider:");
-    expect(result?.reply?.channelData).toEqual({
-      telegram: {
-        buttons: [
-          [{ text: "anthropic", callback_data: "models:anthropic" }],
-          [{ text: "claude-cli", callback_data: "models:claude-cli" }],
-          [{ text: "google", callback_data: "models:google" }],
-          [{ text: "openai", callback_data: "models:openai" }],
-        ],
-      },
-    });
+    expect(result?.reply?.channelData).toEqual(channelData);
   });
 
-  it("keeps plugin menu hook compatibility for provider pickers", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
-      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus (CLI)" },
-      { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-      { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
-    ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set([
-      "anthropic",
-      "claude-cli",
-      "google",
-      "openai",
-    ]);
-    const params = buildParams("/models");
-    params.ctx.Surface = "menuonly";
-    params.command.channel = "menuonly";
-    params.command.surface = "menuonly";
-
-    const result = await handleModelsCommand(params, true);
-
-    expect(result?.reply?.text).toBe("Select a provider:");
-    expect(result?.reply?.channelData).toEqual({
-      menuonly: {
-        providerIds: ["anthropic", "claude-cli", "google", "openai"],
-        labels: ["anthropic:2", "claude-cli:1", "google:1", "openai:2"],
-      },
-    });
-  });
-
-  it("lists models for /models <provider>", async () => {
-    const result = await handleModelsCommand(buildParams("/models openai"), true);
-
+  it.each([
+    "/models openai",
+    "/models openai page=2next limit=1x",
+    "/models openai 9007199254740992",
+  ])("lists models without coercing malformed tokens: %s", async (command) => {
+    const result = await handleModelsCommand(buildParams(command), true);
     expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(result?.reply?.text).toContain("- openai/gpt-4.1");
     expect(result?.reply?.text).toContain("- openai/gpt-4.1-mini");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
-  });
-
-  it("does not coerce partial list page or limit tokens", async () => {
-    const result = await handleModelsCommand(
-      buildParams("/models openai page=2next limit=1x"),
-      true,
-    );
-
-    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
-  });
-
-  it("ignores unsafe bare list page tokens", async () => {
-    const result = await handleModelsCommand(buildParams("/models openai 9007199254740992"), true);
-
-    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
   });
 
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
@@ -1021,16 +971,10 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
-    const [authLabelParams] = expectDefined(
-      (
-        modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<
-          [{ provider?: string; workspaceDir?: string }]
-        >
-      )[0],
-      "(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<\n        [{ provider?: string; workspaceDir?: string }]\n      >)[0] test invariant",
-    );
-    expect(authLabelParams.provider).toBe("anthropic");
-    expect(authLabelParams.workspaceDir).toBe("/tmp");
+    expect(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      workspaceDir: "/tmp",
+    });
   });
 
   it("labels OpenAI provider pages with the canonical auth provider id", async () => {
@@ -1049,7 +993,7 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai:user@example.com))");
     const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
-      ([params]) => (params as { provider?: string }).provider === "openai",
+      ([params]) => params.provider === "openai",
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",

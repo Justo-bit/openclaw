@@ -4250,123 +4250,102 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("preserves selected auth profile overrides across /new and /reset", async () => {
-    const storePath = await createStorePath("openclaw-reset-model-auth-");
-    const sessionKey = "agent:main:telegram:dm:user-model-auth";
-    const existingSessionId = "existing-session-model-auth";
-    const overrides = {
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      authProfileOverride: "20251001",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 2,
-      cliSessionIds: { "claude-cli": "cli-session-123" },
-      cliSessionBindings: {
-        "claude-cli": {
-          sessionId: "cli-session-123",
-          authProfileId: "anthropic:default",
+  it.each([
+    {
+      name: "selected model and auth profile",
+      preserved: {
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        authProfileOverride: "20251001",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      },
+      removed: {
+        cliSessionIds: { "claude-cli": "cli-session-123" },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "cli-session-123", authProfileId: "anthropic:default" },
+        },
+        claudeCliSessionId: "cli-session-123",
+      },
+    },
+    {
+      name: "automatic model and auth fallback",
+      preserved: { verboseLevel: "on" },
+      removed: {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        authProfileOverride: "openai:default",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 1,
+      },
+    },
+    {
+      name: "recovered fallback without modelOverrideSource",
+      preserved: { verboseLevel: "on" },
+      removed: {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: undefined,
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-opus-4-6",
+      },
+    },
+    {
+      name: "runtime cache with an explicit user model",
+      preserved: {
+        providerOverride: "minimax",
+        modelOverride: "m2.7",
+        modelOverrideSource: "user",
+        verboseLevel: "on",
+      },
+      removed: {
+        modelProvider: "openai",
+        model: "gpt-5.4-mini",
+        contextTokens: 400_000,
+        contextTokensSource: "runtime",
+        cacheRead: 1_000,
+        cacheWrite: 2_000,
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "openai/gpt-5.4-mini",
+          activeModel: "minimax/m2.7",
+          reason: "rate limit",
+        },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: 1,
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
         },
       },
-      claudeCliSessionId: "cli-session-123",
-    } as const;
+    },
+  ])("resets $name across /new and /reset", async ({ preserved, removed }) => {
+    const storePath = await createStorePath("openclaw-reset-model-selection-");
+    const sessionKey = "agent:main:telegram:dm:reset-model-selection";
+    const sessionId = "existing-model-selection";
     const cases = await runExplicitResetCases({
       storePath,
       sessionKey,
-      sessionId: existingSessionId,
-      entry: overrides,
+      sessionId,
+      entry: { ...preserved, ...removed },
     });
-
+    const expected = {
+      ...preserved,
+      ...Object.fromEntries(Object.keys(removed).map((key) => [key, undefined])),
+    };
     for (const { name, result, stored } of cases) {
-      expect(result.isNewSession, name).toBe(true);
-      expect(result.resetTriggered, name).toBe(true);
-      expect(result.sessionId, name).toBe(existingSessionId);
-      expect(result.sessionEntry.providerOverride, name).toBe(overrides.providerOverride);
-      expect(result.sessionEntry.modelOverride, name).toBe(overrides.modelOverride);
-      expect(result.sessionEntry.authProfileOverride, name).toBe(overrides.authProfileOverride);
-      expect(result.sessionEntry.authProfileOverrideSource, name).toBe(
-        overrides.authProfileOverrideSource,
+      expect(result, name).toMatchObject({ isNewSession: true, resetTriggered: true, sessionId });
+      expectEntryFields(result.sessionEntry, expected, name);
+      expectEntryFields(
+        expectDefined(stored[sessionKey], "stored model selection"),
+        expected,
+        name,
       );
-      expect(result.sessionEntry.authProfileOverrideCompactionCount, name).toBe(
-        overrides.authProfileOverrideCompactionCount,
-      );
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
-      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings,
-      ).toBeUndefined();
-      expect(
-        expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-      ).toBeUndefined();
-    }
-  });
-
-  it("clears auto-sourced model/provider/auth overrides on /new and /reset (#69301)", async () => {
-    const storePath = await createStorePath("openclaw-reset-auto-overrides-");
-    const sessionKey = "agent:main:telegram:direct:6761477233";
-    const existingSessionId = "existing-session-auto-overrides";
-    const autoOverrides = {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "auto",
-      authProfileOverride: "openai:default",
-      authProfileOverrideSource: "auto",
-      authProfileOverrideCompactionCount: 1,
-      verboseLevel: "on",
-    } as const;
-    const cases = await runExplicitResetCases({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      entry: autoOverrides,
-    });
-
-    for (const { name, result } of cases) {
-      expect(result.isNewSession, name).toBe(true);
-      expect(result.resetTriggered, name).toBe(true);
-      expect(result.sessionId, name).toBe(existingSessionId);
-      expect(result.sessionEntry.modelOverride, name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideSource, name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverride, name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverrideSource, name).toBeUndefined();
-      expect(result.sessionEntry.authProfileOverrideCompactionCount, name).toBeUndefined();
-      // Unrelated behavior overrides still carry across the reset.
-      expect(result.sessionEntry.verboseLevel, name).toBe(autoOverrides.verboseLevel);
-    }
-  });
-
-  it("clears recovered auto fallback model overrides without modelOverrideSource on /new and /reset", async () => {
-    const storePath = await createStorePath("openclaw-reset-recovered-auto-fallback-");
-    const sessionKey = "agent:main:telegram:direct:6761477233";
-    const existingSessionId = "existing-session-recovered-auto-fallback";
-    const autoOverrides = {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude-opus-4-6",
-      verboseLevel: "on",
-    } as const;
-    const cases = await runExplicitResetCases({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      entry: autoOverrides,
-    });
-
-    for (const { name, result } of cases) {
-      expect(result.isNewSession, name).toBe(true);
-      expect(result.resetTriggered, name).toBe(true);
-      expect(result.sessionId, name).toBe(existingSessionId);
-      expect(result.sessionEntry.modelOverride, name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideSource, name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideFallbackOriginProvider, name).toBeUndefined();
-      expect(result.sessionEntry.modelOverrideFallbackOriginModel, name).toBeUndefined();
-      expect(result.sessionEntry.verboseLevel, name).toBe(autoOverrides.verboseLevel);
     }
   });
 
@@ -4427,84 +4406,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextTokensSource).toBeUndefined();
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
-  });
-
-  it("clears stale runtime model cache fields on /new and /reset (#77322)", async () => {
-    const storePath = await createStorePath("openclaw-reset-runtime-model-cache-");
-    const sessionKey = "agent:main:telegram:direct:runtime-model-cache";
-    const existingSessionId = "existing-session-runtime-model-cache";
-    const runtimeModelCache = {
-      modelProvider: "openai",
-      model: "gpt-5.4-mini",
-      contextTokens: 400_000,
-      contextTokensSource: "runtime",
-      cacheRead: 1_000,
-      cacheWrite: 2_000,
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: "openai/gpt-5.4-mini",
-        activeModel: "minimax/m2.7",
-        reason: "rate limit",
-      },
-      systemPromptReport: {
-        source: "run",
-        generatedAt: 1,
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      },
-      verboseLevel: "on",
-    } as const;
-    const explicitUserOverride = {
-      providerOverride: "minimax",
-      modelOverride: "m2.7",
-      modelOverrideSource: "user",
-    } as const;
-    const cases = await runExplicitResetCases({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      entry: { ...runtimeModelCache, ...explicitUserOverride },
-    });
-
-    for (const { name, result, stored } of cases) {
-      expect(result.isNewSession, name).toBe(true);
-      expect(result.resetTriggered, name).toBe(true);
-      expect(result.sessionId, name).toBe(existingSessionId);
-      expect(result.sessionEntry.modelProvider, name).toBeUndefined();
-      expect(result.sessionEntry.model, name).toBeUndefined();
-      expect(result.sessionEntry.cacheRead, name).toBeUndefined();
-      expect(result.sessionEntry.cacheWrite, name).toBeUndefined();
-      expect(result.sessionEntry.fallbackNotice, name).toBeUndefined();
-      expect(result.sessionEntry.systemPromptReport, name).toBeUndefined();
-      expect(result.sessionEntry.providerOverride, name).toBe(
-        explicitUserOverride.providerOverride,
-      );
-      expect(result.sessionEntry.modelOverride, name).toBe(explicitUserOverride.modelOverride);
-      expect(result.sessionEntry.modelOverrideSource, name).toBe(
-        explicitUserOverride.modelOverrideSource,
-      );
-      expect(result.sessionEntry.verboseLevel, name).toBe(runtimeModelCache.verboseLevel);
-      expect(stored[sessionKey]?.modelProvider, name).toBeUndefined();
-      expect(stored[sessionKey]?.model, name).toBeUndefined();
-      expect(stored[sessionKey]?.cacheRead, name).toBeUndefined();
-      expect(stored[sessionKey]?.cacheWrite, name).toBeUndefined();
-      expect(stored[sessionKey]?.fallbackNotice, name).toBeUndefined();
-      expect(stored[sessionKey]?.systemPromptReport, name).toBeUndefined();
-      expect(stored[sessionKey]?.providerOverride, name).toBe(
-        explicitUserOverride.providerOverride,
-      );
-      expect(stored[sessionKey]?.modelOverride, name).toBe(explicitUserOverride.modelOverride);
-      expect(stored[sessionKey]?.modelOverrideSource, name).toBe(
-        explicitUserOverride.modelOverrideSource,
-      );
-      expect(stored[sessionKey]?.contextTokens, name).toBeUndefined();
-      expect(stored[sessionKey]?.contextTokensSource, name).toBeUndefined();
-      expect(stored[sessionKey]?.verboseLevel, name).toBe(runtimeModelCache.verboseLevel);
-    }
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {

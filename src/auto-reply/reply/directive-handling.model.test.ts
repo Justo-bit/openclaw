@@ -1468,7 +1468,41 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
   });
 
-  it("reports unified OpenAI OAuth auth for OpenAI status rows", async () => {
+  it.each([
+    {
+      name: "unified OAuth and token",
+      apiKey: false,
+      token: true,
+      pinned: false,
+      session: {},
+      oauth: true,
+    },
+    { name: "direct API key", apiKey: true, token: false, pinned: false, session: {}, oauth: true },
+    {
+      name: "host runtime policy",
+      apiKey: false,
+      token: false,
+      pinned: true,
+      session: {},
+      oauth: false,
+    },
+    {
+      name: "explicit native runtime",
+      apiKey: false,
+      token: false,
+      pinned: true,
+      session: { agentRuntimeOverride: "codex" },
+      oauth: true,
+    },
+    {
+      name: "observed harness only",
+      apiKey: false,
+      token: false,
+      pinned: true,
+      session: { agentHarnessId: "codex" },
+      oauth: false,
+    },
+  ])("labels OpenAI status auth from $name", async ({ apiKey, token, pinned, session, oauth }) => {
     setAuthProfiles({
       "openai:patrick@example.test": {
         type: "oauth",
@@ -1477,199 +1511,51 @@ describe("/model chat UX", () => {
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
       },
-      "openai:runtime-token": {
-        type: "token",
-        provider: "openai",
-        token: "token",
-      },
+      ...(apiKey
+        ? {
+            "openai:api-key": {
+              type: "api_key" as const,
+              provider: "openai",
+              key: "sk-openai-direct",
+            },
+          }
+        : {}),
+      ...(token
+        ? { "openai:runtime-token": { type: "token" as const, provider: "openai", token: "token" } }
+        : {}),
     });
-
     const reply = await resolveModelInfoReply({
       directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
+      sessionEntry: createSessionEntry(session),
       cfg: {
         commands: { text: true },
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
             models: {
-              "codex/gpt-5.5": {},
-              "openai/gpt-5.5": {},
+              ...(token ? { "codex/gpt-5.5": {} } : {}),
+              "openai/gpt-5.5": pinned ? { agentRuntime: { id: "openclaw" } } : {},
             },
           },
         },
-      } as unknown as OpenClawConfig,
+      },
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
-
     expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
-  }, 240_000);
-
-  it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
-    setAuthProfiles({
-      "openai:api-key": {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-openai-direct",
-      },
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).toContain("openai:api-key=");
-    expect(reply?.text).not.toContain("via codex runtime");
-  });
-
-  it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
-    expect(reply?.text).not.toContain("openai:runtime-token=token");
-  });
-
-  it("honors Codex session runtime overrides when labeling OpenAI status auth", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      sessionEntry: createSessionEntry({
-        agentRuntimeOverride: "codex",
-      }),
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth:");
-    expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
-  });
-
-  it("treats the persisted harness id as observational when labeling status auth", async () => {
-    setAuthProfiles({
-      "openai:patrick@example.test": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const reply = await resolveModelInfoReply({
-      directives: parseInlineSessionDirectives("/model status"),
-      provider: "openai",
-      model: "gpt-5.5",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      sessionEntry: createSessionEntry({
-        agentHarnessId: "codex",
-      }),
-      cfg: {
-        commands: { text: true },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": {
-                agentRuntime: { id: "openclaw" },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
-    });
-
-    expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
+    expect(reply?.text?.includes("[openai] endpoint: default auth: missing")).toBe(!oauth);
+    if (apiKey) {
+      expect(reply?.text).toContain("openai:api-key=");
+    } else {
+      expect(reply?.text?.includes("openai:patrick@example.test=OAuth")).toBe(oauth);
+    }
+    if (!oauth) {
+      expect(reply?.text).not.toContain("openai:runtime-token=token");
+    }
   });
 
   it("uses workspace-scoped auth evidence in /model status labels", async () => {
@@ -2482,60 +2368,49 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(otherEntry.modelOverrideSource).toBeUndefined();
   });
 
-  it("persists an explicitly agent-scoped mixed-command model selection", async () => {
-    await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o -a continue with the request",
-      agentId: "work",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-    });
-
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "work",
-      model: "openai/gpt-4o",
+  it.each([
+    {
+      flag: "-a",
       target: "agent",
-    });
-  });
-
-  it("persists an explicitly global-scoped mixed-command model selection", async () => {
-    await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o -g continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-    });
-
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
+      agentId: "work",
+      selection: "openai/gpt-4o",
       model: "openai/gpt-4o",
+    },
+    {
+      flag: "-g",
       target: "defaults",
-    });
-  });
-
-  it("pins the current configured model when agent scope is explicit", async () => {
-    await persistModelDirectiveForTest({
-      command: "/model default -a continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6"],
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" }],
-    });
-
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
       agentId: "main",
-      model: "anthropic/claude-opus-4-6",
+      selection: "openai/gpt-4o",
+      model: "openai/gpt-4o",
+    },
+    {
+      flag: "-a",
       target: "agent",
-    });
-  });
-
-  it("pins the current configured model when global scope is explicit", async () => {
-    await persistModelDirectiveForTest({
-      command: "/model default -g continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6"],
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" }],
-    });
-
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
       agentId: "main",
+      selection: "default",
       model: "anthropic/claude-opus-4-6",
+    },
+    {
+      flag: "-g",
       target: "defaults",
-    });
-  });
+      agentId: "main",
+      selection: "default",
+      model: "anthropic/claude-opus-4-6",
+    },
+  ])(
+    "persists $selection at explicit $target scope for $agentId",
+    async ({ flag, target, agentId, selection, model }) => {
+      await persistModelDirectiveForTest({
+        command: `/model ${selection} ${flag} continue with the request`,
+        agentId,
+        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+        allowedModelCatalog: [
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+        ],
+      });
+      expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({ agentId, model, target });
+    },
+  );
 
   it("rejects persistent model scope without owner authority", async () => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({

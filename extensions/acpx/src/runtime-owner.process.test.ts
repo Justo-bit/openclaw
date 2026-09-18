@@ -127,7 +127,10 @@ it.each(["global", "shared-project"])(
           ]);
           await manager.setSessionRuntimeMode({ ...target(agentId), runtimeMode: "review" });
           await manager.setSessionConfigOption({ ...target(agentId), key: "tone", value: "brief" });
+          const beforeCancel = await store.load(handle.acpxRecordId!);
           await manager.cancelSession(target(agentId));
+          expect((await store.load(handle.acpxRecordId!))?.pid).toBe(beforeCancel?.pid);
+          expect(() => process.kill(beforeCancel!.pid!, 0)).not.toThrow();
           await manager.getSessionStatus(target(agentId));
           await manager.closeSession({ ...target(agentId), reason: "restart" });
         }
