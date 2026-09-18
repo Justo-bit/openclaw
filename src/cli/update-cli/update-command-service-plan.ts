@@ -18,6 +18,7 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import {
   inspectGatewayServiceInstallationDrift,
+  resolveManagedServiceNodeRunner,
   isGatewayServiceSourceCheckoutRoot,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
@@ -555,16 +556,6 @@ async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
 }
 
-export function resolveManagedServiceNodeRunner(
-  command: GatewayServiceCommandConfig | null,
-): string | undefined {
-  const args = command?.programArguments ?? [];
-  // Native heap flags and dev loaders separate the executable from the entrypoint.
-  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
-  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
-  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
-}
-
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
@@ -604,7 +595,6 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   if (
     serviceRoot &&
-    layout.packageRootReal &&
     layout.entrypointSourceCheckout !== true &&
     (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
   ) {

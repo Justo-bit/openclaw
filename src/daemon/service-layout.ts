@@ -1,6 +1,7 @@
 /** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
@@ -25,6 +26,16 @@ export type GatewayServiceInstallationDrift = {
   serviceVersion?: string;
   activeVersion?: string;
 };
+
+export function resolveManagedServiceNodeRunner(
+  command: GatewayServiceCommandConfig | null,
+): string | undefined {
+  const args = command?.programArguments ?? [];
+  // Native heap flags and dev loaders separate the executable from the entrypoint.
+  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
+  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
+  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
+}
 
 /** Local package evidence remains available when the Gateway cannot answer a probe. */
 export async function inspectGatewayServiceInstallationDrift(
