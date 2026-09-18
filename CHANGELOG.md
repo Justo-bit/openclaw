@@ -1,7 +1,32 @@
 ﻿# Changelog
 
 Docs: https://docs.openclaw.ai
+2026.8.33 release notes: https://docs.openclaw.ai/releases/2026.8.33
 2026.8.2 release notes: https://docs.openclaw.ai/releases/2026.8.2
+
+## 2026.8.33
+
+### Highlights
+
+- **Current flagship models:** add Meta Muse Spark 1.3, Anthropic Fable 5.1, OpenAI GPT-6 Astra, and OpenAI/fal GPT Image 2.5 support to the extended-stable line. (#135638, #136553, #137550, #143068, #143069)
+- **Complete GPT-5.6 family support:** preserve Sol, Terra, and Luna catalog, routing, migration, image, vision, and thinking behavior, including Ultra reasoning across model-runtime boundaries and Bedrock tool-result images. (#135397, #149336)
+- **Extended-stable security rollup:** reconcile all repository advisories that affect 2026.8.2, harden Prometheus metrics authorization and Discord asset/voice ownership, and clear the production Nodemailer advisory gate. (#136700, #137433, #140334, #140903)
+
+### Changes
+
+- **Extended-stable release tooling:** carry the current publication workflows and normalize OpenClaw, all publishable plugins, and native version metadata to 2026.8.33.
+
+### Fixes
+
+- **Anthropic reasoning continuity:** preserve Fable 5.1 reasoning through model switches and runtime events. (#136782)
+- **OpenAI discovery:** require successful model discovery before offering GPT-6 Astra through OAuth. (#137561)
+- **Doctor skill state:** preserve explicitly enabled skills during automatic updates. (#138730)
+- **Generated media:** retain generated images when a later tool call fails. (#131226)
+- **Matrix verification:** refresh verification state before reporting device trust. (#136226)
+- **Prometheus authorization:** reject metric scrapes that lack the configured operator-read scope. (#140903)
+- **Discord media policy:** enforce sender media policy for guild asset uploads. (#140334)
+- **Discord realtime ownership:** preserve speaker and playback ownership across voice lifecycle transitions. (#137433)
+- **Dependency security:** override the IMAP dependency graph to Nodemailer 9.1.1, clearing the address-parser denial-of-service and related domain/content-access advisories. (#136700)
 
 ## 2026.8.2
 

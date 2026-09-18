@@ -74,6 +74,8 @@ overrides:
   ip-address: 10.5.0
   # Keep the cooled HTML converter security fix while Mailparser is rolled back.
   "mailparser@3.9.15>html-to-text": 10.0.1
+  "mailauth@5.0.2>nodemailer": 9.1.1
+  "mailparser@3.9.15>nodemailer": 9.1.1
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   qs: 6.15.3
