@@ -124,6 +124,11 @@ vi.mock("@clack/prompts", () => ({
   spinner,
 }));
 
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.8.2",
+}));
+
 // Mock the update-runner module
 vi.mock("../infra/update-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-runner.js")>()),
