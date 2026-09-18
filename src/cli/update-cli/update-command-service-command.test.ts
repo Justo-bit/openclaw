@@ -29,7 +29,7 @@ it.each(["git", "unknown"] as const)(
   },
 );
 
-it.each(["installed", "load-failed", "operator-edit", "invalid-receipt"])(
+it.each(["installed", "load-failed", "operator-edit", "invalid-receipt", "compensation-failed"])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -42,7 +42,13 @@ it.each(["installed", "load-failed", "operator-edit", "invalid-receipt"])(
       const warning =
         outcome === "operator-edit" ? "Service.Nice preserved" : "Service.KillMode repaired";
       const preserved = outcome === "operator-edit";
-      const failed = preserved || outcome === "load-failed";
+      const compensationFailed = outcome === "compensation-failed";
+      const failed = preserved || compensationFailed || outcome === "load-failed";
+      const error = compensationFailed
+        ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
+        : preserved
+          ? "SERVICE_DEFINITION_UNKNOWN: Service.Nice"
+          : "load failed";
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
         `process.stdout.write(${JSON.stringify(
@@ -50,10 +56,8 @@ it.each(["installed", "load-failed", "operator-edit", "invalid-receipt"])(
             action: "install",
             ok: !failed,
             warnings: [warning],
-            ...(failed
-              ? { error: preserved ? "SERVICE_DEFINITION_UNKNOWN: Service.Nice" : "load failed" }
-              : {}),
-            ...(!preserved
+            ...(failed ? { error } : {}),
+            ...(!preserved && !compensationFailed
               ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
               : {}),
           }),
@@ -72,16 +76,14 @@ it.each(["installed", "load-failed", "operator-edit", "invalid-receipt"])(
         "install",
       );
       if (failed) {
-        await expect(result).rejects.toThrow(
-          preserved ? "SERVICE_DEFINITION_UNKNOWN" : "load failed",
-        );
+        await expect(result).rejects.toThrow(error);
       } else {
         await expect(result).resolves.toBe("unverified");
       }
       expect(warnings).toContain(warning);
       if (preserved) {
         expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
-      } else if (outcome === "invalid-receipt") {
+      } else if (outcome === "invalid-receipt" || compensationFailed) {
         expect(definitionRecovery).toEqual({ unverified: true });
         expect(warnings).toContainEqual(expect.stringContaining("receipt could not be verified"));
       } else {

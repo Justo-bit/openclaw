@@ -34,10 +34,12 @@ export function isPackageManagerUpdateMode(
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
-  // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
   const error = safeParseJsonRecord(stdout)?.error;
+  const diagnostics = `${stderr}\n${typeof error === "string" ? error : stdout}`;
+  // Failed recovery can contain a nested writer denial; retain the outer failure.
   const detail =
-    `${stderr}\n${stdout}`.match(DEFINITION_DENIAL)?.[0] ??
+    diagnostics.match(/\bUPDATE_NATIVE_AUTHORITY:[^\n]*/)?.[0] ??
+    diagnostics.match(DEFINITION_DENIAL)?.[0] ??
     (typeof error === "string" ? error : stderr || stdout).trim();
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
@@ -181,10 +183,12 @@ export async function runUpdatedInstallGatewayCommand(
       const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
         response.definitionBackup,
       );
-      if (backup.success) {
+      const error = typeof response.error === "string" ? response.error : "";
+      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
+      if (backup.success && !recoveryFailed) {
         params.definitionRecovery.backup = backup.data;
         params.definitionRecovery.unverified = false;
-      } else if (DEFINITION_DENIAL.test(typeof response.error === "string" ? response.error : "")) {
+      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
         params.definitionRecovery.preserved = true;
         params.definitionRecovery.unverified = false;
       } else {
