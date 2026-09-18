@@ -47,7 +47,7 @@ function unresolvedOriginBasename(origin: string | undefined): string | undefine
   }
 }
 
-export function projectGitHubRepositories(
+function projectGitHubRepositories(
   projects: ProjectsListResult["projects"],
 ): MarkdownGitHubRepositoryAliases[] {
   return projects.map(({ displayName, originUrl }) => {

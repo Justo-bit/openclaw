@@ -7,7 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { markdownGitHubAliases } from "../components/markdown-github-repositories.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
-import { projectGitHubRepositories, projectsForGateway } from "./projects.ts";
+import { projectsForGateway } from "./projects.ts";
 
 const project: ProjectRecord = {
   id: "registered",
@@ -168,19 +168,23 @@ describe("registered project catalog", () => {
     "[2001:db8::1]:shared.git",
     "ssh://internal/shared.git",
     "https://gitlab.com/team/%73hared.git",
-  ])("keeps authorized non-GitHub basename collisions unresolved: %s", (originUrl) => {
-    const repositories = projectGitHubRepositories([
-      {
-        ...project,
-        displayName: "Public Project",
-        originUrl: "https://github.com/acme/shared.git",
-      },
-      { ...project, id: "internal", displayName: "Internal Service", originUrl },
-    ]);
-    expect(markdownGitHubAliases(repositories).find(([alias]) => alias === "shared")).toEqual([
-      "shared",
-      null,
-    ]);
+  ])("keeps authorized non-GitHub basename collisions unresolved: %s", async (originUrl) => {
+    const h = harness();
+    await h.store.refresh();
+    h.request.mockResolvedValue({
+      projects: [
+        {
+          ...project,
+          displayName: "Public Project",
+          originUrl: "https://github.com/acme/shared.git",
+        },
+        { ...project, id: "internal", displayName: "Internal Service", originUrl },
+      ],
+    });
+    await h.store.refresh(true);
+    expect(
+      markdownGitHubAliases(h.store.snapshot.repositories).find(([alias]) => alias === "shared"),
+    ).toEqual(["shared", null]);
   });
 
   it.each([
@@ -197,8 +201,12 @@ describe("registered project catalog", () => {
     ["git@evil.test:openclaw/clawsweeper.git", false],
     ["/workspace/clawsweeper", false],
     [undefined, false],
-  ])("binds only verified GitHub clone coordinates: %s", (originUrl, resolves) => {
-    expect(projectGitHubRepositories([{ ...project, originUrl }])).toEqual([
+  ])("binds only verified GitHub clone coordinates: %s", async (originUrl, resolves) => {
+    const h = harness();
+    await h.store.refresh();
+    h.request.mockResolvedValue({ projects: [{ ...project, originUrl }] });
+    await h.store.refresh(true);
+    expect(h.store.snapshot.repositories).toEqual([
       resolves
         ? { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] }
         : { aliases: ["ClawSweeper"] },
