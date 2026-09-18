@@ -11,7 +11,7 @@ struct ProcessArgumentsTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         let input = Pipe()
         let child = Process()
-        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.executableURL = URL(fileURLWithPath: "/bin/bash")
         child.currentDirectoryURL = directory
         child.arguments = [
             "-c", "IFS= read -r fixture", "fixture", "Développement", "tab\tlabel", "line\nlabel",
@@ -31,7 +31,7 @@ struct ProcessArgumentsTests {
         #expect(result.pid == child.processIdentifier)
         #expect(result.parentPid == getpid())
         #expect(result.uid == geteuid())
-        #expect(result.arguments == ["/bin/sh"] + (child.arguments ?? []))
+        #expect(result.arguments == ["/bin/bash"] + (child.arguments ?? []))
         #expect(URL(fileURLWithPath: result.executablePath).resolvingSymlinksInPath() ==
             child.executableURL?.resolvingSymlinksInPath())
         var file = stat()
