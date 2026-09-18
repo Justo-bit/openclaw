@@ -279,13 +279,17 @@ export function registerUpdateRespawnProgressTests({
       });
       waitForGatewayHealthyRestart.mockImplementationOnce(async ({ child }) => {
         expect(child).toMatchObject({ pid: process.pid, exitCode: null, signalCode: null });
-        await new Promise<void>((resolve) => setTimeout(resolve, elapsedMs));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, elapsedMs);
+        });
         return respawnHealth({ healthy: waitOutcome === "healthy", waitOutcome, elapsedMs });
       });
 
       await withIsolatedSignals(async ({ captureSignal }) => {
         const close = vi.fn(async () => {
-          await new Promise<void>((resolve) => setTimeout(resolve, closeMs));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, closeMs);
+          });
         });
         const { start, started } = createSignaledStart(close);
         const { runtime, exited } = createRuntimeWithExitSignal();
