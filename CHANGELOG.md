@@ -14,7 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Extended-stable release tooling:** carry the current publication workflows and normalize OpenClaw, all publishable plugins, and native version metadata to 2026.8.33.
+- **Extended-stable release preparation:** normalize OpenClaw, all publishable plugins, and native version metadata to 2026.8.33 while retaining the release-line-compatible publication workflows from 2026.8.2.
 
 ### Fixes
 
