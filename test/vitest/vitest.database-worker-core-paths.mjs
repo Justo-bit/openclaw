@@ -83,6 +83,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/official-external-plugin-catalog-snapshot-store.worker.test.ts",
   "src/plugins/official-external-plugin-catalog.test.ts",
   "src/infra/device-pairing.test.ts",
+  "src/infra/sqlite-worker-existing-schema.test.ts",
   "src/infra/session-cost-usage-metadata.test.ts",
   "src/plugins/installed-plugin-index-records.test.ts",
   "src/acp/runtime/session-meta-doctor.test.ts",
@@ -94,6 +95,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/sdk.auth-migration.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",
   "src/commands/doctor-db-bloat.worker.test.ts",
+  "src/commands/doctor-device-pairing.worker.test.ts",
+  "src/commands/doctor-device-pairing.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
   "src/entry.memory-json.test.ts",
@@ -135,6 +138,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/agents/tools/cron-tool.output-contract.test.ts",
   "src/plugins/services.cron.test.ts",
+  "test/plugins/memory-dreaming-cron.test.ts",
   "src/state/creator-namespace-migration.test.ts",
 ];
 

@@ -188,7 +188,6 @@ extensions/codex/src/app-server/plugin-metadata-cache.ts	5
 extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
 extensions/codex/src/app-server/protocol-validators.ts	3
 extensions/codex/src/app-server/remote-workspace-media.ts	6
-extensions/codex/src/app-server/request.ts	2
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	13
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
@@ -205,7 +204,7 @@ extensions/codex/src/app-server/sandbox-guard.ts	2
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/shared-client.ts	2
 extensions/codex/src/app-server/side-question.ts	7
-extensions/codex/src/app-server/startup-binding.ts	2
+extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-fingerprints.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
@@ -219,11 +218,11 @@ extensions/codex/src/app-server/usage-limit-error.ts	2
 extensions/codex/src/command-handlers.ts	3
 extensions/codex/src/command-rpc.ts	1
 extensions/codex/src/conversation-control.ts	1
-extensions/codex/src/migration/apply.ts	4
+extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
 extensions/codex/src/migration/helpers.ts	1
 extensions/codex/src/migration/plan.ts	5
-extensions/codex/src/migration/session-binding-sidecars.ts	5
+extensions/codex/src/migration/session-binding-sidecars.ts	4
 extensions/codex/src/migration/source-files.ts	1
 extensions/codex/src/session-catalog-listing.ts	3
 extensions/codex/src/session-catalog-node-continue.ts	1
@@ -711,7 +710,6 @@ extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	1
-extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	1
 extensions/memory-core/src/memory/manager-search.ts	6
 extensions/memory-core/src/memory/manager-sync-base.ts	3
@@ -3389,7 +3387,6 @@ src/skills/loading/config.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/source.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
-src/skills/runtime/refresh.ts	2
 src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/security/clawhub-verdicts.ts	2

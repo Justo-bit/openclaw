@@ -96,7 +96,6 @@ export async function readMirroredSessionHistoryMessages(params: {
   const messages = await readCodexMirroredSessionHistoryMessages(
     target,
     admission,
-    "model-context",
     signal,
     contextTokenBudget,
   );

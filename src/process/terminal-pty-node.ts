@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -17,7 +17,7 @@ export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveExecutablePath("node", { env: process.env });
+  const node = resolveNodeRuntimeExecutable();
   if (!node) {
     throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
   }

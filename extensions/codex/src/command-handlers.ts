@@ -386,6 +386,7 @@ export async function handleCodexSubcommand(
         await readCodexAccountAuthOverview({
           ctx,
           agentDir: scope.agentDir,
+          authProfileId: scope.authProfileId,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
