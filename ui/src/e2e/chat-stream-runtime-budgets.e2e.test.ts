@@ -1,6 +1,7 @@
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -10,7 +11,7 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
+import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
@@ -550,6 +551,27 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
+      // Swarm hydration starts after the first chat render. Its initial list
+      // publication must commit before measuring stream-driven invalidations.
+      await waitForCommittedState(
+        page,
+        () => {
+          const app = document.querySelector<
+            HTMLElement & { runtime: { context: ApplicationContext } }
+          >("openclaw-app");
+          const children = app?.runtime.context.sessions.listSnapshot({
+            spawnedBy: "agent:main:main",
+            limit: 10_000,
+            includeGlobal: false,
+            includeUnknown: false,
+            configuredAgentsOnly: true,
+          });
+          return (
+            children?.result !== null && children?.loading === false && children.error === null
+          );
+        },
+        {},
+      );
       await installRenderProbe(page);
       await resetRenderProbe(page);
 
