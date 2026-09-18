@@ -6,6 +6,7 @@ import {
 import type { WorkerDesktopApp, WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { RfbPreauthDescriptor } from "../desktop/rfb-preauth.js";
 import {
   DesktopSessionStaleOwnerError,
   type DesktopSessionRegistry,
@@ -280,6 +281,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
           ...(binding.desktop.passwordFilePath
             ? { passwordFilePath: binding.desktop.passwordFilePath }
             : {}),
+          ...(binding.desktop.username ? { username: binding.desktop.username } : {}),
         },
         timeoutMs: 0,
         signal,
@@ -300,8 +302,23 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {
         throw new Error("Worker environment node desktop owner changed before attachment");
       }
-      if (attached.auth !== "vnc-password" || !attached.vncPassword) {
-        throw new Error("Worker environment node desktop did not provide VNC authentication");
+      let preauth: RfbPreauthDescriptor;
+      if (binding.desktop.username) {
+        if (
+          attached.auth !== "ard-account" ||
+          attached.ardCredentials?.username !== binding.desktop.username ||
+          !attached.ardCredentials.password
+        ) {
+          throw new Error(
+            "Worker environment node desktop did not provide its lease-owned ARD account",
+          );
+        }
+        preauth = { auth: "ard-account", credentials: attached.ardCredentials };
+      } else {
+        if (attached.auth !== "vnc-password" || !attached.vncPassword) {
+          throw new Error("Worker environment node desktop did not provide VNC authentication");
+        }
+        preauth = { auth: "vnc-password", credentials: { password: attached.vncPassword } };
       }
       const { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } =
         await import("../desktop/observe-bridge.js");
@@ -327,10 +344,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         requester: request.requester,
         attachment,
         onAbandon: () => stopStream(active),
-        preauth: {
-          auth: "vnc-password",
-          credentials: { password: attached.vncPassword },
-        },
+        preauth,
         nowMs: issuedAtMs,
       });
       active.unclaimedTimer = setTimeout(

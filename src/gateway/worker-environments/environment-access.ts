@@ -368,6 +368,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       control: request.control,
       requester: request.requester,
       attachment: acquired.attachment,
+      ...(acquired.preauth ? { preauth: acquired.preauth } : {}),
       nowMs: now(),
     });
     return {

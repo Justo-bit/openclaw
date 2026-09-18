@@ -7,7 +7,7 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
-import type { DesktopRfbAttachment } from "../desktop/attachment.js";
+import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -42,7 +42,7 @@ type DesktopAcquireRequest = {
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
-type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
+type DesktopAcquireResult = Awaited<ReturnType<DesktopSessionRegistry["acquire"]>>;
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
@@ -177,8 +177,11 @@ export function createWorkerDesktopTunnels(deps: {
           ],
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
+        if (!isCurrent()) {
+          throw new Error("Worker desktop tunnel stopped before connecting");
+        }
         if (!successful(result)) {
-          throw workerSshProcessError(result.stderr || result.stdout);
+          throw workerSshProcessError(result.stderr);
         }
         vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
         if (!vncPassword) {
@@ -186,9 +189,23 @@ export function createWorkerDesktopTunnels(deps: {
         }
         registerSecretValueForRedaction(vncPassword);
       }
+      if (request.desktop.username && !isWorkerDesktopArdPassword(vncPassword)) {
+        throw new Error(
+          "Worker desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
+        );
+      }
       return {
         attachment: { kind: "unix-socket", socketPath: localSocketPath },
-        ...(vncPassword ? { vncPassword } : {}),
+        ...(request.desktop.username && vncPassword
+          ? {
+              preauth: {
+                auth: "ard-account",
+                credentials: { username: request.desktop.username, password: vncPassword },
+              },
+            }
+          : vncPassword
+            ? { vncPassword }
+            : {}),
       };
     };
 
@@ -308,7 +325,7 @@ export function createWorkerDesktopTunnels(deps: {
             String(prepared.port),
             "--",
             prepared.sshTarget,
-            workerSshRemoteCommand([request.app.executablePath]),
+            workerSshRemoteCommand([request.app.executablePath, ...(request.app.args ?? [])]),
           ],
           workerSshCommandOptions({
             timeoutMs: remainingLaunchMs,

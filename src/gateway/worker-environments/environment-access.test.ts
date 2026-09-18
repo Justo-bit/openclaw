@@ -535,20 +535,28 @@ describe("worker environment service", () => {
     });
   });
 
-  it.each([true, false, undefined])(
-    "carries provider resize permission %s through SSH observe",
-    async (allowsDesktopResize) => {
+  it.each(
+    [true, false, undefined].flatMap((allowsDesktopResize) =>
+      [undefined, "worker"].map((username) => ({ allowsDesktopResize, username })),
+    ),
+  )(
+    "carries provider resize permission $allowsDesktopResize and lease account $username through SSH observe",
+    async ({ allowsDesktopResize, username }) => {
       const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
       const client = { invalidated: false };
       const requester = {
         signal: new AbortController().signal,
         isCurrent: () => !client.invalidated,
       };
-      const record = support.seedReadyDesktop("worker-desktop-observe");
+      const desktop = { ...support.DESKTOP, ...(username ? { username } : {}) };
+      const record = support.seedReadyDesktop("worker-desktop-observe", desktop);
       const desktopPassword = ["desktop", String.fromCharCode(45), "secret"].join("");
+      const preauth = username
+        ? { auth: "ard-account" as const, credentials: { username, password: desktopPassword } }
+        : undefined;
       const acquire = vi.fn(async () => ({
         attachment: { kind: "unix-socket" as const, socketPath: "/tmp/worker-desktop.sock" },
-        vncPassword: desktopPassword,
+        ...(preauth ? { preauth } : { vncPassword: desktopPassword }),
       }));
       const tunnelManager = {
         desktop: {
@@ -576,14 +584,19 @@ describe("worker environment service", () => {
         wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
         expiresAtMs: support.testState.nowMs + 60_000,
         control: true,
-        vncPassword: desktopPassword,
+        ...(preauth ? {} : { vncPassword: desktopPassword }),
       });
+      expect(observed).not.toHaveProperty("preauth");
+      if (preauth) {
+        expect(observed).not.toHaveProperty("vncPassword");
+      }
+      expect(mint.mock.calls[0]?.[0].preauth).toEqual(preauth);
       expect(observed.canResize).toBe(allowsDesktopResize === true ? true : undefined);
       expect(acquire).toHaveBeenCalledWith(
         expect.objectContaining({
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
-          desktop: support.DESKTOP,
+          desktop,
           ssh: support.SSH_ENDPOINT,
           resolveIdentity: expect.any(Function),
         }),

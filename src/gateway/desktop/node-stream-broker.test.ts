@@ -252,16 +252,52 @@ describe("node desktop stream tickets", () => {
     releaseRecheck();
   });
 
-  it("rejects invalid metadata without exposing later WebSocket errors", async () => {
+  it.each([
+    { auth: "none" },
+    { auth: "vnc-password", ardUsername: "worker", ardPassword: "secret" },
+    { auth: "ard-account", vncPassword: "secret" },
+    {
+      auth: "ard-account",
+      ardUsername: "worker",
+      ardPassword: "secret",
+      extra: true,
+    },
+    { auth: "ard-account", ardUsername: "x".repeat(64), ardPassword: "secret" },
+    { auth: "ard-account", ardUsername: "worker", ardPassword: "x".repeat(64) },
+    { auth: "ard-account", ardUsername: "worker", ardPassword: "" },
+    { auth: "ard-account", ardUsername: "worker" },
+    { auth: "ard-account", ardPassword: "secret" },
+    { auth: "ard-account", ardCredentials: { username: "worker", password: "secret" } },
+  ])("rejects invalid metadata %j without exposing later WebSocket errors", async (metadata) => {
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };
     const baseUrl = await startBrokerServer({ broker, session });
     const minted = broker.mint({ nodeId: "node-1", ...session });
-    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, { auth: "none" });
+    const ws = await connectAndSend(`${baseUrl}${minted.attachPath}`, metadata);
     ws.send(Buffer.alloc(65 * 1024), { binary: true });
 
     await expect(minted.attached).rejects.toThrow();
   });
+
+  it.each([undefined, { username: "worker", password: "lease-password" }])(
+    "retains transient ARD credentials %j only when supplied by the node",
+    async (ardCredentials) => {
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      const minted = broker.mint({ nodeId: "node-1", ...session });
+      await connectAndSend(`${baseUrl}${minted.attachPath}`, {
+        auth: "ard-account",
+        ...(ardCredentials
+          ? { ardUsername: ardCredentials.username, ardPassword: ardCredentials.password }
+          : {}),
+      });
+      const attached = await minted.attached;
+      expect(attached.ardCredentials).toEqual(ardCredentials);
+      expect(attached.vncPassword).toBeUndefined();
+      attached.stream.destroy();
+    },
+  );
 
   it("rejects an expired ticket before upgrading", async () => {
     let now = 1_000;

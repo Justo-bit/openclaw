@@ -118,6 +118,7 @@ function launchApp(
   app: "browser" | "terminal" = "browser",
   ownerEpoch = 1,
   ssh = SSH,
+  args?: string[],
 ) {
   return manager.launchApp({
     environmentId: "worker:one",
@@ -128,6 +129,7 @@ function launchApp(
         ? {
             id: "browser",
             executablePath: "/usr/local/bin/openclaw-worker-browser",
+            ...(args ? { args } : {}),
             cdpPort: 9222,
           }
         : { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
@@ -251,36 +253,47 @@ describe("worker desktop tunnels", () => {
     },
   );
 
-  it("creates one pinned local forward per epoch and caches the password", async () => {
-    const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
-    const starting = acquire(manager);
-    await waitForStarts(fake.starts, 1);
-    const start = fake.starts[0]!;
-    expect(start.argv).toContain("ClearAllForwardings=no");
-    expect(start.argv).toContain("StreamLocalBindMask=0177");
-    expect(start.argv).toContain("ServerAliveInterval=15");
-    expect(start.argv).toContain("ServerAliveCountMax=3");
-    expect(start.argv[start.argv.indexOf("-L") + 1]).toMatch(
-      /openclaw-worker-desktop-.+\/desktop\.sock:127\.0\.0\.1:5900$/u,
-    );
-    expect(start.argv).toContain("-N");
-    expect(start.argv).toContain("-n");
-    expect(start.argv).toContain("PermitLocalCommand=yes");
-    expect(start.argv).toContain("LocalCommand=printf 'OPENCLAW_WORKER_TUNNEL_READY\\n'");
-    expect(start.argv.at(-1)).toBe("worker@worker.example.test");
-    expect(start.options.input).toBeUndefined();
-    start.process.becomeReady();
-    const result = await starting;
-    expect(result).toMatchObject({ vncPassword: "vnc-secret" });
-    expect(fake.runs).toHaveLength(1);
-    expect(fake.runs[0]?.argv.at(-1)).toContain("/var/lib/crabbox/vnc.password");
+  it.each([undefined, "worker"])(
+    "creates one pinned local forward per epoch with lease account %s",
+    async (username) => {
+      const fake = fakeRunner();
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+      const desktop = { ...DESKTOP, ...(username ? { username } : {}) };
+      const starting = acquire(manager, 1, desktop);
+      await waitForStarts(fake.starts, 1);
+      const start = fake.starts[0]!;
+      expect(start.argv).toContain("ClearAllForwardings=no");
+      expect(start.argv).toContain("StreamLocalBindMask=0177");
+      expect(start.argv).toContain("ServerAliveInterval=15");
+      expect(start.argv).toContain("ServerAliveCountMax=3");
+      expect(start.argv[start.argv.indexOf("-L") + 1]).toMatch(
+        /openclaw-worker-desktop-.+\/desktop\.sock:127\.0\.0\.1:5900$/u,
+      );
+      expect(start.argv).toContain("-N");
+      expect(start.argv).toContain("-n");
+      expect(start.argv).toContain("PermitLocalCommand=yes");
+      expect(start.argv).toContain("LocalCommand=printf 'OPENCLAW_WORKER_TUNNEL_READY\\n'");
+      expect(start.argv.at(-1)).toBe("worker@worker.example.test");
+      expect(start.options.input).toBeUndefined();
+      start.process.becomeReady();
+      const result = await starting;
+      expect(result).toMatchObject(
+        username
+          ? { preauth: { auth: "ard-account", credentials: { username, password: "vnc-secret" } } }
+          : { vncPassword: "vnc-secret" },
+      );
+      if (username) {
+        expect(result).not.toHaveProperty("vncPassword");
+      }
+      expect(fake.runs).toHaveLength(1);
+      expect(fake.runs[0]?.argv.at(-1)).toContain("/var/lib/crabbox/vnc.password");
 
-    await expect(acquire(manager)).resolves.toEqual(result);
-    expect(fake.starts).toHaveLength(1);
-    expect(fake.runs).toHaveLength(1);
-    await manager.stopAll();
-  });
+      await expect(acquire(manager, 1, desktop)).resolves.toEqual(result);
+      expect(fake.starts).toHaveLength(1);
+      expect(fake.runs).toHaveLength(1);
+      await manager.stopAll();
+    },
+  );
 
   it("expires an unattached acquisition and disposes its SSH identity directory", async ({
     onTestFinished,
@@ -564,13 +577,17 @@ describe("worker desktop tunnels", () => {
     }
   });
 
-  it.each(["readiness", "password"] as const)(
-    "joins %s before disposing a cancelled desktop",
-    async (phase) => {
+  it.each(
+    (["readiness", "password"] as const).flatMap((phase) =>
+      [undefined, "worker"].map((username) => ({ phase, username })),
+    ),
+  )(
+    "joins $phase for lease account $username before disposing a cancelled desktop",
+    async ({ phase, username }) => {
       const password = deferred<SpawnResult>();
       const fake = fakeRunner(() => password.promise);
       const manager = createWorkerDesktopTunnels({ runner: fake.runner });
-      const starting = acquire(manager);
+      const starting = acquire(manager, 1, { ...DESKTOP, ...(username ? { username } : {}) });
       const rejected = expect(starting).rejects.toThrow("stopped before connecting");
       await waitForStarts(fake.starts, 1);
       const started = fake.starts[0]!;
@@ -663,26 +680,32 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toEqual([]);
   });
 
-  it("deduplicates one exact no-argument launcher command per app and epoch", async () => {
-    const result = deferred<SpawnResult>();
-    const fake = fakeRunner(async () => await result.promise);
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+  it.each([{ args: undefined }, { args: ["arg with spaces", "literal;$(text)"] }])(
+    "deduplicates one exact launcher with args $args per app and epoch",
+    async ({ args }) => {
+      const result = deferred<SpawnResult>();
+      const fake = fakeRunner(async () => await result.promise);
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
 
-    const first = launchApp(manager);
-    const second = launchApp(manager);
-    await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
-    const run = fake.runs[0]!;
-    expect(run.argv.at(-1)).toBe("'/usr/local/bin/openclaw-worker-browser'");
-    expect(run.argv.at(-1)).not.toContain("9222");
-    expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
-    expect(run.options.timeoutMs).toBeGreaterThan(0);
-    expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
-    expect(run.options.signal).toBeInstanceOf(AbortSignal);
-    result.resolve(success());
+      const first = launchApp(manager, "browser", 1, SSH, args);
+      const second = launchApp(manager, "browser", 1, SSH, args);
+      await vi.waitFor(() => expect(fake.runs).toHaveLength(1), { interval: 1 });
+      const run = fake.runs[0]!;
+      expect(run.argv.at(-1)).toBe(
+        "'/usr/local/bin/openclaw-worker-browser'" +
+          (args ? " 'arg with spaces' 'literal;$(text)'" : ""),
+      );
+      expect(run.argv.at(-1)).not.toContain("9222");
+      expect(run.argv.at(-1)).not.toContain(".cache/openclaw");
+      expect(run.options.timeoutMs).toBeGreaterThan(0);
+      expect(run.options.timeoutMs).toBeLessThanOrEqual(30_000);
+      expect(run.options.signal).toBeInstanceOf(AbortSignal);
+      result.resolve(success());
 
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-    await manager.stopAll();
-  });
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      await manager.stopAll();
+    },
+  );
 
   it.each(["browser", "terminal"] as const)(
     "does not replay a %s launch after ambiguous SSH exit 255",

@@ -1,10 +1,14 @@
-import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
+import { WorkerProviderError, type WorkerDesktopEndpoint } from "openclaw/plugin-sdk/plugin-entry";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
   isUnrecognizedLease,
   runCrabboxCommand,
   type CrabboxCommandRunner,
 } from "./crabbox-worker-command.js";
+import {
+  createCrabboxWorkerDesktopEndpoint,
+  createCrabboxWorkerDesktopSetup,
+} from "./crabbox-worker-desktop-setup.js";
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import type { parseCrabboxProfile } from "./crabbox-worker-profile.js";
@@ -250,6 +254,38 @@ export async function runProvisionSetupAndWaitReady(
   // Setup may restart SSH or change its endpoint. Re-read the authoritative lease before
   // returning any endpoint or security attestation to core bootstrap.
   return await waitForProvisionReady({ ...params, refresh: true });
+}
+
+export async function prepareProvisionDesktop(
+  params: ProvisionInspectContext & {
+    wallpaperBase64: string;
+    prepareBeforeEnrollment: boolean;
+  },
+): Promise<{ setup: string; endpoint: WorkerDesktopEndpoint } | undefined> {
+  if (!params.profile.desktop) {
+    return undefined;
+  }
+  let desktop: { setup: string; endpoint: WorkerDesktopEndpoint };
+  try {
+    const { id, sshUser } = params.inspect;
+    desktop = {
+      setup: createCrabboxWorkerDesktopSetup(
+        id,
+        params.wallpaperBase64,
+        params.profile.target,
+        sshUser,
+      ),
+      endpoint: createCrabboxWorkerDesktopEndpoint(id, params.profile.target, sshUser),
+    };
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
+  }
+  if (params.prepareBeforeEnrollment) {
+    // Project capture needs the desktop prepared; other leases batch it with enrollment.
+    await runProvisionSetup({ ...params, phase: "desktop setup", setup: desktop.setup });
+  }
+  return desktop;
 }
 
 export async function failProvisionAfterCleanup(

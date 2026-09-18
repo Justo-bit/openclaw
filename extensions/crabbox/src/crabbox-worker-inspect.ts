@@ -4,6 +4,7 @@ type CrabboxInspect = {
   id?: unknown;
   providerMetadata?: unknown;
   ready?: unknown;
+  sshUser?: unknown;
   state?: unknown;
   tailscale?: unknown;
 };
@@ -12,6 +13,7 @@ export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
   id: string;
   ready?: boolean;
+  sshUser?: string;
   state: string;
   tailscaleEnabled: boolean;
 };
@@ -36,6 +38,10 @@ export function parseInspectJson(stdout: string): ParsedInspect {
   if (value.ready !== undefined && typeof value.ready !== "boolean") {
     throw new Error("Crabbox inspect returned an invalid ready state");
   }
+  if (value.sshUser !== undefined && typeof value.sshUser !== "string") {
+    throw new Error("Crabbox inspect returned an invalid SSH user");
+  }
+  const sshUser = nonEmptyString(value.sshUser);
   if (
     value.tailscale !== undefined &&
     (value.tailscale === null ||
@@ -67,5 +73,6 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     tailscaleEnabled,
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
+    ...(sshUser && sshUser !== "<token>" ? { sshUser } : {}),
   };
 }

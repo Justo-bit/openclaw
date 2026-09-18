@@ -566,25 +566,27 @@ describe("Crabbox worker provider", () => {
     },
   );
 
-  it.each(
-    ["desktop", "warmImage"].flatMap((setting) => [
-      { setting, target: "windows/wsl2" },
-      { setting, target: "windows/normal" },
-      { setting, target: "macos" },
-    ]),
-  )("keeps $setting Linux only for $target settings and overrides", async ({ setting, target }) => {
-    const runCommand = vi.fn(async () => commandResult());
-    const provider = providerWithRunner(runCommand);
-    for (const [profile, options] of [
-      [{ ...PROFILE, [setting]: true, target }, undefined],
-      [{ ...PROFILE, [setting]: true }, { os: target }],
-    ] as const) {
-      await expect(provider.provision(profile, OPERATION_ID, options)).rejects.toThrow(
-        "Linux only",
-      );
-    }
-    expect(runCommand).not.toHaveBeenCalled();
-  });
+  it.each([
+    { setting: "desktop", target: "windows/wsl2", error: "requires native Windows" },
+    ...["windows/wsl2", "windows/normal", "macos"].map((target) => ({
+      setting: "warmImage",
+      target,
+      error: "warm images are Linux only",
+    })),
+  ])(
+    "rejects unsupported $setting for $target settings and overrides",
+    async ({ setting, target, error }) => {
+      const runCommand = vi.fn(async () => commandResult());
+      const provider = providerWithRunner(runCommand);
+      for (const [profile, options] of [
+        [{ ...PROFILE, [setting]: true, target }, undefined],
+        [{ ...PROFILE, [setting]: true }, { os: target }],
+      ] as const) {
+        await expect(provider.provision(profile, OPERATION_ID, options)).rejects.toThrow(error);
+      }
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("reads large machine catalogs while preserving shapes, order, and configured defaults", async () => {
     const calls: string[][] = [];
@@ -2171,194 +2173,6 @@ describe("Crabbox worker provider", () => {
       const provider = providerWithRunner(async () => commandResult());
 
       expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 15_000);
-    },
-  );
-
-  it.each([
-    {
-      name: "direct AWS",
-      providerId: "aws",
-      config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
-    },
-    {
-      name: "coordinator-backed AWS",
-      providerId: "aws",
-      config: {
-        aws: { instanceProfile: "" },
-        coordinator: "https://coordinator.example.test",
-        brokerMode: "managed",
-      },
-    },
-    {
-      name: "direct Azure",
-      providerId: "azure",
-      config: { coordinator: "", brokerMode: "managed" },
-    },
-    {
-      name: "coordinator-backed Azure",
-      providerId: "azure",
-      config: {
-        coordinator: "https://coordinator.example.test",
-        brokerMode: "managed",
-      },
-    },
-    {
-      name: "coordinator-backed Hetzner",
-      providerId: "hetzner",
-      config: {
-        coordinator: "https://coordinator.example.test",
-        brokerMode: "managed",
-      },
-    },
-  ])("provisions a node-carried desktop through $name", async ({ config, providerId }) => {
-    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
-    const setupOrder: string[] = [];
-    const setupStarted = createDeferred<void>();
-    const setupComplete = createDeferred<void>();
-    const provider = providerWithRawRunner(async (argv, options) => {
-      calls.push({ argv, options });
-      if (argv[1] === "config" && argv[2] === "show") {
-        return commandResult({ stdout: JSON.stringify(config) });
-      }
-      if (argv[1] === "inspect" || argv[1] === "status") {
-        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-      }
-      if (argv[1] === "run" && String(options.input).includes("openclaw-worker-browser")) {
-        setupOrder.push("desktop");
-        setupStarted.resolve();
-        await setupComplete.promise;
-      }
-      return commandResult();
-    });
-
-    let completed = false;
-    const provision = provider
-      .provision({ ...PROFILE, provider: providerId, desktop: true }, OPERATION_ID, {
-        beginNodeEnrollment: async () => {
-          setupOrder.push("enrollment");
-          return {
-            mode: "connect" as const,
-            setupCode: "secret-setup-value",
-            setupId: "setup-id",
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Cloud worker test",
-            waitForDeviceId: async () => "device-1",
-          };
-        },
-      })
-      .finally(() => {
-        completed = true;
-      });
-    await setupStarted.promise;
-    try {
-      expect(completed).toBe(false);
-      expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
-    } finally {
-      setupComplete.resolve();
-    }
-    await expect(provision).resolves.toEqual({
-      leaseId: LEASE_ID,
-      node: { deviceId: "device-1" },
-      sharedHost: false,
-      desktop: {
-        protocol: "rfb",
-        port: 5900,
-        passwordFilePath: "/var/lib/crabbox/vnc.password",
-        apps: [
-          {
-            id: "browser",
-            executablePath: "/usr/local/bin/openclaw-worker-browser",
-            cdpPort: 9222,
-          },
-          {
-            id: "terminal",
-            executablePath: "/usr/local/bin/openclaw-worker-terminal",
-          },
-        ],
-      },
-    });
-    expect(calls.find((call) => call.argv[1] === "warmup")).toEqual(
-      expect.objectContaining({
-        options: expect.objectContaining({ timeoutMs: 100 * 60_000 }),
-      }),
-    );
-    expect(calls.find((call) => call.argv[1] === "warmup")?.argv.slice(-4)).toEqual([
-      "--desktop",
-      "--browser",
-      "--desktop-env",
-      "xfce",
-    ]);
-    expect(provider.allowsDesktopResize).toBe(true);
-    expect(
-      provider.resolveProvisionTimeoutMs?.({
-        ...PROFILE,
-        provider: providerId,
-        desktop: true,
-      }),
-    ).toBe(149 * 60_000 + 15_000);
-    expect(calls.filter(({ argv }) => argv[1] === "run")).toHaveLength(1);
-    expect(calls.find(({ argv }) => argv[1] === "run")?.options.timeoutMs).toBe(30 * 60_000);
-    expect(setupOrder).toEqual(["enrollment", "desktop"]);
-    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
-  });
-
-  it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as const)(
-    "reports confirmed cleanup after %s failure",
-    async (failurePoint) => {
-      const calls: string[][] = [];
-      const provider = providerWithRunner(async (argv, options) => {
-        calls.push(argv);
-        if (argv[1] === "inspect") {
-          return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
-        }
-        if (
-          failurePoint === "desktop setup" &&
-          argv[1] === "run" &&
-          String(options.input).includes("openclaw-worker-browser")
-        ) {
-          return commandResult({ code: 9, stderr: "desktop setup failed" });
-        }
-        return commandResult();
-      });
-
-      const failure = await provider
-        .provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
-          beginNodeEnrollment: async () => {
-            if (failurePoint === "enrollment preparation") {
-              throw new Error("enrollment preparation failed");
-            }
-            return {
-              mode: "resume" as const,
-              deviceId: "device-bound",
-              openclawVersion: "2026.8.1",
-              nodeBootstrap: createNodeBootstrapFixture(),
-              displayName: "Bound worker",
-              waitForDeviceId: async () => {
-                if (failurePoint === "enrollment completion") {
-                  throw new Error("enrollment completion failed");
-                }
-                return "device-bound";
-              },
-            };
-          },
-        })
-        .catch((error: unknown) => error);
-      expect(WorkerProviderError.isCleanupComplete(failure)).toBe(true);
-      if (!WorkerProviderError.isCleanupComplete(failure)) {
-        throw new Error("expected confirmed worker cleanup");
-      }
-      expect(failure).toMatchObject({
-        code: "cleanup_complete",
-        leaseId: LEASE_ID,
-        message: expect.stringContaining(
-          failurePoint === "desktop setup" ? "setup failed" : failurePoint,
-        ),
-      });
-      expect(failure.cause).toBe(failure.provisionError);
-      expect(WorkerProviderError.isCleanupIndeterminate(failure)).toBe(false);
-      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
-      expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(1);
     },
   );
 

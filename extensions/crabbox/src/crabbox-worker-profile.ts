@@ -261,8 +261,10 @@ export function resolveCrabboxWarmImageProfile(
   machineClass = profile.class,
   target = profile.target,
 ) {
-  if (target !== "linux" && profile.desktop) {
-    throw new WorkerProviderError("Crabbox desktop is Linux only");
+  if (target === "windows/wsl2" && profile.desktop) {
+    throw new WorkerProviderError(
+      "Crabbox desktop requires native Windows; select windows/normal instead of WSL2",
+    );
   }
   if (target !== "linux" && profile.warmImage === true) {
     throw new WorkerProviderError("Crabbox warm images are Linux only");
@@ -412,7 +414,10 @@ export function buildCrabboxAllocationArgs(
     "--keep=true",
   ];
   if (profile.desktop) {
-    args.push("--desktop", "--browser", "--desktop-env", "xfce");
+    args.push("--desktop", "--browser");
+    if (profile.target === "linux") {
+      args.push("--desktop-env", "xfce");
+    }
   }
   return args;
 }
