@@ -305,7 +305,7 @@ and ComfyUI support 1.
     With reference images, fal replaces `/text-to-image` with `/edit`.
     Explicit fal `/edit` paths remain unchanged.
 
-    Use the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5)
+    Use the [explicit OpenAI API-key route](/providers/openai#image-generation)
     for direct GPT Image 2.5 requests. Exporting `OPENAI_API_KEY` alone does not
     override an existing OAuth profile. These examples do not establish
     GPT Image 2.5 subscription access.

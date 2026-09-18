@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - **Discord media policy:** enforce sender media policy for guild asset uploads. (#140334)
 - **Discord realtime ownership:** preserve speaker and playback ownership across voice lifecycle transitions. (#137433)
 - **Dependency security:** override the IMAP dependency graph to Nodemailer 9.1.1, clearing the address-parser denial-of-service and related domain/content-access advisories. (#136700)
+- **iOS release validation:** update the WebRTC binary dependency to 152.0.0 after the 151.0.0 artifact was withdrawn. (#134942)
 
 ## 2026.8.2
 
