@@ -292,7 +292,7 @@ describe("Crabbox worker provider", () => {
       const allocation = await provider.resolveAllocation(PROFILE, OPERATION_ID);
       await provider.destroy({ leaseId: allocation.leaseId, profile: PROFILE });
       expect(allocation).toEqual({ leaseId: LEASE_ID, sharedHost: false });
-      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "stop"]);
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
       expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
       expect(beginNodeEnrollment).not.toHaveBeenCalled();
       expect(live).toBe(false);
@@ -2825,11 +2825,57 @@ describe("Crabbox worker provider", () => {
       message: `Crabbox warmup failed with exit code 2: ${stderr}`,
     });
     expect(beginNodeEnrollment).not.toHaveBeenCalled();
-    expect(runCommand).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledTimes(2);
     const argv = runCommand.mock.calls[0]?.[0];
     expect(argv).toEqual(expect.arrayContaining(["warmup", "--lease-id", LEASE_ID]));
     expect(argv).not.toContain("--class");
   });
+
+  it.each(["terminal", "unavailable", "different lease"] as const)(
+    "reports the recorded failure after warmup exits (%s)",
+    async (inspection) => {
+      const stderr = 'coordinator PUT: http 409: {"error":"fixed_lease_terminal"}';
+      const diagnosis =
+        "No available EC2 Mac Dedicated Host; allocate a host or set CRABBOX_HOST_ID";
+      const secret = `sk-${"privatecredential".repeat(80)}`;
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        if (argv[1] === "warmup") {
+          return commandResult({ code: 1, stderr });
+        }
+        return inspection === "unavailable"
+          ? commandResult({ code: 1, stderr: "inspection unavailable" })
+          : commandResult({
+              stdout: inspectJson({
+                id: inspection === "different lease" ? "cbx_012345abcdef" : LEASE_ID,
+                state: "failed",
+                failureError: `${diagnosis}\nAuthorization: Bearer ${secret}\n${"fallback failed; ".repeat(80)}`,
+              }),
+            });
+      });
+
+      const error: unknown = await provider
+        .provision(PROFILE, OPERATION_ID)
+        .catch((cause: unknown) => cause);
+      const originalMessage = `Crabbox warmup failed with exit code 1: ${stderr}`;
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WorkerProviderError);
+      const message = error instanceof Error ? error.message : "";
+      if (inspection === "terminal") {
+        expect(message).toContain(diagnosis);
+        expect(message).toContain(originalMessage);
+        expect(message).not.toContain("privatecredential");
+        expect(message.length).toBeLessThanOrEqual(
+          originalMessage.length + "; lease failure: ".length + 512,
+        );
+      } else {
+        expect(message).toBe(originalMessage);
+      }
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect"]);
+      expect(calls[1]).toEqual(expect.arrayContaining(["--id", LEASE_ID]));
+    },
+  );
 
   it.each([
     ["intent drift", 4, "lease_id_conflict: lease is bound to another create intent"],
@@ -2865,7 +2911,7 @@ describe("Crabbox worker provider", () => {
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(WorkerProviderError);
       expect(beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect"]);
       expect(calls[0]).toEqual(
         expect.arrayContaining(["--class", "large", "--lease-id", LEASE_ID]),
       );
@@ -2874,10 +2920,10 @@ describe("Crabbox worker provider", () => {
       });
       const allocation = await provider.resolveAllocation(profile, OPERATION_ID);
       expect(allocation).toEqual({ leaseId: LEASE_ID, sharedHost: false });
-      expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect"]);
       await provider.destroy({ leaseId: allocation.leaseId, profile });
-      expect(calls).toHaveLength(2);
-      expect(calls[1]?.slice(1)).toEqual(["stop", "--provider", "machine0", "--id", LEASE_ID]);
+      expect(calls).toHaveLength(3);
+      expect(calls[2]?.slice(1)).toEqual(["stop", "--provider", "machine0", "--id", LEASE_ID]);
     },
   );
 

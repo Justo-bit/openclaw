@@ -99,7 +99,9 @@ async function replay(
     realpathSync: (file: string) =>
       file === "/proc/123/cwd" ? runtimeDir + (failure === "cwd" ? "-other" : "") : file,
     statSync: (file: string) => {
-      if (file !== runtimeDir) throw new Error("Unexpected directory identity read");
+      if (file !== runtimeDir) {
+        throw new Error("Unexpected directory identity read");
+      }
       return { dev: -2147483647n, ino: 42n };
     },
   };

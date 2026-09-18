@@ -11,7 +11,7 @@ import {
 } from "./crabbox-worker-desktop-setup.js";
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
-import type { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE0_READY_WAIT_TIMEOUT,
@@ -111,6 +111,50 @@ export function remainingProvisionTimeout(deadline: number, maximum: number): nu
 
 export const isNonRunnableState = (state: string) => NON_RUNNABLE_STATES.has(state.toLowerCase());
 
+export async function runProvisionWarmup(
+  params: LeaseCommandContext & {
+    profile: ReturnType<typeof parseCrabboxProfile>;
+    slug: string;
+    runCommand: CrabboxCommandRunner;
+    timeoutMs: () => number;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const result = await runCrabboxCommand({
+    ...params,
+    action: "warmup",
+    args: ["warmup", ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug)],
+    timeoutMs: params.timeoutMs(),
+  });
+  if (result.termination === "exit" && result.code === 0) {
+    return;
+  }
+  const error = crabboxCommandError("warmup", result);
+  if (result.termination === "exit" && result.code !== null) {
+    try {
+      const observed = await inspectWithContext({
+        context: params,
+        id: params.id,
+        expectedLeaseId: params.id,
+        runCommand: params.runCommand,
+        signal: params.signal,
+        timeoutMs: Math.min(params.timeoutMs(), resolveCrabboxLifecycleTimeoutMs(params.provider)),
+      });
+      if (
+        observed.status === "found" &&
+        isNonRunnableState(observed.inspect.state) &&
+        observed.inspect.failureError
+      ) {
+        error.message += `; lease failure: ${observed.inspect.failureError}`;
+      }
+    } catch {
+      // Inspection only enriches the failure; it cannot change cleanup or replay authority.
+      params.signal?.throwIfAborted();
+    }
+  }
+  throw error;
+}
+
 export function leaseRunArgs(
   context: LeaseCommandContext,
   forwardedEnvNames: readonly string[] = [],
@@ -193,7 +237,7 @@ export async function waitForProvisionReady(
     }
     if (isNonRunnableState(inspect.state)) {
       throw new WorkerProviderError(
-        "Crabbox operation lease entered a terminal state while waiting for SSH",
+        `Crabbox operation lease entered a terminal state while waiting for SSH${inspect.failureError ? `: ${inspect.failureError}` : ""}`,
       );
     }
     return inspect;

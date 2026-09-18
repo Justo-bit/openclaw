@@ -1,6 +1,9 @@
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { nonEmptyString } from "./crabbox-worker-profile.js";
 
 type CrabboxInspect = {
+  failureError?: unknown;
   id?: unknown;
   providerMetadata?: unknown;
   ready?: unknown;
@@ -11,6 +14,7 @@ type CrabboxInspect = {
 
 export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
+  failureError?: string;
   id: string;
   ready?: boolean;
   sshUser?: string;
@@ -67,10 +71,19 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     awsInstanceProfileAttached = attached as boolean | undefined;
   }
 
+  const failureError = nonEmptyString(value.failureError);
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(failureError
+      ? {
+          failureError: truncateUtf16Safe(
+            redactSensitiveText(failureError).replace(/\s+/gu, " "),
+            512,
+          ),
+        }
+      : {}),
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),
     ...(sshUser && sshUser !== "<token>" ? { sshUser } : {}),
