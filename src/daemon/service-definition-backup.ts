@@ -142,41 +142,42 @@ function mutationHooks(
     params.assertCurrent();
     assertGatewayServiceUpdateCurrent();
   };
+  const beforeWrite = async (settlePrepared = true) => {
+    assertCurrent();
+    const command = await resolveGatewayService().readCommand(params.env, {
+      requireEffective: true,
+    });
+    if (!command) {
+      throw new Error("SERVICE_DEFINITION_UNKNOWN: Service definition disappeared.");
+    }
+    assertInventory({ ...params, command }, receipt);
+    for (const file of receipt.files) {
+      if (settlePrepared && file.prepared !== undefined) {
+        const current = await readServiceFileState(file.sourcePath);
+        if (matchesPreparedPublication(current, file.prepared)) {
+          file.after = current;
+          delete file.prepared;
+        } else if (isDeepStrictEqual(current, file.after)) {
+          delete file.prepared;
+        }
+      }
+    }
+    for (const { sourcePath, after } of [...receipt.files, ...receipt.guards]) {
+      if (!isDeepStrictEqual(after, await readServiceFileState(sourcePath))) {
+        throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
+      }
+    }
+    if (
+      receipt.task &&
+      taskPolicy(await readScheduledTaskDefinition(params.env)) !== receipt.task.afterPolicySha256
+    ) {
+      throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
+    }
+    assertCurrent();
+  };
   return {
     assertCurrent,
-    beforeWrite: async () => {
-      assertCurrent();
-      const command = await resolveGatewayService().readCommand(params.env, {
-        requireEffective: true,
-      });
-      if (!command) {
-        throw new Error("SERVICE_DEFINITION_UNKNOWN: Service definition disappeared.");
-      }
-      assertInventory({ ...params, command }, receipt);
-      for (const file of receipt.files) {
-        if (file.prepared !== undefined) {
-          const current = await readServiceFileState(file.sourcePath);
-          if (matchesPreparedPublication(current, file.prepared)) {
-            file.after = current;
-            delete file.prepared;
-          } else if (isDeepStrictEqual(current, file.after)) {
-            delete file.prepared;
-          }
-        }
-      }
-      for (const { sourcePath, after } of [...receipt.files, ...receipt.guards]) {
-        if (!isDeepStrictEqual(after, await readServiceFileState(sourcePath))) {
-          throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
-        }
-      }
-      if (
-        receipt.task &&
-        taskPolicy(await readScheduledTaskDefinition(params.env)) !== receipt.task.afterPolicySha256
-      ) {
-        throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
-      }
-      assertCurrent();
-    },
+    beforeWrite,
     filePrepared: async (sourcePath, temporaryPath) => {
       const file = receipt.files.find((entry) => entry.sourcePath === sourcePath);
       const prepared = temporaryPath === null ? null : await readServiceFileState(temporaryPath);
@@ -192,7 +193,8 @@ function mutationHooks(
       }
       file.prepared = prepared;
       await checkpointReceipt(params, receipt);
-      assertCurrent();
+      // Checkpoint I/O must not admit an operator edit or discard the staged identity.
+      await beforeWrite(false);
     },
     fileWritten: async (sourcePath, contents) => {
       const file = receipt.files.find((entry) => entry.sourcePath === sourcePath);

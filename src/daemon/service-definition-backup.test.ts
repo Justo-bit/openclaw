@@ -300,6 +300,41 @@ describe("service definition backup receipts", () => {
     expect(await fs.readFile(f.sourcePath)).toEqual(edited);
   });
 
+  it.each([
+    { platform: "win32", index: 0 },
+    { platform: "win32", index: 1 },
+    { platform: "darwin", index: 0 },
+    { platform: "darwin", index: 1 },
+    { platform: "darwin", index: 2 },
+  ] as const)(
+    "preserves an operator edit to $platform artifact $index during receipt checkpointing",
+    async ({ platform, index }) => {
+      const f = await fixture(platform, true);
+      const target = f.files[index]!;
+      const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"));
+      const edited = Buffer.from("operator edit during checkpoint\n");
+      const rename = fs.rename.bind(fs);
+      let injected = false;
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (!injected && args[1] === checkpoint) {
+          const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+            JSON.parse(await fs.readFile(checkpoint!, "utf8")),
+          );
+          if (receipt.files.some((file) => file.sourcePath === target && file.prepared)) {
+            injected = true;
+            await fs.writeFile(target, edited);
+          }
+        }
+      });
+      await expect(f.install()).rejects.toThrow("Service definition changed");
+      expect(injected).toBe(true);
+      expect(await fs.readFile(target)).toEqual(edited);
+      await expect(f.capture.compensate()).rejects.toThrow("Service definition changed");
+      expect(await fs.readFile(target)).toEqual(edited);
+    },
+  );
+
   it.each(["EPERM", "EBUSY", "EEXIST"])(
     "preserves a Windows launcher when rename-over is denied with %s",
     async (code) => {
