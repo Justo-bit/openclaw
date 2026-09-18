@@ -696,7 +696,7 @@ describe("service definition backup receipts", () => {
       }
       if (fault === "damaged backup") {
         await fs.writeFile(
-          f.capture.backupPaths.filter((file) => !file.endsWith(".receipt.bak")).at(-1)!,
+          f.capture.backupPaths.findLast((file) => !file.endsWith(".receipt.bak"))!,
           "damaged",
         );
       }

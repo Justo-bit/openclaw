@@ -19,9 +19,11 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
   const materialized = new Map<string, string>();
   const handles = new WeakMap<promises.FileHandle, string>();
   const key = (file: PathLike) =>
-    path.posix.normalize(file instanceof URL ? fileURLToPath(file) : file.toString());
+    path.posix.normalize(
+      (file instanceof URL ? fileURLToPath(file) : file.toString()).replaceAll("\\", "/"),
+    );
   const physical = (file: string) => {
-    const target = path.resolve(root, file.replace(/^\/+/, ""));
+    const target = path.resolve(root, key(file).replace(/^\/+/, ""));
     if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
       throw new Error("Logical launchd path escapes its fixture root.");
     }
