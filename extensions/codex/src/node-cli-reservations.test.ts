@@ -179,7 +179,7 @@ describe("registered Codex node resume reservations", () => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps a bound thread on its pinned home across aliases and node source reconfiguration", async () => {
+  it("keeps a bound thread on its pinned home across alias retargeting and node source reconfiguration", async () => {
     const fixture = await createRegisteredResume();
     const pin = codexCatalogHomeId(fixture.alphaHome);
     const { request, entry } = prepareBoundCatalogSession(fixture, pin);
@@ -187,6 +187,21 @@ describe("registered Codex node resume reservations", () => {
     try {
       fixture.reconfigureAlpha(fixture.aliasAgentDir);
       expect(codexCatalogHomeId(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(pin);
+      await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
+        text: fixture.alphaHome,
+      });
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
+      processRuntimeMocks.runCommandBuffered.mockClear();
+
+      await fs.unlink(fixture.aliasAgentDir);
+      await fs.symlink(
+        path.dirname(fixture.betaHome),
+        fixture.aliasAgentDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      expect(await fs.realpath(path.join(fixture.aliasAgentDir, "codex-home"))).toBe(
+        fixture.betaHome,
+      );
       await expect(resumeCodexCliSessionOnNode(request)).resolves.toMatchObject({
         text: fixture.alphaHome,
       });

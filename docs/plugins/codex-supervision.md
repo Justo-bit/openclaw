@@ -542,6 +542,8 @@ and thread. Changing a node's catalog source cannot redirect an existing Chat,
 even when the replacement home contains a copied thread with the same ID.
 Restore the original source to continue that Chat, or select the replacement
 source in the catalog to adopt it into a separate Chat.
+OpenClaw captures each source's physical path for the current configuration;
+retargeting a directory alias takes effect after configuration reload.
 
 Chats adopted by older versions did not record their source home. Their history
 remains available, but native continuation requires a fresh adoption from the
