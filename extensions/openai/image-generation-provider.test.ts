@@ -324,13 +324,13 @@ function expectNoJsonRequestUrlContaining(expectedFragment: string) {
 }
 
 describe("openai image generation provider", () => {
-  const provider = buildOpenAIImageGenerationProvider();
-  type OpenAIImageRequest = Parameters<typeof provider.generateImage>[0];
+  const sharedProvider = buildOpenAIImageGenerationProvider();
+  type OpenAIImageRequest = Parameters<typeof sharedProvider.generateImage>[0];
   const generateOpenAIImage = (
     prompt: string,
     request: Omit<Partial<OpenAIImageRequest>, "prompt" | "provider"> = {},
   ) =>
-    provider.generateImage({
+    sharedProvider.generateImage({
       provider: "openai",
       model: "gpt-image-2",
       prompt,
