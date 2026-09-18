@@ -30,6 +30,7 @@ export type PreManagedServiceStop = {
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
+  servicePort?: number;
   /** Original account observed from the pinned native user-manager connection. */
   serviceManagerUid?: number;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
