@@ -726,7 +726,7 @@ export async function maybeRepairGatewayServiceConfig(
     : await prompter.confirmRuntimeRepair({
         message: repairMessage,
         initialValue: needsAggressive ? prompter.shouldForce : true,
-        requiresInteractiveConfirmation: !installationDrift,
+        requiresInteractiveConfirmation: needsAggressive || !installationDrift,
       });
   if (!repair) {
     if (!emittedSourceCheckoutWarning) {

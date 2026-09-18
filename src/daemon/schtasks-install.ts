@@ -179,6 +179,7 @@ export async function stageScheduledTask({
 async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn: (message: string) => void;
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
@@ -264,7 +265,12 @@ async function activateScheduledTask(params: {
       );
       return "startup-fallback";
     }
-    throw new Error(`schtasks create failed: ${detail}`.trim());
+    if (!updated) {
+      throw new Error(`schtasks create failed: ${detail}`.trim());
+    }
+    params.warn(
+      `Scheduled Task ${taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail.trim() || "unknown error"}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
+    );
   }
 
   params.retainRecovery();
@@ -334,12 +340,14 @@ export async function installScheduledTask(
     resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
   );
   const staged = await writeScheduledTaskScript(args);
+  const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let recoveryRetained = false;
   let activation: ScheduledTaskActivation | "startup-fallback";
   try {
     activation = await activateScheduledTask({
       env: activationEnv,
       stdout: args.stdout,
+      warn,
       scriptPath: staged.scriptPath,
       taskLaunchPath: staged.taskLaunchPath,
       description: staged.taskDescription,
@@ -350,13 +358,9 @@ export async function installScheduledTask(
     });
   } catch (error) {
     if (recoveryRetained) {
-      const warning =
-        "Scheduled Task activation did not confirm completion; a queued task may still start. Inspect Task Scheduler before restoring any .bak launcher or task XML files beside the task script.";
-      if (args.warn) {
-        args.warn(warning);
-      } else {
-        args.stdout.write(`${warning}\n`);
-      }
+      warn(
+        "Scheduled Task activation did not confirm completion; a queued task may still start. Inspect Task Scheduler before restoring any .bak launcher or task XML files beside the task script.",
+      );
     } else {
       try {
         await staged.restore();
