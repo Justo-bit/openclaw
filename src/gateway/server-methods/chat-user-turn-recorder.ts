@@ -28,10 +28,12 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
+export type GatewayChatUserTurnPersist = (options?: { contextFreeCommand?: true }) => Promise<void>;
+
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
-  persist: ReturnType<typeof createUserTurnTranscriptRecorder>["persistFallback"];
-  persistBestEffort: () => Promise<void>;
+  persist: GatewayChatUserTurnPersist;
+  persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
@@ -101,6 +103,7 @@ export function createGatewayChatUserTurnController(params: {
           : {}),
       }))
     : Promise.resolve(baseInput);
+  let contextFreeCommand = false;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
@@ -170,6 +173,16 @@ export function createGatewayChatUserTurnController(params: {
       // Fence only fresh original input, never accepted custody or terminal notices.
       if (originalInput && next?.role === "user") {
         recorder.assertOriginalInputCommit?.();
+        if (contextFreeCommand) {
+          return {
+            ...next,
+            excludeFromContext: true,
+            __openclaw: {
+              ...asOptionalRecord(Reflect.get(next, "__openclaw")),
+              contextFreeCommand: true,
+            },
+          };
+        }
       }
       return next;
     },
@@ -218,7 +231,10 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
-  const persist = async () =>
+  const persist: GatewayChatUserTurnPersist = async (options) => {
+    if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
+      contextFreeCommand = true;
+    }
     await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
@@ -228,11 +244,12 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+  };
   return {
     baseInput,
     persist,
-    persistBestEffort: async () => {
-      await persist().catch(() => undefined);
+    persistBestEffort: async (options) => {
+      await persist(options).catch(() => undefined);
     },
     recorder,
     replyContextFieldsPromise,
