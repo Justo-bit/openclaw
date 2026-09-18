@@ -341,7 +341,9 @@ describe("createAcpxRuntimeService", () => {
     });
     await probeStarted.promise;
     // Let a premature startup return settle while the probe remains blocked.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     expect(events).toEqual(["publish", "probe"]);

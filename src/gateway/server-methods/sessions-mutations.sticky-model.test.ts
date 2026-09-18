@@ -103,6 +103,13 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
+const nativeModel: ModelCatalogEntry = {
+  provider: "anthropic",
+  id: "claude-sonnet-4-6",
+  name: "Native model",
+  reasoning: false,
+  nativeRuntime: "claude-cli",
+};
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
 type TestContext = Pick<
   GatewayRequestContext,
@@ -773,15 +780,12 @@ describe("explicit session model runtimes", () => {
       ...context(),
       getSessionEventSubscriberConnIds: () => new Set(["reader"]),
     };
-    expect(
-      (
-        await patchSession(
-          { key: sessionKey, agentRuntime: null },
-          ["operator.admin"],
-          requestContext,
-        )
-      )[0],
-    ).toBe(true);
+    const response = await patchSession(
+      { key: sessionKey, agentRuntime: null },
+      ["operator.admin"],
+      requestContext,
+    );
+    expect(response[0]).toBe(true);
     await flushPendingSessionsChangedEvents(requestContext);
     expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       sessionKey,
@@ -989,15 +993,7 @@ it.each([false, true])(
     const sessionKey = `agent:main:model-only-${stale}`;
     const requestContext = context();
     requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(
-      catalogSnapshot([
-        {
-          provider: "anthropic",
-          id: "claude-sonnet-4-6",
-          name: "Native model",
-          reasoning: false,
-          nativeRuntime: "claude-cli",
-        },
-      ]),
+      catalogSnapshot([nativeModel]),
     );
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
@@ -1040,17 +1036,7 @@ it("retargets queued work and its stored runtime when only a native model is sel
     },
   );
   const requestContext = context();
-  requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(
-    catalogSnapshot([
-      {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        name: "Native model",
-        reasoning: false,
-        nativeRuntime: "claude-cli",
-      },
-    ]),
-  );
+  requestContext.loadGatewayModelCatalogSnapshot.mockResolvedValue(catalogSnapshot([nativeModel]));
   runtimeChoice.prepare.mockResolvedValue({
     kind: "ready",
     runtimeId: "claude-cli",
