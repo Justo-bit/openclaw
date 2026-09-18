@@ -27,6 +27,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 

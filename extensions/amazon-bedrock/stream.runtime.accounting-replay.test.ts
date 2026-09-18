@@ -60,6 +60,28 @@ function streamBedrockForTest(
   return streamSimpleBedrock(model, context, options as never);
 }
 
+async function capturePayload(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Parameters<typeof streamSimpleBedrock>[1],
+  options: BedrockOptions = {},
+) {
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents([
+      { messageStart: { role: ConversationRole.ASSISTANT } },
+      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+    ]),
+  } as never);
+  await streamBedrockForTest(model, context, options).result();
+  const command = send.mock.calls.at(-1)?.[0] as {
+    input?: { messages?: Array<{ content?: unknown; role?: unknown }> };
+  };
+  if (!command.input) {
+    throw new Error("expected ConverseStreamCommand input");
+  }
+  return command.input;
+}
+
 async function captureMessages(
   model: Parameters<typeof streamSimpleBedrock>[0],
   context: Parameters<typeof streamSimpleBedrock>[1],

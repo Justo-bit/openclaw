@@ -16,7 +16,10 @@ import type {
 } from "./send.types.js";
 import { DISCORD_MAX_EMOJI_BYTES, DISCORD_MAX_STICKER_BYTES } from "./send.types.js";
 
-export async function listGuildEmojisDiscord(guildId: string, opts: DiscordReactOpts) {
+export async function listGuildEmojisDiscord(
+  guildId: string,
+  opts: DiscordReactOpts,
+): Promise<RESTGetAPIGuildEmojisResult> {
   const rest = resolveDiscordRest(opts);
   return await listGuildEmojis(rest, guildId);
 }

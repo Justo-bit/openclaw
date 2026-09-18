@@ -13,7 +13,10 @@ export type MockCallSource = {
 
 export type TestRealtimeBridgeParams = {
   agentId?: string;
-  audioSink: { sendAudio: (audio: Buffer) => void };
+  audioSink: {
+    sendAudio: (audio: Buffer) => void;
+    clearAudio?: (reason?: string) => void;
+  };
   autoRespondToAudio?: boolean;
   cfg?: unknown;
   instructions?: string;

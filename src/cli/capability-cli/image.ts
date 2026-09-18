@@ -48,9 +48,6 @@ import {
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
-const IMAGE_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
-const IMAGE_MODERATIONS = ["low", "auto"] as const;
-const parseImageOption = createEnumOptionParser();
 
 async function runImageGenerate(params: {
   capability: "image.generate" | "image.edit";
@@ -271,11 +268,13 @@ function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality 
     normalized === "low" ||
     normalized === "medium" ||
     normalized === "high" ||
+    normalized === "xhigh" ||
+    normalized === "max" ||
     normalized === "auto"
   ) {
     return normalized;
   }
-  throw new Error("--quality must be one of low, medium, high, or auto");
+  throw new Error("--quality must be one of low, medium, high, xhigh, max, or auto");
 }
 
 function normalizeOpenAIModeration(
