@@ -50,6 +50,8 @@ AWS macOS requires an available EC2 Mac Dedicated Host and On-Demand allocation.
 
 Use a managed Windows desktop image with Crabbox's **CrabboxDesktopLauncher** service and an active desktop for the configured worker account. Desktop enrollment runs inside that interactive session; the ordinary detached SSH launcher remains the path for headless Windows workers. A Session 0 process or a process belonging to another account cannot satisfy desktop enrollment replay. See [Windows runtime prerequisites](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 
+Workspaces containing symbolic links require Windows Developer Mode in the image or the **Create symbolic links** privilege for the interactive account.
+
 ## Desktop size
 
 Open **Systems** in the Control UI sidebar to select a worker and use its desktop
