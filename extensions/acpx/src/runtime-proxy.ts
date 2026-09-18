@@ -2,7 +2,7 @@
  * Lazy ACP runtime proxy for ACPX. It defers resolving the real runtime until
  * the first ACP call while preserving the SDK runtime shape.
  */
-import type { AcpInspectableAgentRegistry, AcpxRuntime as UpstreamRuntime } from "acpx/runtime";
+import type { AcpxRuntime as UpstreamRuntime } from "acpx/runtime";
 import type { AcpRuntime, AcpRuntimeTurn, AcpRuntimeTurnInput } from "../runtime-api.js";
 
 export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
@@ -23,7 +23,6 @@ export type CompleteAcpRuntime = Omit<
     startTurn(input: AcpRuntimeTurnInput): CompleteAcpRuntimeTurn;
     getStatus: UpstreamRuntime["getStatus"];
     setModel: UpstreamRuntime["setModel"];
-    inspectAgent(agent: string): Promise<ReturnType<AcpInspectableAgentRegistry["inspect"]>>;
     prepareFreshSession(
       input:
         | Parameters<NonNullable<AcpRuntime["prepareFreshSession"]>>[0]
@@ -69,9 +68,6 @@ export function createLazyAcpRuntimeProxy(
 ): CompleteAcpRuntime {
   return {
     ownerAwareSessions: 1,
-    async inspectAgent(agent) {
-      return await (await resolveRuntime()).inspectAgent(agent);
-    },
     async findSession(input) {
       return await (await resolveRuntime()).findSession(input);
     },

@@ -20,7 +20,6 @@ function createCompleteRuntime(promptStarted: Promise<void> = Promise.resolve())
   }));
   const prepareFreshSession = vi.fn(async () => {});
   const runtime: CompleteAcpRuntime = {
-    inspectAgent: vi.fn(async () => undefined),
     findSession: vi.fn(async () => undefined),
     setModel: vi.fn(async () => {}),
     shutdown: vi.fn(async () => {}),

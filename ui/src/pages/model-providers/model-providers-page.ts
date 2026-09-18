@@ -279,8 +279,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       void this.context.agents.ensureList();
     }
-    // Detected agents are global; they load without route data or agent selection.
-    this.installedAgents.ensureLoaded();
     // The route owns initial loading, even when its page module is already cached.
     const client = this.gateway.client;
     if (

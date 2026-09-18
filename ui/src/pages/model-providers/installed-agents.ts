@@ -1,4 +1,6 @@
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type ReactiveControllerHost } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "../../components/provider-icon.ts";
@@ -45,11 +47,7 @@ type InstalledAgentsOptions = {
 
 export class InstalledAgentsController {
   private agents: InstalledAgent[] | null = null;
-  private loading = false;
-  private error: string | null = null;
-  /** Gateway epoch whose read settled; a reconnect needs a fresh read. */
-  private settledEpoch: number | null = null;
-  private generation = 0;
+  private readonly list: Task<readonly [GatewayBrowserClient | null, number], InstalledAgent[]>;
   /** Requested enabled state per agent while its config write is unsettled. */
   private readonly pending = new Map<string, boolean>();
   private readonly messages = new Map<string, ModelProviderRowMessage>();
@@ -57,22 +55,51 @@ export class InstalledAgentsController {
   constructor(
     private readonly host: ReactiveControllerHost,
     private readonly options: InstalledAgentsOptions,
-  ) {}
+  ) {
+    this.list = new Task(host, {
+      args: () =>
+        [
+          options.gateway.connected && this.available() ? options.gateway.client : null,
+          options.gateway.epoch,
+        ] as const,
+      task: async ([client], { signal }) => {
+        if (!client) {
+          return initialState;
+        }
+        const result = await client.request<{ agents: InstalledAgent[] }>(
+          INSTALLED_AGENTS_METHOD,
+          {},
+          { signal },
+        );
+        return result.agents;
+      },
+      onComplete: (agents) => {
+        this.agents = agents;
+      },
+    });
+  }
+
+  private get loading() {
+    return this.list.status === TaskStatus.PENDING;
+  }
+
+  private get error() {
+    return this.list.status === TaskStatus.ERROR
+      ? modelProviderErrorMessage(this.list.error)
+      : null;
+  }
 
   subscribe(gateway: ApplicationContext["gateway"]): () => void {
     return gateway.subscribeEvents((event) => {
-      if (event.event === "config.changed") {
-        this.handleConfigChanged();
+      if (event.event === "config.changed" && this.agents !== null && this.pending.size === 0) {
+        void this.list.run();
       }
     });
   }
 
   /** Writes from a previous connection cannot settle here, so their state goes too. */
   reset(options: { preserveVisibleData?: boolean } = {}): void {
-    this.generation += 1;
-    this.loading = false;
-    this.error = null;
-    this.settledEpoch = null;
+    void this.list.run([null, this.options.gateway.epoch]);
     this.pending.clear();
     this.messages.clear();
     if (!options.preserveVisibleData) {
@@ -80,22 +107,8 @@ export class InstalledAgentsController {
     }
   }
 
-  ensureLoaded(): void {
-    const gateway = this.options.gateway;
-    if (gateway.connected && !this.loading && this.settledEpoch !== gateway.epoch) {
-      void this.load();
-    }
-  }
-
   filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
     return cards.filter((card) => !this.agents?.some((agent) => agent.runtimeId === card.id));
-  }
-
-  /** Another client's config write can change enabled flags. */
-  private handleConfigChanged(): void {
-    if (this.agents !== null && this.pending.size === 0) {
-      void this.load();
-    }
   }
 
   private available(): boolean {
@@ -104,37 +117,6 @@ export class InstalledAgentsController {
       INSTALLED_AGENTS_METHOD,
       "operator.read",
     );
-  }
-
-  private async load(): Promise<void> {
-    const scope = this.options.gateway.capture();
-    if (!scope || !this.available()) {
-      return;
-    }
-    const generation = ++this.generation;
-    const owns = () => this.generation === generation && this.options.gateway.isCurrent(scope);
-    this.loading = true;
-    this.error = null;
-    this.host.requestUpdate();
-    try {
-      const result = await scope.client.request<{ agents: InstalledAgent[] }>(
-        INSTALLED_AGENTS_METHOD,
-        {},
-      );
-      if (owns()) {
-        this.agents = result.agents;
-      }
-    } catch (error) {
-      if (owns()) {
-        this.error = modelProviderErrorMessage(error);
-      }
-    } finally {
-      if (owns()) {
-        this.loading = false;
-        this.settledEpoch = scope.epoch;
-        this.host.requestUpdate();
-      }
-    }
   }
 
   private blockedReason(): string | null {
@@ -151,8 +133,7 @@ export class InstalledAgentsController {
     ) {
       return false;
     }
-    // The requested state shows until the post-write read, whose newer generation
-    // discards any list read that started before this write.
+    // Task discards an older list result when the post-write read starts.
     this.pending.set(agent.id, enabled);
     const isCurrent = () => this.options.gateway.isCurrent(scope);
     void runModelProviderConfigMutation(
@@ -189,7 +170,7 @@ export class InstalledAgentsController {
           this.agents?.map((entry) => (entry.id === agent.id ? { ...entry, enabled } : entry)) ??
           null;
       }
-      await this.load();
+      await this.list.run();
       if (isCurrent()) {
         this.pending.delete(agent.id);
         this.host.requestUpdate();
@@ -255,7 +236,11 @@ export class InstalledAgentsController {
             <span class="settings-row__desc provider-usage-error" role="alert">${this.error}</span>
           </div>
           <div class="settings-row__control">
-            <button class="btn btn--sm" ?disabled=${this.loading} @click=${() => void this.load()}>
+            <button
+              class="btn btn--sm"
+              ?disabled=${this.loading}
+              @click=${() => void this.list.run()}
+            >
               ${t("common.retry")}
             </button>
           </div>
@@ -289,7 +274,7 @@ export class InstalledAgentsController {
                   class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
                   aria-label=${checkLabel}
                   ?disabled=${this.loading || this.pending.size > 0}
-                  @click=${() => void this.load()}
+                  @click=${() => void this.list.run()}
                 >
                   ${icons.refresh}
                 </button>

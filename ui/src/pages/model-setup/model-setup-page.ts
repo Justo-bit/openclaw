@@ -24,6 +24,7 @@ import {
 } from "./first-run-setup.ts";
 import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
+import { NativeModelSetup } from "./native-model-setup.ts";
 import {
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
@@ -66,7 +67,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private iconUrls: Record<string, string> = {};
   @state() private setupRefreshWarning: string | null = null;
   @state() private cancellationNotice: string | null = null;
-  @state() private nativeModelState = { count: 0, saving: false };
 
   private get agentSelection() {
     return modelSetupAgentSelection(this.context, this.routeData?.firstRun === true);
@@ -89,6 +89,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     setVerifyState: (next) => (this.verifyState = next),
     setActivationState: (next) => (this.activationState = next),
     setRefreshWarning: (warning) => (this.setupRefreshWarning = warning),
+  });
+  private readonly nativeModels = new NativeModelSetup(this, {
+    getContext: () => this.context,
+    getConnection: () => this.observedConnection,
+    canUseSetup: (client) => this.canUseSetup(client),
+    blocked: () => this.actionsDisabled() || this.firstRun.unresolved,
   });
   private readonly iconLoader = new ModelSetupIconLoader(
     () => this.context,
@@ -190,6 +196,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.firstRun.dispose();
     this.resetActivity();
     this.observedConnection = null;
+    this.nativeModels.reset();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -238,6 +245,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       return;
     }
     this.observedConnection = connection;
+    this.nativeModels.reset();
     const authenticatedOwnerLost =
       previous &&
       (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
@@ -314,6 +322,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       return null;
     }
     this.resetVerify();
+    this.nativeModels.reset();
     this.pageState = { phase: "loading" };
     const token = {};
     await this.detectTask.run([client, this.agentSelection.state.selectedId, token]);
@@ -603,7 +612,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private actionsDisabled(): boolean {
     return (
       this.login.busy ||
-      this.nativeModelState.saving ||
+      this.nativeModels.saving ||
       this.activationState.phase === "testing" ||
       this.verifyState.phase === "checking" ||
       this.wizardMutationActive ||
@@ -653,8 +662,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
       nativeSessionCatalogsEnabled: this.nativeSessionCatalogsEnabled,
-      nativeModelState: this.nativeModelState,
-      onNativeModelStateChange: (next) => (this.nativeModelState = next),
+      nativeModels: this.nativeModels,
       onNativeSessionCatalogsChange: (enabled) => (this.nativeSessionCatalogsEnabled = enabled),
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,

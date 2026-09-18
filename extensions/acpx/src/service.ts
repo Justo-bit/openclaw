@@ -119,7 +119,6 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
           legacyBareSessionKeys.add(recordId.toLowerCase());
         }
       }
-      const agentRegistry = module.createAgentRegistry({ overrides: params.pluginConfig.agents });
       runtime = new module.AcpxRuntime({
         cwd: params.pluginConfig.cwd,
         openclawLegacyBareSessionKeys: legacyBareSessionKeys,
@@ -129,8 +128,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         sessionStore: module.createFileSessionStore({
           stateDir: params.pluginConfig.stateDir,
         }),
-        agentRegistry,
-        openclawInspectAgent: (agent) => agentRegistry.inspect(agent),
+        agentRegistry: module.createAgentRegistry({ overrides: params.pluginConfig.agents }),
         probeAgent: params.pluginConfig.probeAgent,
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
         pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,

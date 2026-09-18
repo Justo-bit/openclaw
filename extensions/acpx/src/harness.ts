@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../runtime-api.js";
+import { createAcpxAgentRegistry } from "./native-agents.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 
 const LOCAL_TOOL_REQUIREMENTS = ["ls", "read", "write", "edit", "exec"] as const;
@@ -57,6 +58,9 @@ export function createAcpAgentHarness(params: {
 }): AgentHarnessV2 {
   const id = `acp-${params.agent}`;
   const generation = new AbortController();
+  let agentRegistry: ReturnType<typeof createAcpxAgentRegistry> | undefined;
+  const inspectAgent = () =>
+    (agentRegistry ??= createAcpxAgentRegistry(params.api.pluginConfig)).inspect(params.agent);
   const runtimeFor = (workspaceDir?: string) =>
     params.getRuntime({
       config: params.api.config,
@@ -121,11 +125,13 @@ export function createAcpAgentHarness(params: {
       if (!params.isEnabled()) {
         return [];
       }
+      const inspection = inspectAgent();
+      if (inspection?.launch.kind !== "installed") {
+        return [];
+      }
       const runtime = await runtimeFor(input.workspaceDir);
       generation.signal.throwIfAborted();
-      const inspection = await runtime.inspectAgent(params.agent);
-      generation.signal.throwIfAborted();
-      if (!params.isEnabled() || inspection?.launch.kind !== "installed") {
+      if (!params.isEnabled()) {
         return [];
       }
       const target = {
@@ -163,13 +169,12 @@ export function createAcpAgentHarness(params: {
           `${params.label} cannot enforce this permission mode. Choose Full access or another runtime.`,
         );
       }
-      const runtime = await runtimeFor(input.workspaceDir);
-      generation.signal.throwIfAborted();
-      const inspection = await runtime.inspectAgent(params.agent);
-      generation.signal.throwIfAborted();
+      const inspection = inspectAgent();
       if (inspection?.launch.kind !== "installed") {
         throw new Error(`${params.label} is not installed; refresh the model catalog`);
       }
+      const runtime = await runtimeFor(input.workspaceDir);
+      generation.signal.throwIfAborted();
       const { runAcpHarnessAttempt } = await import("./harness-attempt.js");
       return await runAcpHarnessAttempt({
         input,

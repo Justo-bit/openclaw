@@ -17,7 +17,6 @@ import {
   encodeAcpxRuntimeHandleState,
   isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
-  type AcpInspectableAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
   type AcpRuntimeOptions,
@@ -87,7 +86,6 @@ import {
 
 type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
 type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
-  openclawInspectAgent?: AcpInspectableAgentRegistry["inspect"];
   openclawLegacyBareSessionKeys?: ReadonlySet<string>;
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
@@ -426,7 +424,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly legacyBareSessionKeys: Set<string>;
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
-  private readonly inspectConfiguredAgent?: AcpInspectableAgentRegistry["inspect"];
   private readonly scopedAgentRegistry: AcpAgentRegistry;
   private readonly launchCommandScope = new AsyncLocalStorage<{
     agent: string;
@@ -468,7 +465,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       wrapperRoot: this.wrapperRoot,
     });
     this.agentRegistry = options.agentRegistry;
-    this.inspectConfiguredAgent = options.openclawInspectAgent;
     this.scopedAgentRegistry = {
       resolve: (agentName) => {
         const launch = this.launchCommandScope.getStore();
@@ -1189,13 +1185,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           toAcpxResourceInput(input),
         ),
     );
-  }
-
-  async inspectAgent(agent: string): Promise<ReturnType<AcpInspectableAgentRegistry["inspect"]>> {
-    if (!this.inspectConfiguredAgent) {
-      throw new Error("Native ACP harnesses require installed command inspection");
-    }
-    return this.inspectConfiguredAgent(agent);
   }
 
   async setModel(input: Parameters<BaseAcpxRuntime["setModel"]>[0]): Promise<void> {

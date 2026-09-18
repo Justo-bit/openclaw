@@ -34,15 +34,18 @@ describe("ModelSetupPage first-run inference", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([true, false])(
+  it.each(["current", "removed", "route", "reconnect"])(
     "finishes native Use only while its page is current (%s)",
-    async (current) => {
+    async (owner) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const { context, client, request } = createFirstRunContext(undefined, async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext(
+        undefined,
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
       const agents = createAgentCapability(context.gateway);
       Object.assign(context, { agents });
       const refresh = vi.spyOn(agents, "refreshList");
@@ -59,6 +62,9 @@ describe("ModelSetupPage first-run inference", () => {
               },
             ],
           };
+        }
+        if (method === "openclaw.setup.detect") {
+          return detection;
         }
         if (method === "agents.update") {
           return { ok: true, agentId: "main" };
@@ -99,12 +105,19 @@ describe("ModelSetupPage first-run inference", () => {
               method === "openclaw.setup.verify" || method === "openclaw.setup.activate.start",
           ),
         ).toBe(false);
-        if (!current) {
+        if (owner === "removed") {
           page.remove();
+        } else if (owner === "route") {
+          page.routeData = { firstRun: false };
+          await page.updateComplete;
+        } else if (owner === "reconnect") {
+          publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+          publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
+          await page.updateComplete;
         }
         release.resolve();
         await vi.mocked(context.runtimeConfig.runExternalMutation).mock.results[0]!.value;
-        if (current) {
+        if (owner === "current") {
           await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat"));
           expect(refresh).toHaveBeenCalledOnce();
           expect(agents.state.agentsList?.agents[0]?.model).toBe("acp-opencode/fixture-model");

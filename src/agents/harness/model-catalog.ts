@@ -209,6 +209,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (!pluginRegistry || params.isCurrent?.() === false) {
     return params.snapshot;
   }
+  const isCurrent = () =>
+    params.isCurrent?.() !== false &&
+    (Boolean(params.pluginRegistry) || getActivePluginRegistry() === pluginRegistry);
   if (params.includePickerRuntimes) {
     for (const { harness } of pluginRegistry.agentHarnesses) {
       if (harness.loadModelCatalog && !runtimeProviders.has(harness.id)) {
@@ -273,19 +276,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         configuredModelRefs,
       });
     } catch (error) {
-      if (
-        params.isCurrent?.() === false ||
-        (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-      ) {
+      if (!isCurrent()) {
         return params.snapshot;
       }
       params.onError?.(error, scopedProviders);
       continue;
     }
-    if (
-      params.isCurrent?.() === false ||
-      (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-    ) {
+    if (!isCurrent()) {
       return params.snapshot;
     }
     const includesProvider = params.includesProvider;
@@ -321,10 +318,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       routeVariantKey(entry, variantKeyOf(entry)),
     );
   }
-  if (
-    params.isCurrent?.() === false ||
-    (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
-  ) {
+  if (!isCurrent()) {
     return params.snapshot;
   }
   if (discovered) {

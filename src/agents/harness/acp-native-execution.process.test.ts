@@ -20,6 +20,7 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
+import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 useNativeProcessFixture();
@@ -110,6 +111,35 @@ it.each(policyCases)(
           expect(assistant?.message).toEqual(outcome.value?.currentAttemptAssistant);
           expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
           expect.soft(effects).toHaveLength(1);
+          const harness = getRegisteredAgentHarness(`acp-${agent}`)?.harness;
+          if (!harness?.loadModelCatalog) {
+            throw new Error("Native catalog operation missing");
+          }
+          expect(
+            await harness.loadModelCatalog({
+              config,
+              agentId: "main",
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+            }),
+          ).toEqual([
+            {
+              provider: `acp-${agent}`,
+              id: "initial",
+              name: "Initial",
+              nativeRuntime: `acp-${agent}`,
+            },
+            {
+              provider: `acp-${agent}`,
+              id: "selected",
+              name: "Selected",
+              nativeRuntime: `acp-${agent}`,
+            },
+          ]);
+          expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
+            transcript,
+          );
+          expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual(effects);
         }
       } finally {
         attempt.close();

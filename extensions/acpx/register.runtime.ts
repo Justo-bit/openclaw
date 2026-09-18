@@ -28,7 +28,6 @@ type DeferredServiceState = {
   lifecycleRevision: number;
   ownedRuntime: CompleteAcpRuntime | null;
   params: CreateAcpxRuntimeServiceParams;
-  realRuntime: CompleteAcpRuntime | null;
   realService: ReturnType<RealAcpxServiceModule["createAcpxRuntimeService"]> | null;
   startPromise: Promise<CompleteAcpRuntime> | null;
   stopPromise: Promise<void> | null;
@@ -51,9 +50,6 @@ async function startRealService(
 ): Promise<CompleteAcpRuntime> {
   if (state.lifecycleRevision !== lifecycleRevision || !state.ctx) {
     throw new Error("ACPX runtime service is not started");
-  }
-  if (state.realRuntime) {
-    return state.realRuntime;
   }
   if (state.startPromise) {
     return await state.startPromise;
@@ -112,7 +108,6 @@ async function startRealService(
     }
     // Registry publication intentionally precedes the startup probe, but callers
     // must keep sharing the start promise until the inner service is fully ready.
-    state.realRuntime = publishedRuntime;
     return publishedRuntime;
   })();
   try {
@@ -148,7 +143,6 @@ export function createAcpxRuntimeService(
     lifecycleRevision: 0,
     ownedRuntime: null,
     params,
-    realRuntime: null,
     realService: null,
     startPromise: null,
     stopPromise: null,
@@ -238,7 +232,6 @@ export function createAcpxRuntimeService(
         } finally {
           unregisterOwnedRuntime(ownedRuntime);
           state.ownedRuntime = null;
-          state.realRuntime = null;
           state.realService = null;
           state.startPromise = null;
         }

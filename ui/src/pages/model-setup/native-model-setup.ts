@@ -1,10 +1,7 @@
-import { consume } from "@lit/context";
-import { html, nothing, type TemplateResult } from "lit";
-import { property, state } from "lit/decorators.js";
+import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
@@ -14,132 +11,85 @@ import {
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { captureModelSetupConnection, modelSetupAgentSelection } from "./first-run-setup.ts";
+import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 
-class NativeModelSetup extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true }) private context!: ApplicationContext;
-  @property({ type: Boolean }) firstRun = false;
-  @property({ type: Boolean }) blocked = false;
-  @state() private nativeModels: ModelCatalogEntry[] = [];
-  @state() private nativeModel = "";
-  @state() private nativeModelError: string | null = null;
-  @state() private nativeModelSaving = false;
+type NativeModelSetupOptions = {
+  getContext: () => ApplicationContext;
+  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
+  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
+  blocked: () => boolean;
+};
+
+export class NativeModelSetup {
+  private nativeModels: ModelCatalogEntry[] = [];
+  private nativeModel = "";
+  private nativeModelError: string | null = null;
+  saving = false;
+  private generation = 0;
   private nativeModelsAbort: AbortController | null = null;
   private nativeModelsUnsubscribe: (() => void) | null = null;
-  @state() private nativeModelsStatus: "idle" | "loading" | "ready" = "idle";
-  private observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
-  private get agentSelection() {
-    return modelSetupAgentSelection(this.context, this.firstRun);
-  }
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-      () => this.synchronize(),
-    )
-    .watch(
-      () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-      () => this.synchronize(),
-    );
+  private nativeModelsStatus: "idle" | "loading" | "ready" = "idle";
 
-  override willUpdate() {
-    this.synchronize();
+  constructor(
+    private readonly host: ReactiveControllerHost,
+    private readonly options: NativeModelSetupOptions,
+  ) {}
+
+  get count() {
+    return this.nativeModels.length;
   }
-  override disconnectedCallback() {
-    this.observedConnection = null;
-    this.reset();
-    this.subscriptions.clear();
-    super.disconnectedCallback();
-  }
-  private synchronize() {
-    if (!this.isConnected || !this.context) {
-      return;
-    }
-    const previous = this.observedConnection;
-    const next = captureModelSetupConnection(this.context, this.firstRun, previous?.recoveryScope);
-    if (
-      previous &&
-      next.client === previous.client &&
-      next.hello === previous.hello &&
-      next.agentId === previous.agentId &&
-      next.connected === previous.connected &&
-      next.firstRun === previous.firstRun &&
-      next.connectionRevision === previous.connectionRevision &&
-      next.recoveryScope === previous.recoveryScope
-    ) {
-      return;
-    }
-    this.observedConnection = next;
-    this.reset();
-  }
-  private reset() {
+
+  reset() {
+    this.generation += 1;
     this.nativeModels = [];
     this.nativeModel = "";
     this.nativeModelError = null;
-    this.nativeModelSaving = false;
+    this.saving = false;
     this.nativeModelsAbort?.abort();
     this.nativeModelsAbort = null;
     this.nativeModelsUnsubscribe?.();
     this.nativeModelsUnsubscribe = null;
     this.nativeModelsStatus = "idle";
-    this.publishState();
-  }
-  private publishState() {
-    this.dispatchEvent(
-      new CustomEvent("native-model-state", {
-        bubbles: true,
-        composed: true,
-        detail: { count: this.nativeModels.length, saving: this.nativeModelSaving },
-      }),
-    );
-  }
-  private canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
-    const snapshot = this.context.gateway.snapshot;
-    return Boolean(
-      client &&
-      snapshot.client === client &&
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      (this.firstRun || this.agentSelection.state.selectedId !== null),
-    );
   }
   private async useNativeModel(): Promise<void> {
-    const connection = this.observedConnection;
-    const client = this.context.gateway.snapshot.client;
+    const connection = this.options.getConnection();
+    const generation = this.generation;
+    const isCurrent = () =>
+      this.generation === generation && this.options.getConnection() === connection;
+    const context = this.options.getContext();
+    const client = context.gateway.snapshot.client;
     const agentId =
-      this.agentSelection.state.selectedId ??
-      readSessionDefaults(this.context.gateway.snapshot)?.defaultAgentId;
+      connection?.agentId ?? readSessionDefaults(context.gateway.snapshot)?.defaultAgentId;
     const model = this.nativeModels.find(
       (entry) => `${entry.provider}/${entry.id}` === this.nativeModel,
     );
     if (
-      !this.canUseSetup(client) ||
+      !this.options.canUseSetup(client) ||
       !agentId ||
       model?.available !== true ||
-      this.nativeModelSaving ||
-      this.blocked
+      this.saving ||
+      this.options.blocked()
     ) {
       return;
     }
-    this.nativeModelSaving = true;
-    this.publishState();
+    this.saving = true;
+    this.host.requestUpdate();
     this.nativeModelError = null;
     const modelRef = `${model.provider}/${model.id}`;
     try {
-      const mutation = await this.context.runtimeConfig.runExternalMutation(
+      const mutation = await context.runtimeConfig.runExternalMutation(
         (mutationClient) =>
           mutationClient.request("agents.update", {
             agentId,
             model: modelRef,
             agentRuntime: model.agentRuntime?.id,
           }),
-        { canDispatch: () => this.observedConnection === connection && this.canUseSetup(client) },
+        {
+          canDispatch: () => isCurrent() && this.options.canUseSetup(client),
+        },
       );
-      if (this.observedConnection !== connection) {
+      if (!isCurrent()) {
         return;
       }
       if (!mutation.ok) {
@@ -150,49 +100,51 @@ class NativeModelSetup extends OpenClawLightDomElement {
         this.nativeModelError = mutation.refresh.error;
         return;
       }
-      await this.context.agents.refreshList();
-      if (this.observedConnection === connection) {
-        this.context.navigate("chat");
+      await context.agents.refreshList();
+      if (isCurrent()) {
+        context.navigate("chat");
       }
     } catch (error) {
-      if (this.observedConnection === connection) {
+      if (isCurrent()) {
         this.nativeModelError = formatModelSetupError(error);
       }
     } finally {
-      if (this.observedConnection === connection) {
-        this.nativeModelSaving = false;
-        this.publishState();
+      if (isCurrent()) {
+        this.saving = false;
+        this.host.requestUpdate();
       }
     }
   }
 
   private async loadNativeModels(refresh = true): Promise<void> {
-    const client = this.context.gateway.snapshot.client;
-    if (!this.canUseSetup(client)) {
+    const connection = this.options.getConnection();
+    const context = this.options.getContext();
+    const client = context.gateway.snapshot.client;
+    if (!client || !this.options.canUseSetup(client)) {
       return;
     }
     const scope = {
       view: "all" as const,
-      agentId: this.agentSelection.state.selectedId ?? undefined,
+      agentId: connection?.agentId ?? undefined,
     };
     this.nativeModelsUnsubscribe ??= subscribeModelCatalogChanges(
-      this.context.gateway,
+      context.gateway,
       () => void this.loadNativeModels(false),
       scope,
     );
-    const connection = this.observedConnection;
     this.nativeModelsAbort?.abort();
     const controller = new AbortController();
     this.nativeModelsAbort = controller;
     this.nativeModelError = null;
     this.nativeModelsStatus = "loading";
+    this.host.requestUpdate();
     try {
       const catalog = await loadModelCatalog(client, {
         ...scope,
         refresh,
         signal: controller.signal,
       });
-      if (this.observedConnection !== connection || controller.signal.aborted) {
+      if (this.options.getConnection() !== connection || controller.signal.aborted) {
         return;
       }
       this.nativeModels = catalog.models.filter(
@@ -206,19 +158,19 @@ class NativeModelSetup extends OpenClawLightDomElement {
         this.nativeModel = "";
       }
     } catch (error) {
-      if (this.observedConnection === connection && !controller.signal.aborted) {
+      if (this.options.getConnection() === connection && !controller.signal.aborted) {
         this.nativeModelsStatus = "ready";
         this.nativeModelError = formatModelSetupError(error);
       }
     } finally {
       if (this.nativeModelsAbort === controller) {
         this.nativeModelsAbort = null;
-        this.publishState();
+        this.host.requestUpdate();
       }
     }
   }
 
-  override render() {
+  render() {
     const models = this.nativeModels;
     const selected = models.find((model) => `${model.provider}/${model.id}` === this.nativeModel);
     return renderNativeModelSetupSection(html`
@@ -237,16 +189,19 @@ class NativeModelSetup extends OpenClawLightDomElement {
               : t("modelSetup.nativeModels.signIn"),
           disabled: model.available !== true,
         })),
-        disabled: this.blocked || this.nativeModelSaving,
-        onChange: (value) => (this.nativeModel = value),
+        disabled: this.options.blocked() || this.saving,
+        onChange: (value) => {
+          this.nativeModel = value;
+          this.host.requestUpdate();
+        },
         onOpen: () => void this.loadNativeModels(),
       })}
       <button
         class="btn primary"
-        ?disabled=${this.blocked || this.nativeModelSaving || selected?.available !== true}
+        ?disabled=${this.options.blocked() || this.saving || selected?.available !== true}
         @click=${() => void this.useNativeModel()}
       >
-        ${t(this.nativeModelSaving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
+        ${t(this.saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
       </button>
       ${this.nativeModelError ? html`<div class="callout danger" role="alert">${this.nativeModelError}</div>` : nothing}
     `);
@@ -268,20 +223,4 @@ export function renderNativeModelSetupLoading() {
     <div class="model-picker"><span class="picker-select__trigger skeleton"></span></div>
     <span class="btn skeleton">${"\u00a0"}</span>
   `);
-}
-
-if (!customElements.get("openclaw-native-model-setup")) {
-  customElements.define("openclaw-native-model-setup", NativeModelSetup);
-}
-
-export function renderNativeModelSetup(
-  firstRun: boolean,
-  blocked: boolean,
-  onStateChange?: (state: { count: number; saving: boolean }) => void,
-) {
-  return html`<openclaw-native-model-setup
-    .firstRun=${firstRun}
-    .blocked=${blocked}
-    @native-model-state=${(event: CustomEvent<{ count: number; saving: boolean }>) => onStateChange?.(event.detail)}
-  ></openclaw-native-model-setup>`;
 }

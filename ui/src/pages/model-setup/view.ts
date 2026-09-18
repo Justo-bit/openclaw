@@ -16,7 +16,7 @@ import {
   renderConfiguredUtilityModel,
 } from "./configured-model.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
-import { renderNativeModelSetup, renderNativeModelSetupLoading } from "./native-model-setup.ts";
+import { type NativeModelSetup, renderNativeModelSetupLoading } from "./native-model-setup.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, renderManualProviderPicker } from "./provider-picker.ts";
 import type {
@@ -59,8 +59,7 @@ type ModelSetupViewProps = {
   firstRun: boolean;
   nativeSessionCatalogsEnabled?: boolean;
   onNativeSessionCatalogsChange?: (enabled: boolean) => void;
-  nativeModelState?: { count: number; saving: boolean };
-  onNativeModelStateChange?: (state: { count: number; saving: boolean }) => void;
+  nativeModels?: NativeModelSetup;
   iconUrls: Readonly<Record<string, string>>;
   onDetect: () => void;
   onVerify: () => void;
@@ -85,7 +84,7 @@ type ModelSetupViewProps = {
 function renderEmptyState(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const installs = result.recommendedInstalls ?? [];
   if (
-    props.nativeModelState?.count ||
+    props.nativeModels?.count ||
     result.candidates.length > 0 ||
     (result.authOptions?.length ?? 0) > 0 ||
     installs.length === 0
@@ -443,9 +442,9 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   }
   return html`
     ${current} ${renderNativeSessionDiscovery(props, result)} ${renderEmptyState(props, result)}
-    ${renderNativeModelSetup(props.firstRun, props.actionsDisabled || props.activationUnresolved === true, props.onNativeModelStateChange)}
-    ${renderCandidateRows(props, result)} ${renderUnavailable(props, result)}
-    ${renderPrepare(props, result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${props.nativeModels?.render()} ${renderCandidateRows(props, result)}
+    ${renderUnavailable(props, result)} ${renderPrepare(props, result)}
+    ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 

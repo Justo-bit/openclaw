@@ -59,6 +59,7 @@ describe("ModelProvidersPage installed agents", () => {
           agent("opencode", "OpenCode"),
           agent("qwen", "Qwen Code", { installation: "missing", enabled: false }),
           agent("pi", "Pi", { installation: "unverified" }),
+          agent("kilo", "Kilo"),
         ],
       }),
     );
@@ -69,6 +70,7 @@ describe("ModelProvidersPage installed agents", () => {
     expect(agentRow(page, "qwen")?.textContent).toContain("Not detected");
     expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
     expect(agentRow(page, "qwen")?.textContent).toContain("Use Qwen Code");
+    expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
     expect(page.querySelector(".model-providers__provider-list")).toBeNull();
 
     settingsAgentSelection.state.selectedId = "writer";

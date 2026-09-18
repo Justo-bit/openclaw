@@ -260,33 +260,19 @@ export async function buildIdentityMarkdownForWrite(params: {
   fallbackWorkspaceDir?: string;
   preferFallbackWorkspaceContent?: boolean;
 }): Promise<string> {
-  let baseContent: string | undefined;
-  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
-    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
-    baseContent = await params.readWorkspaceFileContent(
-      params.fallbackWorkspaceDir,
-      DEFAULT_IDENTITY_FILENAME,
-    );
-    if (baseContent === undefined) {
-      baseContent = await params.readWorkspaceFileContent(
-        params.workspaceDir,
-        DEFAULT_IDENTITY_FILENAME,
-      );
-    }
-  } else {
-    baseContent = await params.readWorkspaceFileContent(
-      params.workspaceDir,
-      DEFAULT_IDENTITY_FILENAME,
-    );
-    if (baseContent === undefined && params.fallbackWorkspaceDir) {
-      baseContent = await params.readWorkspaceFileContent(
-        params.fallbackWorkspaceDir,
-        DEFAULT_IDENTITY_FILENAME,
-      );
+  // Workspace moves prefer the previous user-edited file over a newly seeded one.
+  const workspaces = params.fallbackWorkspaceDir
+    ? params.preferFallbackWorkspaceContent
+      ? [params.fallbackWorkspaceDir, params.workspaceDir]
+      : [params.workspaceDir, params.fallbackWorkspaceDir]
+    : [params.workspaceDir];
+  for (const workspaceDir of workspaces) {
+    const content = await params.readWorkspaceFileContent(workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    if (content !== undefined) {
+      return mergeIdentityMarkdownContent(content, params.identity);
     }
   }
-
-  return mergeIdentityMarkdownContent(baseContent, params.identity);
+  return mergeIdentityMarkdownContent(undefined, params.identity);
 }
 
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
