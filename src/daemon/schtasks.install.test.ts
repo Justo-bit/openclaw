@@ -581,11 +581,24 @@ describe("installScheduledTask", () => {
     });
   });
 
-  it("reports a failed policy upgrade instead of running an unchanged older task", async () => {
+  it("warns and activates an existing task when an ordinary policy refresh fails", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);
-      await expect(installDefaultGatewayTask(env)).rejects.toThrow("definition upgrade failed");
-      expect(schtasksCalls.map((call) => call[0])).toEqual(["/Query", "/Change", "/Create"]);
+      const warn = vi.fn();
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        warn,
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Access is denied"));
+      expect(schtasksCalls.map((call) => call[0])).toEqual([
+        "/Query",
+        "/Change",
+        "/Create",
+        "/Run",
+      ]);
+      expectTaskRunCall(3);
     });
   });
 

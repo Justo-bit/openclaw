@@ -179,6 +179,7 @@ export async function stageScheduledTask({
 async function updateExistingScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: GatewayServiceInstallArgs["warn"];
   taskName: string;
   quotedLaunchPath: string;
   scriptPath: string;
@@ -203,7 +204,7 @@ async function updateExistingScheduledTask(params: {
     }
   }
   // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
-  // Report failure so the update owner can compensate instead of claiming repaired settings.
+  // Transactional repair must compensate; ordinary installs keep best-effort activation.
   const expectedXml = buildScheduledTaskXml({
     taskDescription: params.description ?? "OpenClaw Gateway",
     taskUser: resolveTaskUser(params.env),
@@ -222,9 +223,15 @@ async function updateExistingScheduledTask(params: {
       upgradeXmlPath,
     ]);
     if (upgraded.code !== 0) {
-      throw new Error("Scheduled Task definition upgrade failed.");
+      const detail = (upgraded.stderr || upgraded.stdout).trim() || "unknown error";
+      const message = `Scheduled Task definition upgrade failed: ${detail}`;
+      if (params.definitionTransaction) {
+        throw new Error(message);
+      }
+      params.warn?.(`${message}. Keeping the existing policy and starting the task.`);
+    } else {
+      await params.definitionTransaction?.taskWritten(expectedXml);
     }
-    await params.definitionTransaction?.taskWritten(expectedXml);
   } finally {
     await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
   }
@@ -250,6 +257,7 @@ async function updateExistingScheduledTask(params: {
 async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: GatewayServiceInstallArgs["warn"];
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
@@ -403,6 +411,7 @@ export async function installScheduledTask(
   const activation = await activateScheduledTask({
     env: activationEnv,
     stdout: args.stdout,
+    warn: args.warn,
     scriptPath: staged.scriptPath,
     taskLaunchPath: staged.taskLaunchPath,
     description: staged.taskDescription,
