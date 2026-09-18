@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -11,6 +12,8 @@ import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { readyRecoveryHealth } from "./update-command-service-recovery.test-support.js";
 import { createShippedUnresolvedServiceStop } from "./update-command-service-state.test-support.js";
 import {
   maybeRestartService,
@@ -260,11 +263,16 @@ export function registerRestartOutcomeTests(
     ["retry refusal", "failed"],
     ["repair health", "failed"],
     ["repair retry health", "restart-health-failed"],
+    ["progressing cap", "readiness-pending"],
+    ["cap then healthy", "ok"],
+    ["repair progressing cap", "readiness-pending"],
   ])(
     "carries the real lifecycle's serialized %s result through a child process",
     async (scenario, expected) => {
       const { root, run, mocks } = getFixture();
       const repairing = scenario.startsWith("repair ");
+      const progressing = scenario.includes("cap");
+      const serviceEnv = { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
       if (repairing) {
         vi.spyOn(restartRepairOwner, "repairLoadedGatewayServiceForStart").mockResolvedValueOnce({
           result: "restarted",
@@ -275,7 +283,9 @@ export function registerRestartOutcomeTests(
         mocks.capability.mockResolvedValue({ kind: "writable" });
       }
       const exit = new Error("test lifecycle exit");
-      vi.mocked(defaultRuntime.exit).mockImplementationOnce(() => {
+      let exitCode: number | undefined;
+      vi.mocked(defaultRuntime.exit).mockImplementationOnce((code) => {
+        exitCode = code;
         throw exit;
       });
       if (scenario === "native refusal") {
@@ -292,30 +302,58 @@ export function registerRestartOutcomeTests(
         runtime: { status: "stopped" },
         portUsage: { port: 19305, status: "free", listeners: [], hints: [] },
       });
+      if (progressing) {
+        const health = {
+          ...readyRecoveryHealth(19305, true),
+          healthy: false,
+          waitOutcome: "still-starting" as const,
+          elapsedMs: 300_000,
+          startupPhase: "startup migration",
+        };
+        mocks.health.mockResolvedValue(
+          scenario === "cap then healthy" ? readyRecoveryHealth(19305, true) : health,
+        );
+        mocks.health.mockResolvedValueOnce(health);
+      }
       if (scenario === "unexpected check") {
         mocks.health.mockRejectedValueOnce(new Error("health observer crashed"));
       }
       const actual =
         await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
       mocks.child.mockImplementationOnce(async (argv, options) => {
-        await expect(
-          runDaemonRestart({
-            json: true,
-            preserveDefinition: argv.includes("--preserve-definition"),
-          }),
-        ).rejects.toBe(exit);
+        const childEnv = typeof options === "number" ? undefined : options.env;
+        expect(childEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+        await withOwnedManagedUpdateEnv(childEnv, async () => {
+          await expect(
+            runDaemonRestart({
+              json: true,
+              preserveDefinition: argv.includes("--preserve-definition"),
+            }),
+          ).rejects.toBe(exit);
+        });
         expect(mocks.writeJson).toHaveBeenCalledOnce();
+        if (exitCode === undefined) {
+          throw new Error("Lifecycle did not return an exit code");
+        }
         const serialized = JSON.stringify(mocks.writeJson.mock.lastCall?.[0]);
         await fs.writeFile(
           path.join(root, "dist", "index.js"),
-          `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = 1;`,
+          `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = ${exitCode};`,
         );
         return actual.runCommandWithTimeout(argv, options);
       });
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 0,
+        ...(progressing ? { after: { version: VERSION } } : {}),
+      };
       expect(
         await maybeRestartService({
           shouldRestart: true,
-          result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
+          result,
           opts: { json: false, run },
           refreshServiceEnv: false,
           serviceUpdateVerdict: {
@@ -324,13 +362,14 @@ export function registerRestartOutcomeTests(
             refreshDefinition: repairing,
             fingerprint: "fixture",
           },
-          serviceEnv: process.env,
+          serviceEnv,
           requireRunningServiceAfterRestart: repairing,
           gatewayPort: 19305,
           timeoutMs: 1000,
           nodeRunner: process.execPath,
         }),
       ).toBe(expected);
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
       expect(mocks.child).toHaveBeenCalledOnce();
       expect(mocks.child.mock.calls[0]?.[0]).toEqual(
         expect.arrayContaining([
@@ -340,6 +379,23 @@ export function registerRestartOutcomeTests(
           "--json",
         ]),
       );
+      if (progressing) {
+        expect(exitCode).toBe(1);
+        expect(result.reason).toBe(expected === "readiness-pending" ? "still-starting" : undefined);
+        expect(result.recovery).toBeUndefined();
+        expect(mocks.restart).toHaveBeenCalledTimes(repairing ? 0 : 1);
+        expect(mocks.configSnapshot).toHaveBeenCalledTimes(repairing ? 1 : 0);
+        expect(mocks.terminateStale).not.toHaveBeenCalled();
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
+        );
+        expect(mocks.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            result: "restart-health-failed",
+            error: expect.stringContaining("still starting"),
+          }),
+        );
+      }
       if (scenario === "repair retry health") {
         expect(mocks.terminateStale).toHaveBeenCalledExactlyOnceWith(
           [4242],
