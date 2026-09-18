@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  killProcessTree,
+  signalProcessTree,
   spawnTerminalPty,
   type TerminalPtyHandle,
 } from "openclaw/plugin-sdk/process-runtime";
@@ -74,11 +74,13 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   let pty: TerminalPtyHandle | undefined;
   let exitOutcome: SandboxChildOutcome | undefined;
   let outcome: SandboxChildOutcome | undefined;
+  let escalation: ReturnType<typeof setTimeout> | undefined;
   const ready = createDeferred<void>();
   const exited = createDeferred<SandboxChildOutcome>();
   const closed = createDeferred<SandboxChildOutcome>();
   const recordExit = (exitCode: number, signal: SandboxChildOutcome["signal"]) => {
     if (!exitOutcome) {
+      clearTimeout(escalation);
       exited.resolve((exitOutcome = { exitCode, signal }));
     }
   };
@@ -93,12 +95,14 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   let terminationError: Error | undefined;
   let settlementStarted = false;
   const interruptions = new Set<Promise<void>>();
+  const localSignals: Promise<void>[] = [];
   const settled = closed.promise.then(async (result) => {
     settlementStarted = true;
     await terminationCleanup;
     if (interruptions.size > 0) {
       await Promise.allSettled(interruptions);
     }
+    await Promise.all(localSignals);
     child?.stdin?.destroy();
     await finalize(
       startFailed ? "failed" : params.finalizeStatus(result),
@@ -128,27 +132,36 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
         });
         await terminationCleanup;
         if (!outcome) {
-          let escalation: ReturnType<typeof setTimeout> | undefined;
-          if (pty) {
-            pty.kill("SIGTERM");
-            escalation = setTimeout(() => {
-              if (!outcome) {
-                pty?.kill("SIGKILL");
-              }
-            }, SANDBOX_CHILD_TERM_GRACE_MS);
+          const signalLocal = (signal: "SIGTERM" | "SIGKILL") => {
+            if (exitOutcome) {
+              return;
+            }
+            if (pty) {
+              pty.kill(signal);
+            } else if (child?.pid) {
+              const pid = child.pid;
+              localSignals.push(
+                new Promise<void>((resolve) => {
+                  signalProcessTree(pid, signal, {
+                    detached: process.platform !== "win32",
+                    onComplete: resolve,
+                  });
+                }),
+              );
+            } else {
+              child?.kill(signal);
+            }
+          };
+          signalLocal("SIGTERM");
+          if (!exitOutcome) {
+            escalation = setTimeout(() => signalLocal("SIGKILL"), SANDBOX_CHILD_TERM_GRACE_MS);
             escalation.unref?.();
-          } else if (child?.pid) {
-            killProcessTree(child.pid, {
-              detached: process.platform !== "win32",
-              graceMs: SANDBOX_CHILD_TERM_GRACE_MS,
-            });
-          } else {
-            child?.kill("SIGTERM");
           }
           const reaped = await Promise.race([
             closed.promise.then(() => true),
             delay(SANDBOX_CHILD_REAP_TIMEOUT_MS).then(() => false),
           ]).finally(() => clearTimeout(escalation));
+          await Promise.all(localSignals);
           if (!reaped) {
             throw new Error(
               `Sandbox child process tree ${pty?.pid ?? child?.pid ?? "unknown"} survived SIGKILL; tear down the sandbox environment and inspect the surviving process tree before retrying.`,

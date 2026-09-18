@@ -11,7 +11,7 @@ import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-en
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const killProcessTreeMock = vi.hoisted(() => vi.fn());
+const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -27,7 +27,10 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+    signalProcessTree: (...args: Parameters<typeof actual.signalProcessTree>) => {
+      signalProcessTreeMock(...args);
+      args[2]?.onComplete?.();
+    },
   };
 });
 
@@ -105,7 +108,7 @@ async function createPendingRemoteSignalFixture(holdFirstScan = false) {
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const transport = createFakeChild();
   spawnMock.mockReturnValue(transport);
-  killProcessTreeMock.mockImplementation(() => transport.emit("close", 143, "SIGTERM"));
+  signalProcessTreeMock.mockImplementation(() => transport.emit("close", 143, "SIGTERM"));
   const procRoot = tempDirs.make("codex-interrupt-procfs-");
   const firstScanEntered = createDeferred<void>();
   const firstScanCompleted = createDeferred<void>();
@@ -227,7 +230,7 @@ useIsolatedStateGuard();
 afterEach(() => {
   vi.useRealTimers();
   spawnMock.mockReset();
-  killProcessTreeMock.mockReset();
+  signalProcessTreeMock.mockReset();
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
@@ -235,7 +238,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     vi.useFakeTimers();
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
     let interrupting = true;
     const finalizeExec = vi.fn(async () => undefined);
     const send = vi.fn();
@@ -519,7 +522,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       createFakeNotifications().send,
       processStartParams("process-resistant"),
     );
-    killProcessTreeMock.mockImplementation(() => {
+    signalProcessTreeMock.mockImplementation(() => {
       setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
     });
 
@@ -533,9 +536,9 @@ describe("Codex sandbox exec-server lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(settled).toBe(false);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(child.pid, {
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(child.pid, "SIGTERM", {
       detached: process.platform !== "win32",
-      graceMs: 1_000,
+      onComplete: expect.any(Function),
     });
 
     await vi.runOnlyPendingTimersAsync();
@@ -555,7 +558,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
   it("preserves cooperative TERM exit without force killing", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
     const finalizeExec = vi.fn(async () => undefined);
     const processes = new Map<string, ManagedProcess>();
     await startProcess(
@@ -579,7 +582,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       terminateProcess(processes, { processId: "process-cooperative" }),
     ).resolves.toEqual({ running: true });
 
-    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(signalProcessTreeMock).toHaveBeenCalledOnce();
     expect(finalizeExec).toHaveBeenCalledWith({
       status: "completed",
       exitCode: 143,
@@ -592,7 +595,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     vi.useFakeTimers();
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => {
+    signalProcessTreeMock.mockImplementation(() => {
       setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
     });
     const finalizeExec = vi.fn(async () => undefined);
@@ -622,7 +625,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       { running: true },
       { running: true },
     ]);
-    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(signalProcessTreeMock).toHaveBeenCalledOnce();
     expect(finalizeExec).toHaveBeenCalledOnce();
   });
 
@@ -630,7 +633,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     vi.useFakeTimers();
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => undefined);
+    signalProcessTreeMock.mockImplementation(() => undefined);
     const finalizeExec = vi.fn(async () => undefined);
     const processes = new Map<string, ManagedProcess>();
     await startProcess(
@@ -664,7 +667,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     vi.useFakeTimers();
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => {
+    signalProcessTreeMock.mockImplementation(() => {
       setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
     });
     const finalizeExec = vi.fn(async () => undefined);
@@ -694,7 +697,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     notifications.close();
     await vi.runOnlyPendingTimersAsync();
 
-    expect(killProcessTreeMock).toHaveBeenCalledOnce();
+    expect(signalProcessTreeMock).toHaveBeenCalledOnce();
     expect(finalizeExec).toHaveBeenCalledOnce();
     expect(finalizeExec).toHaveBeenCalledWith({
       status: "failed",
@@ -770,7 +773,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     const releaseFinalization = createDeferred<void>();
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
-    killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
     const session = new CodexSandboxExecSession(
       createExecServer(
         createSandboxContext({
@@ -815,7 +818,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     async (stream) => {
       const child = createFakeChild();
       spawnMock.mockReturnValue(child);
-      killProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+      signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
       const finalizeExec = vi.fn(async () => undefined);
       const operations = new Set<Promise<void>>();
       const request = httpRequest(
@@ -840,11 +843,11 @@ describe("Codex sandbox exec-server lifecycle", () => {
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
-        expect(killProcessTreeMock).not.toHaveBeenCalled();
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
 
         output.write(Buffer.from("x"));
 
-        await vi.waitFor(() => expect(killProcessTreeMock).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(signalProcessTreeMock).toHaveBeenCalledOnce());
         expect(await response).toMatchObject({
           message: `sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
         });
