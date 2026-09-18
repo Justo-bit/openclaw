@@ -17,7 +17,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -86,6 +86,17 @@ export async function compactNativeCliSession(params: {
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
+  // Both public compaction paths check placement here before preparing host model/auth state.
+  if (
+    params.compactParams.config?.agents?.defaults?.embeddedAgent?.runtimeServer &&
+    (isDefaultAgentRuntimeId(runtime) || runtime === "openclaw")
+  ) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: "Compaction is not supported by the dedicated built-in runtime.",
+    };
+  }
   if (!runtime || params.compactParams.trigger !== "manual") {
     return undefined;
   }

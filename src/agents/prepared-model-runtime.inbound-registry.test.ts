@@ -45,6 +45,29 @@ describe("prepared reply dispatch runtime", () => {
     await resetPreparedModelRuntimeHarness(state);
   });
 
+  it("acquires a static run lease without reading ambient or agent model credentials", async () => {
+    mocks.resolveAmbientCredentials.mockImplementation(() => {
+      throw new Error("ambient credential read");
+    });
+    mocks.discoverAuthStorage.mockImplementation(() => {
+      throw new Error("agent credential read");
+    });
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      { config: {}, agentDir: state.agentDir("remote"), skipCredentials: true },
+      { catalogMode: "static" },
+    );
+    try {
+      expect(lease.snapshot.authModes).toEqual({});
+      expect(lease.snapshot.createStores().authStorage.getAll()).toEqual({});
+      await lease.snapshot.loadFullModelCatalog?.();
+      expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
+      expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
+      expect(mocks.discoverModels).not.toHaveBeenCalled();
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+
   it("returns undefined while the Gateway lifecycle is inactive", async () => {
     await expect(
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),

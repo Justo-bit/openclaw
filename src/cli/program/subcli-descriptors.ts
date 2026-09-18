@@ -14,6 +14,16 @@ import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandDescriptors = [
+  {
+    name: "runtime-server",
+    description: "Run the separate built-in loop server",
+    hasSubcommands: false,
+  },
+  {
+    name: "runtime-workspace-id",
+    description: "Print a built-in runtime workspace scope",
+    hasSubcommands: false,
+  },
   { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
     name: "gateway",

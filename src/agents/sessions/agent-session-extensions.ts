@@ -1,4 +1,5 @@
 import { basename, dirname } from "node:path";
+import { getAgentLoopRunner } from "../../../packages/agent-core/src/loop-host.js";
 import { AgentSessionCompaction } from "./agent-session-compaction.js";
 import type { ExtensionBindings } from "./agent-session-types.js";
 import { ExtensionRunner, type ToolDefinition, wrapRegisteredTools } from "./extensions/index.js";
@@ -186,7 +187,10 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
         refreshTools: () => this.refreshToolRegistry(),
         getCommands,
         setModel: async (model) => {
-          if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
+          if (
+            !getAgentLoopRunner(this.agent) &&
+            !this.sessionModelRegistry.hasConfiguredAuth(model)
+          ) {
             return false;
           }
           await this.setModel(model);

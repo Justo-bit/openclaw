@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { getAgentLoopRunner } from "../../../packages/agent-core/src/loop-host.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -253,7 +254,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         throw new Error(formatNoModelSelectedMessage());
       }
 
-      if (!this.sessionModelRegistry.hasConfiguredAuth(this.model)) {
+      // An attached loop resolves credentials at its own inference owner.
+      if (
+        !getAgentLoopRunner(this.agent) &&
+        !this.sessionModelRegistry.hasConfiguredAuth(this.model)
+      ) {
         const isOAuth = this.sessionModelRegistry.isUsingOAuth(this.model);
         if (isOAuth) {
           throw new Error(

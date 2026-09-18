@@ -12,9 +12,37 @@ import {
   createModelCatalogIdentityKeyResolver,
   resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
-import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+} from "./prepared-model-runtime.catalog-contract.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
-import type { ModelRegistry } from "./sessions/model-registry.js";
+import { ModelRegistry } from "./sessions/model-registry.js";
+
+/** Static host projection deliberately has no file/config-backed credential registry. */
+export function prepareCredentialFreeRuntimeFacts(
+  agentFacts: readonly PreparedModelRuntimeAgentFacts[],
+  workspaceFacts: ConfiguredCatalogWorkspaceFacts,
+) {
+  const catalogs = new Map<
+    PreparedModelRuntimeAgentFacts["input"],
+    PreparedModelRuntimeCatalogFacts
+  >();
+  for (const facts of agentFacts) {
+    if (facts.input.skipCredentials) {
+      catalogs.set(
+        facts.input,
+        prepareCapturedRuntimeFacts({
+          agentFacts: facts,
+          workspaceFacts,
+          templateModelRegistry: ModelRegistry.inMemory(facts.templateAuthStorage),
+          configuredRuntimeModels: facts.configuredRuntimeModels,
+        }),
+      );
+    }
+  }
+  return catalogs;
+}
 
 type ConfiguredCatalogAgentFacts = {
   input: { config: OpenClawConfig };

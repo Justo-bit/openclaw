@@ -2611,7 +2611,7 @@ describe("runCli exit behavior", () => {
     }
     await runCli(argv);
 
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ argv, loadGlobalEnv: false, quiet: true });
     if (_name === "full Commander path with root options") {
       expect(buildProgramMock).toHaveBeenCalledTimes(1);
       expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
@@ -2633,7 +2633,11 @@ describe("runCli exit behavior", () => {
       runCli(["node", "openclaw", "status"]),
     );
 
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
+    expect(loadDotEnvMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "status"],
+      loadGlobalEnv: true,
+      quiet: true,
+    });
   });
 
   it("keeps explicit database preflight isolated from default state selection", async () => {

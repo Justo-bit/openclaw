@@ -4,11 +4,20 @@ import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 import { resolveCliContainerTarget } from "./container-target.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 
 /** Load `.env` files for normal CLI commands without overriding existing process env. */
-export function loadCliDotEnv(opts?: { loadGlobalEnv?: boolean; quiet?: boolean }) {
+export function loadCliDotEnv(opts?: {
+  argv?: string[];
+  loadGlobalEnv?: boolean;
+  quiet?: boolean;
+}) {
+  const invocation = resolveCliArgvInvocation(opts?.argv ?? process.argv);
+  if (!resolveCliCommandPathPolicy(invocation.commandPath).loadDotEnv) {
+    return;
+  }
   const quiet = opts?.quiet ?? true;
   const cwd = tryProcessCwd();
   if (cwd) {
@@ -36,6 +45,9 @@ export async function loadCliDotEnvForEarlyDiagnostic(
     return;
   }
   const invocation = resolveCliArgvInvocation(argv);
+  if (!resolveCliCommandPathPolicy(invocation.commandPath).loadDotEnv) {
+    return;
+  }
   if (invocation.commandPath[0] === "agent" && invocation.commandPath[1] === "exec") {
     return;
   }
@@ -48,5 +60,5 @@ export async function loadCliDotEnvForEarlyDiagnostic(
   const isGatewayRun =
     !invocation.hasHelpOrVersion &&
     (gatewayPath?.length === 1 || (gatewayPath?.length === 2 && gatewayPath[1] === "run"));
-  loadCliDotEnv({ loadGlobalEnv: !isGatewayRun, quiet: true });
+  loadCliDotEnv({ argv, loadGlobalEnv: !isGatewayRun, quiet: true });
 }

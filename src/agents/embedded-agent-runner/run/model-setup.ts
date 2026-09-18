@@ -2,6 +2,7 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
+import { usesDedicatedBuiltinRuntime } from "../../builtin-runtime/selection.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
@@ -14,6 +15,7 @@ import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
+import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
@@ -131,13 +133,19 @@ export async function resolveEmbeddedRunModelSetup(params: {
   );
   params.onHooksResolved();
 
+  const dedicatedRuntime =
+    usesDedicatedBuiltinRuntime(runParams, provider, modelId) &&
+    [undefined, "openclaw"].includes(resolveSessionPinnedHarnessId(params.sessionAdmission?.entry));
+  const selectionParams = dedicatedRuntime
+    ? { ...runParams, agentHarnessId: "openclaw" }
+    : runParams;
   await ensureSelectedAgentHarnessPlugin({
     provider,
     modelId,
     config: runParams.config,
     agentId: runParams.agentId,
     sessionKey: runParams.sessionKey,
-    agentHarnessId: runParams.agentHarnessId,
+    agentHarnessId: selectionParams.agentHarnessId,
     agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
     requestTransportOverrides: requestStreamTransportOverrides,
     workspaceDir: params.workspaceDir,
@@ -176,7 +184,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
           config: runParams.config,
           agentId: runParams.agentId,
           sessionKey: runParams.sessionKey,
-          agentHarnessId: runParams.agentHarnessId,
+          agentHarnessId: selectionParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
   const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
@@ -196,7 +204,26 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const modelConfigProvider = provider;
   let resolvedModelProvider = provider;
   let modelResolution;
-  if (nativeModelOwned) {
+  if (dedicatedRuntime) {
+    // Account-scoped discovery and executable transport belong to the runtime server.
+    const staticModel =
+      params.preparedModelRuntime?.configuredRuntimeModels.find(
+        (row) => row.provider === provider && row.modelId === modelId,
+      )?.model ??
+      resolveBundledStaticCatalogModel({
+        provider,
+        modelId,
+        cfg: runParams.config,
+        workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
+        includeRuntimeDiscovery: true,
+      });
+    modelResolution = {
+      model: staticModel,
+      error: staticModel ? undefined : `Unknown model: ${provider}/${modelId}`,
+      ...createEmptyAgentDiscoveryStores(),
+    };
+  } else if (nativeModelOwned) {
     modelResolution = {
       model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
       ...createEmptyAgentDiscoveryStores(),
@@ -254,6 +281,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     pluginHarnessOwnsTransport,
     pinnedHarnessId,
     nativeModelOwned,
+    dedicatedRuntime,
     nativeSessionRuntime,
     modelConfigProvider,
     model,

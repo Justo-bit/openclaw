@@ -36,6 +36,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-service-custody.test.ts",
   "src/cli/one-shot-exit.test.ts",
   "src/cli/runtime-cleanup-scope.windows.process.test.ts",
+  "src/cli/runtime-server-cli.dotenv.process.test.ts",
   "src/cli/update-finalization-output.process.test.ts",
   "src/cli/cold-command-plugin-imports.process.test.ts",
   "src/cli/mcp-cli.probe-exit.process.test.ts",

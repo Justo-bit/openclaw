@@ -6,6 +6,7 @@ import {
   isAnthropicServerToolClearingEnabled,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
+import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -15,12 +16,17 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import {
+  isAgentRuntimeModelParam,
+  resolveModelExtraParamSources,
+} from "../../model-extra-params.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
-import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
+import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -413,6 +419,92 @@ export async function settleEmbeddedAttemptStream(input: {
   };
 }
 
+/** Validate authored controls without preparing a Gateway provider or its credentials. */
+function assertBuiltinRuntimeControlsSupported(
+  attempt: EmbeddedRunAttemptParams,
+  settings: SettingsManager,
+  agentId: string,
+): void {
+  const sources = resolveModelExtraParamSources({
+    config: attempt.config,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    agentId,
+  });
+  // Model thinking selectors are already resolved into the supported thinkingLevel
+  // control. Do not run provider preparation: it injects Gateway-only defaults.
+  const modelParams = (source: Record<string, unknown> | undefined) =>
+    Object.fromEntries(
+      Object.entries(source ?? {}).filter(
+        ([key, value]) => key !== "thinking" || !isAgentRuntimeModelParam(key, value),
+      ),
+    );
+  const requested = Object.assign(
+    {},
+    sources.defaultParams,
+    modelParams(sources.modelParams),
+    modelParams(sources.agentModelParams),
+    sources.agentParams,
+    Object.fromEntries(
+      Object.entries(attempt.streamParams ?? {}).filter(([, value]) => value !== undefined),
+    ),
+    attempt.fastMode !== undefined ? { fastMode: attempt.fastMode } : undefined,
+  );
+  const unsupported = new Set<string>();
+  if (attempt.fastModeAuto) {
+    unsupported.add("fastMode");
+  }
+  for (const [key, value] of Object.entries(requested)) {
+    if (value === undefined) {
+      continue;
+    }
+    if ((key === "fastMode" || key === "fast_mode") && normalizeFastMode(value) === false) {
+      continue;
+    }
+    if (key === "transport" && (value === "auto" || value === "sse")) {
+      continue;
+    }
+    unsupported.add(key);
+  }
+
+  // SettingsManager owns merging and defaults. The embedded runner disables
+  // session auto-retry itself; its enabled=false is not an unsupported override.
+  // Provider retry overrides, in contrast, would have to cross the wire.
+  const defaults = SettingsManager.inMemory();
+  const retry = settings.getRetrySettings();
+  const defaultRetry = defaults.getRetrySettings();
+  for (const key of ["maxRetries", "baseDelayMs"] as const) {
+    if (retry[key] !== defaultRetry[key]) {
+      unsupported.add("retry." + key);
+    }
+  }
+  const providerRetry = settings.getProviderRetrySettings();
+  const defaultProviderRetry = defaults.getProviderRetrySettings();
+  for (const key of ["timeoutMs", "maxRetries", "maxRetryDelayMs"] as const) {
+    if (providerRetry[key] !== defaultProviderRetry[key]) {
+      unsupported.add("retry.provider." + key);
+    }
+  }
+  if (Object.values(settings.getThinkingBudgets() ?? {}).some((value) => value !== undefined)) {
+    unsupported.add("thinkingBudgets");
+  }
+  if (settings.getHttpIdleTimeoutMs() !== defaults.getHttpIdleTimeoutMs()) {
+    unsupported.add("httpIdleTimeoutMs");
+  }
+  if (settings.getTransport() !== "auto" && settings.getTransport() !== "sse") {
+    unsupported.add("transport");
+  }
+  if (unsupported.size > 0) {
+    // Only names: authored provider values may contain sensitive data.
+    throw new Error(
+      "Dedicated built-in runtime v1 does not support request/settings controls: " +
+        [...unsupported].toSorted().join(", ") +
+        ". Remove these overrides or use embedded execution. " +
+        "Output/context limits must be configured at native runtime startup.",
+    );
+  }
+}
+
 /**
  * Selects and configures the provider transport for one embedded attempt.
  */
@@ -439,6 +531,23 @@ export async function prepareEmbeddedAttemptTransport(input: {
 }) {
   const attempt = input.attempt;
   const session = input.session;
+  if (attempt.config?.agents?.defaults?.embeddedAgent?.runtimeServer) {
+    assertBuiltinRuntimeControlsSupported(attempt, input.settingsManager, input.sessionAgentId);
+    // Only the server executes inference. Keep a hard guard even if a caller
+    // accidentally invokes the host session stream outside its remote loop.
+    session.agent.streamFn = () => {
+      throw new Error("Dedicated built-in runtime forbids Gateway provider inference");
+    };
+    return {
+      serverToolClearingEnabled: false,
+      compactionReplayEnabled: false,
+      effectiveAgentTransport: "sse" as const,
+      effectiveExtraParams: {},
+      effectivePromptCacheRetention: undefined,
+      providerTextTransforms: undefined,
+      streamStrategy: "builtin-runtime-server",
+    };
+  }
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({

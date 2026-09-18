@@ -4,6 +4,7 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
+import { usesDedicatedBuiltinRuntime } from "../../builtin-runtime/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
   ensureAuthProfileStore,
@@ -21,6 +22,7 @@ import {
   type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
+import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveModelAsync } from "../model.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -72,6 +74,31 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   markStage?: (stage: string) => void;
 }) {
   const runParams = params.runParams;
+  if (
+    params.getAgentHarness().id === "openclaw" &&
+    usesDedicatedBuiltinRuntime(runParams, params.provider, params.modelId)
+  ) {
+    const plan: AgentRuntimeAuthPlan = {
+      providerForAuth: params.provider,
+      authProfileProviderForAuth: params.provider,
+      modelId: params.modelId,
+    };
+    const materialize = async (_plan: AgentRuntimeAuthPlan, _forceResolve?: boolean) =>
+      params.getRuntimeModel();
+    const attemptAuthProfileStore: AuthProfileStore = { version: 1, profiles: {} };
+    const preparedAuthAttempts: PreparedAgentRuntimeAuthAttempt[] = [{ kind: "implicit", plan }];
+    return {
+      usesOpenAIAuthRouting: false,
+      attemptAuthProfileStore,
+      lockedProfileId: undefined,
+      preferredProfileId: undefined,
+      providerUsesProfileScopedModelMetadata: false,
+      materializeAuthPlan: materialize,
+      materializeAuthPlanUncached: materialize,
+      preparedAuthAttempts,
+      activePreparedAuthPlan: plan,
+    };
+  }
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
   const initialPluginHarnessOwnsTransport = initialHarness.id !== "openclaw";

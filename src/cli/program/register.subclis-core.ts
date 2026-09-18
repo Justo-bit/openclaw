@@ -75,6 +75,10 @@ async function registerSubCliWithPluginCommands(
 const entrySpecs: readonly CommandGroupDescriptorSpec<
   [argv: string[], context: SubCliRegistrationContext]
 >[] = [
+  [
+    ["runtime-server", "runtime-workspace-id"],
+    async (program) => (await import("../runtime-server-cli.js")).registerRuntimeServerCli(program),
+  ],
   [["acp"], async (program) => (await import("../acp-cli.js")).registerAcpCli(program)],
   [["gateway"], async (program) => (await import("../gateway-cli.js")).registerGatewayCli(program)],
   [["daemon"], async (program) => (await import("../daemon-cli.js")).registerDaemonCli(program)],

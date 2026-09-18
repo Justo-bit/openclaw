@@ -84,6 +84,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     expectedHarnessArtifact,
     pinnedHarnessId,
     nativeModelOwned,
+    dedicatedRuntime,
     nativeSessionRuntime,
     modelConfigProvider,
     model,
@@ -146,33 +147,37 @@ export async function prepareEmbeddedRunRuntime(input: {
     plan?: AgentRuntimeAuthPlan,
     preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
   ) =>
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarness({
-          runParams: params,
-          provider,
-          modelId,
-          model: candidate,
-          plan,
-          preparedAuthAttempt,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
+    dedicatedRuntime
+      ? modelSetup.agentHarness
+      : nativeSessionRuntime?.auth === "native"
+        ? nativeSessionRuntime.harness
+        : selectEmbeddedRunHarness({
+            runParams: params,
+            provider,
+            modelId,
+            model: candidate,
+            plan,
+            preparedAuthAttempt,
+            requestStreamTransportOverrides,
+            pinnedHarnessId,
+          });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof model,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) =>
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarnessForPreparedAttempts({
-          runParams: params,
-          provider,
-          modelId,
-          model: candidate,
-          attempts,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
+    dedicatedRuntime
+      ? modelSetup.agentHarness
+      : nativeSessionRuntime?.auth === "native"
+        ? nativeSessionRuntime.harness
+        : selectEmbeddedRunHarnessForPreparedAttempts({
+            runParams: params,
+            provider,
+            modelId,
+            model: candidate,
+            attempts,
+            requestStreamTransportOverrides,
+            pinnedHarnessId,
+          });
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
@@ -432,11 +437,16 @@ export async function prepareEmbeddedRunRuntime(input: {
     authState.profileIndex = preparedAuthAttempts.length;
     return false;
   };
-  const advanceAttemptAuthProfile = pluginHarnessOwnsAuthBootstrap
-    ? advancePluginHarnessAuthAttempt
-    : authController.advanceAuthProfile;
+  const advanceAttemptAuthProfile = dedicatedRuntime
+    ? async () => false
+    : pluginHarnessOwnsAuthBootstrap
+      ? advancePluginHarnessAuthAttempt
+      : authController.advanceAuthProfile;
 
-  if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
+  if (
+    !dedicatedRuntime &&
+    (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap)
+  ) {
     await authController.initializeAuthProfile();
   } else if (forwardedPluginHarnessProfileId) {
     const initialAttempt = preparedAuthAttempts[authState.profileIndex];
@@ -488,15 +498,17 @@ export async function prepareEmbeddedRunRuntime(input: {
       ? fallbackEndpointClass
       : undefined);
   const providerRuntimeHandle = {
-    ...resolveProviderRuntimePluginHandle({
-      provider,
-      providerOwner,
-      modelId,
-      config: params.config,
-      workspaceDir: input.workspaceDir,
-      env: process.env,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-    }),
+    ...(dedicatedRuntime
+      ? { provider, workspaceDir: input.workspaceDir }
+      : resolveProviderRuntimePluginHandle({
+          provider,
+          providerOwner,
+          modelId,
+          config: params.config,
+          workspaceDir: input.workspaceDir,
+          env: process.env,
+          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+        })),
     modelId,
     prepared: true as const,
   };

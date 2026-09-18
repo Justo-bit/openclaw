@@ -21,6 +21,7 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
+import { attachBuiltinRuntimeServer } from "../../builtin-runtime/embedded.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
@@ -230,6 +231,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
+  await attachBuiltinRuntimeServer(activeSession.agent, attempt, input.effectiveCwd);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   let permissionPreparation:

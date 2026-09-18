@@ -1,18 +1,160 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { Model } from "../../../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
+import { usesDedicatedBuiltinRuntime } from "../../builtin-runtime/selection.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
+import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { resolveInitialEmbeddedRunModel } from "./runtime-resolution.js";
+
+const remoteConfig: OpenClawConfig = {
+  agents: {
+    defaults: {
+      embeddedAgent: {
+        runtimeServer: {
+          url: "https://runtime.example.test",
+          gatewayId: "test",
+          tokenFile: "/test/token",
+        },
+      },
+    },
+  },
+};
+
+describe("dedicated runtime placement", () => {
+  it.each([false, true])(
+    "prepares model and auth without host credentials (builtin pin=%s)",
+    async (pinned) => {
+      await withOpenClawTestState(
+        { label: "dedicated-prepare", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+        async (state) => {
+          const model: Model = {
+            provider: "openai",
+            id: "remote-model",
+            name: "Remote model",
+            api: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 32000,
+            maxTokens: 1024,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          };
+          const config = remoteConfig;
+          const createStores = vi.fn(() => {
+            throw new Error("borrowed host credentials");
+          });
+          const snapshot: PreparedModelRuntimeSnapshot = {
+            catalogOwner: undefined,
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            activeProjectKeys: [],
+            config,
+            observationConfig: config,
+            isCurrent: () => true,
+            authModes: {},
+            metadataSnapshot: createPluginMetadataSnapshotFixture(),
+            pluginRegistry: createEmptyPluginRegistry(),
+            allowGatewaySubagentBinding: false,
+            modelCatalog: { entries: [], routeVariants: [] },
+            inlineProviderModels: [],
+            configuredRuntimeModels: [{ provider: model.provider, modelId: model.id, model }],
+            createStores,
+          };
+          await withPluginRuntimeGenerationScope(snapshot, async () => {
+            const runtime = await prepareEmbeddedRunRuntime({
+              runParams: {
+                config,
+                agentId: "main",
+                sessionId: "remote-prepare",
+                runId: "remote-prepare",
+                admittedRunContext: createTestAdmittedRunContext("remote-prepare"),
+                workspaceDir: state.workspaceDir,
+                prompt: "hello",
+                timeoutMs: 1000,
+              },
+              sessionAdmission: pinned
+                ? {
+                    agentId: "main",
+                    sessionKey: "agent:main:remote",
+                    storePath: state.agentDir() + "/sessions.sqlite",
+                    entry: {
+                      sessionId: "remote-prepare",
+                      updatedAt: 1,
+                      modelSelectionLocked: true,
+                      agentHarnessId: "openclaw",
+                    },
+                  }
+                : undefined,
+              provider: model.provider,
+              modelId: model.id,
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              globalLane: "test",
+              hookRunner: undefined,
+              hookContext: { sessionId: "remote-prepare", workspaceDir: state.workspaceDir },
+              markStartupStage: () => {},
+              notifyExecutionPhase: () => {},
+              fallbackConfigured: false,
+              preparedModelRuntime: snapshot,
+            });
+            expect(runtime.snapshot().agentHarness.id).toBe("openclaw");
+            expect(runtime.getApiKeyInfo()).toBeNull();
+            expect(runtime.authStorage.getAll()).toEqual({});
+            expect(runtime.attemptAuthProfileStore.profiles).toEqual({});
+            expect(
+              runtime.snapshot().activePreparedAuthPlan.forwardedAuthProfileId,
+            ).toBeUndefined();
+            expect(await runtime.advanceAttemptAuthProfile()).toBe(false);
+            expect(createStores).not.toHaveBeenCalled();
+          });
+        },
+      );
+    },
+  );
+  it("selects the built-in server without implicit account routing while preserving explicit harnesses", () => {
+    expect(usesDedicatedBuiltinRuntime({ config: remoteConfig }, "openai", "fixture")).toBe(true);
+    expect(
+      usesDedicatedBuiltinRuntime(
+        { config: remoteConfig, agentHarnessId: "codex" },
+        "openai",
+        "fixture",
+      ),
+    ).toBe(false);
+    expect(usesDedicatedBuiltinRuntime({ config: {} }, "openai", "fixture")).toBe(false);
+    expect(
+      usesDedicatedBuiltinRuntime(
+        {
+          config: {
+            ...remoteConfig,
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.test",
+                  models: [],
+                  agentRuntime: { id: "external" },
+                },
+              },
+            },
+          },
+        },
+        "custom",
+        "fixture",
+      ),
+    ).toBe(false);
+  });
+});
 
 const provider = "first-selected";
 const otherProvider = "hook-selected";

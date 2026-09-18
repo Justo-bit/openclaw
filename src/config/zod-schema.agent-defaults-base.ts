@@ -32,6 +32,14 @@ const AgentThinkingLevelSchema = z.enum([
 
 const EmbeddedAgentConfigSchema = z
   .object({
+    /** Explicit process boundary for the built-in loop; host authority remains local. */
+    runtimeServer: z
+      .strictObject({
+        url: z.string().url(),
+        gatewayId: z.string().trim().min(1).max(256),
+        tokenFile: z.string().trim().min(1),
+      })
+      .optional(),
     projectSettingsPolicy: z
       .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
       .optional(),

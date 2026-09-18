@@ -3,6 +3,7 @@ import {
   getSupportedThinkingLevels,
   modelsAreEqual,
 } from "@openclaw/ai/internal/runtime";
+import { getAgentLoopRunner } from "../../../packages/agent-core/src/loop-host.js";
 import type { Model } from "../../llm/types.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { AgentSessionPrompting } from "./agent-session-prompting.js";
@@ -34,7 +35,10 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     const { previousModel, thinkingSelection } = await withSessionManagerWrite(
       this.sessionManager,
       () => {
-        if (!this.sessionModelRegistry.hasConfiguredAuth(model)) {
+        if (
+          !getAgentLoopRunner(this.agent) &&
+          !this.sessionModelRegistry.hasConfiguredAuth(model)
+        ) {
           throw new Error(`No API key for ${model.provider}/${model.id}`);
         }
         // Queued transitions replace the state at admission, not at invocation.

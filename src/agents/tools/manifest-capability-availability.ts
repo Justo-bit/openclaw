@@ -18,8 +18,8 @@ import {
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
-import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { hasAuthProfileForProvider } from "./model-config.helpers.js";
 
 /** Manifest contract keys that represent provider-backed tool capabilities. */
 type CapabilityContractKey =
@@ -105,6 +105,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
   providerId: string;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  agentDir?: string;
 }): boolean {
   const metadataKey = metadataKeyForCapabilityContract(params.key);
   const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
@@ -132,15 +133,22 @@ function hasConfiguredCapabilityProviderSignal(params: {
     ) {
       continue;
     }
-    // A provider is available when either profile auth or a declared env candidate exists.
-    if (params.authStore && listProfilesForProvider(params.authStore, signal.provider).length > 0) {
-      return true;
-    }
     if (
       hasNonEmptyManifestEnvCandidate(
         process.env,
         manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
       )
+    ) {
+      return true;
+    }
+    // Tool credentials are independent of inference preparation. Only consult their
+    // canonical stored source after plugin, capability, config, and env gates.
+    if (
+      hasAuthProfileForProvider({
+        provider: signal.provider,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      })
     ) {
       return true;
     }
@@ -180,6 +188,7 @@ export function hasSnapshotCapabilityAvailability(params: {
   key: CapabilityContractKey;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  agentDir?: string;
 }): boolean {
   return hasAvailableCapabilityPlugin(params, (plugin) =>
     (plugin.contracts?.[params.key] ?? []).some((providerId) =>
@@ -189,6 +198,7 @@ export function hasSnapshotCapabilityAvailability(params: {
         providerId,
         config: params.config,
         authStore: params.authStore,
+        agentDir: params.agentDir,
       }),
     ),
   );
@@ -215,6 +225,7 @@ export function hasSnapshotCapabilityProviderAvailability(params: {
   providerId: string;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  agentDir?: string;
 }): boolean {
   return hasAvailableCapabilityPlugin(params, (plugin) => {
     if (!plugin.contracts?.[params.key]?.includes(params.providerId)) {
@@ -226,6 +237,7 @@ export function hasSnapshotCapabilityProviderAvailability(params: {
       providerId: params.providerId,
       config: params.config,
       authStore: params.authStore,
+      agentDir: params.agentDir,
     });
   });
 }

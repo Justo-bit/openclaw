@@ -8,6 +8,7 @@ import {
 } from "./command-path-policy.js";
 
 const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
+  loadDotEnv: true,
   configGuard: "run",
   stateStoreGuard: "skip",
   loadPlugins: "never",
@@ -60,6 +61,15 @@ function expectConfigGuardResolver(
 }
 
 describe("command-path-policy", () => {
+  it("reserves startup-only credentials for dedicated runtime commands", () => {
+    for (const command of ["runtime-server", "runtime-workspace-id"]) {
+      expect(resolveCliCommandPathPolicy([command]).loadDotEnv).toBe(false);
+    }
+    for (const command of ["database", "audit", "agent", "status", "config"]) {
+      expect(resolveCliCommandPathPolicy([command]).loadDotEnv).toBe(true);
+    }
+  });
+
   it.each([
     { commandPath: ["configure"] },
     { commandPath: ["models", "auth"] },

@@ -107,8 +107,18 @@ export function resolveImageToolFactoryAvailable(params: {
   workspaceDir?: string;
   modelHasVision?: boolean;
   authStore?: AuthProfileStore;
+  toolAllowlist?: string[];
+  toolDenylist?: string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): boolean {
+  if (
+    !createToolPolicyMatcher({
+      allow: mergeBuiltInFactoryAllowlist(params.config?.tools?.allow, params.toolAllowlist),
+      deny: mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist),
+    })("view_image")
+  ) {
+    return false;
+  }
   if (!params.agentDir?.trim()) {
     return false;
   }
@@ -129,6 +139,7 @@ export function resolveImageToolFactoryAvailable(params: {
       hasSnapshotCapabilityProviderAvailability({
         snapshot,
         authStore: params.authStore,
+        agentDir: params.agentDir,
         key: "mediaUnderstandingProviders",
         providerId: provider.id,
         config: params.config,
@@ -139,6 +150,7 @@ export function resolveImageToolFactoryAvailable(params: {
       ? hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
+          agentDir: params.agentDir,
           key: "mediaUnderstandingProviders",
           config: params.config,
         })
@@ -210,6 +222,7 @@ function hasConfiguredVisionModelAuthSignal(params: {
 export function resolveOptionalMediaToolFactoryPlan(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentDir?: string;
   authStore?: AuthProfileStore;
   toolAllowlist?: string[];
   toolDenylist?: string[];
@@ -257,6 +270,7 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
+          agentDir: params.agentDir,
           key: "imageGenerationProviders",
           config: params.config,
         })),
@@ -267,6 +281,7 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
+          agentDir: params.agentDir,
           key: "videoGenerationProviders",
           config: params.config,
         })),
@@ -277,6 +292,7 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
+          agentDir: params.agentDir,
           key: "musicGenerationProviders",
           config: params.config,
         })),
@@ -286,6 +302,7 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
         hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
+          agentDir: params.agentDir,
           key: "mediaUnderstandingProviders",
           config: params.config,
         }) ||

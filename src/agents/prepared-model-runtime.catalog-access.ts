@@ -63,6 +63,17 @@ export function createFullModelCatalogAccess(params: {
   isCurrent: () => boolean;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt">;
 }): PreparedModelRuntimeCatalogAccess {
+  if (params.agentFacts.input.skipCredentials) {
+    // This lease cannot acquire local accounts, including through lazy inventory access.
+    return {
+      isCurrent: params.isCurrent,
+      withRefreshStatus: (catalog) => catalog,
+      readFullModelCatalog: () => undefined,
+      readPublishedModels: () => undefined,
+      loadFullModelCatalog: async () => params.catalogFacts.modelCatalog,
+      loadAuth: async () => ({ authStore: params.agentFacts.authStore, authModes: {} }),
+    };
+  }
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,

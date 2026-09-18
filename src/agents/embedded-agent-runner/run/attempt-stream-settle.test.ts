@@ -27,7 +27,8 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { SessionManager } from "../../sessions/index.js";
+import { SessionManager, SettingsManager } from "../../sessions/index.js";
+import type { Settings } from "../../sessions/settings-manager.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { testing as extraParamsTesting } from "../extra-params.test-support.js";
@@ -524,10 +525,7 @@ function createTransportFixture(testCase: {
       sessionId: "sess-transport-1",
     },
     session,
-    settingsManager: {
-      getGlobalSettings: () => ({}),
-      getProjectSettings: () => ({}),
-    },
+    settingsManager: SettingsManager.inMemory(),
     providerThinkingLevel: undefined,
     sessionAgentId: "main",
     workspaceDir: "/workspace",
@@ -548,7 +546,206 @@ function createTransportFixture(testCase: {
   return { input, session, streamFn };
 }
 
+function createNativeTransportFixture() {
+  const fixture = createTransportFixture({ compaction: false, pruning: false, apiKey: "" });
+  fixture.input.attempt.config = {
+    agents: {
+      defaults: {
+        embeddedAgent: {
+          runtimeServer: {
+            url: "ws://runtime.example.test/runtime",
+            gatewayId: "fixture",
+            tokenFile: "/fixture/token",
+          },
+        },
+      },
+    },
+  };
+  return fixture;
+}
+
+describe("prepareEmbeddedAttemptTransport native controls", () => {
+  it.each([
+    { temperature: 0.2 },
+    { maxTokens: 1024 },
+    { topP: 0.9 },
+    { stop: ["end"] },
+    { responseFormat: { type: "json_object" } },
+    { frequencyPenalty: 0.1 },
+    { presencePenalty: 0.1 },
+    { seed: 42 },
+    { fastMode: true },
+  ])(
+    "rejects unsupported request overrides before provider preparation: %j",
+    async (streamParams) => {
+      const { input, streamFn } = createNativeTransportFixture();
+      input.attempt.streamParams = streamParams;
+      const providerHandle = vi.fn(() => {
+        throw new Error("provider preparation forbidden");
+      });
+      input.getProviderRuntimeHandle = providerHandle;
+      const credential = vi.spyOn(input.attempt.authStorage, "getApiKey");
+      const prepare = vi.spyOn(input.attempt.runtimePlan!.transport, "resolveExtraParams");
+      await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow(
+        "does not support request/settings controls: " + Object.keys(streamParams)[0],
+      );
+      expect(providerHandle).not.toHaveBeenCalled();
+      expect(credential).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(streamFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["default", "model", "agent-model", "agent"] as const)(
+    "rejects configured parameters from the %s owner",
+    async (scope) => {
+      const { input } = createNativeTransportFixture();
+      const defaults = input.attempt.config!.agents!.defaults!;
+      const params = { temperature: 0.2 };
+      const ref = input.attempt.provider + "/" + input.attempt.modelId;
+      if (scope === "default") {
+        defaults.params = params;
+      }
+      if (scope === "model") {
+        defaults.models = { [ref]: { params } };
+      }
+      if (scope === "agent-model") {
+        input.attempt.config!.agents!.entries = { main: { models: { [ref]: { params } } } };
+      }
+      if (scope === "agent") {
+        input.attempt.config!.agents!.entries = { main: { params } };
+      }
+      await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow("controls: temperature");
+    },
+  );
+
+  it.each([
+    ["thinkingBudgets", { thinkingBudgets: { high: 1234 } }],
+    ["retry.maxRetries", { retry: { maxRetries: 9 } }],
+    ["retry.baseDelayMs", { retry: { baseDelayMs: 1234 } }],
+    ["retry.provider.timeoutMs", { retry: { provider: { timeoutMs: 1234 } } }],
+    ["retry.provider.maxRetries", { retry: { provider: { maxRetries: 9 } } }],
+    ["retry.provider.maxRetryDelayMs", { retry: { provider: { maxRetryDelayMs: 1234 } } }],
+    ["transport", { transport: "websocket" }],
+    ["httpIdleTimeoutMs", { httpIdleTimeoutMs: 1234 }],
+  ] satisfies Array<[string, Settings]>)(
+    "rejects unsupported setting %s",
+    async (name, settings) => {
+      const { input } = createNativeTransportFixture();
+      input.settingsManager = SettingsManager.inMemory(settings);
+      await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow("controls: " + name);
+    },
+  );
+
+  it("accepts canonical settings defaults, disabled fast mode, and supported thinking", async () => {
+    const { input } = createNativeTransportFixture();
+    input.attempt.provider = "openai";
+    input.attempt.modelId = "gpt-5";
+    input.attempt.fastMode = false;
+    input.attempt.streamParams = { temperature: undefined, fastMode: false };
+    input.attempt.config!.agents!.defaults!.models = {
+      "openai/gpt-5": { params: { thinking: "high", fast_mode: false } },
+    };
+    input.providerThinkingLevel = "high";
+    input.settingsManager = SettingsManager.inMemory({
+      transport: "auto",
+      retry: {
+        enabled: false,
+        maxRetries: 3,
+        baseDelayMs: 2000,
+        provider: { maxRetryDelayMs: 60000 },
+      },
+      thinkingBudgets: {},
+      httpIdleTimeoutMs: 300000,
+      defaultThinkingLevel: "high",
+    });
+    const result = await prepareEmbeddedAttemptTransport(input);
+    expect(result.effectiveExtraParams).toEqual({});
+    expect(result.effectiveAgentTransport).toBe("sse");
+    expect(input.providerThinkingLevel).toBe("high");
+  });
+
+  it("rejects automatic fast mode even before its initial delay elapses", async () => {
+    const { input } = createNativeTransportFixture();
+    input.attempt.fastMode = false;
+    input.attempt.fastModeAuto = true;
+    await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow("controls: fastMode");
+  });
+
+  it("uses effective project/runtime settings rather than rejecting overridden global values", async () => {
+    const { input } = createNativeTransportFixture();
+    input.settingsManager = SettingsManager.inMemory({
+      transport: "websocket",
+      retry: { provider: { maxRetryDelayMs: 1234 } },
+    });
+    input.settingsManager.applyOverrides({
+      transport: "sse",
+      retry: { provider: { maxRetryDelayMs: 60000 } },
+    });
+    await expect(prepareEmbeddedAttemptTransport(input)).resolves.toMatchObject({
+      effectiveAgentTransport: "sse",
+      effectiveExtraParams: {},
+    });
+  });
+
+  it.each(["max_tokens", "response_format", "stop", "thinking", "headers", "baseUrl"])(
+    "rejects configured unsupported %s without provider hooks",
+    async (key) => {
+      const { input } = createNativeTransportFixture();
+      input.attempt.config!.agents!.defaults!.params = { [key]: "authored-value" };
+      await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow("controls: " + key);
+    },
+  );
+
+  it("rejects attempt fast mode and custom configured controls without echoing their values", async () => {
+    const { input } = createNativeTransportFixture();
+    input.attempt.fastMode = true;
+    input.attempt.config!.agents!.defaults!.params = { extra_body: { marker: "private-value" } };
+    const result = prepareEmbeddedAttemptTransport(input);
+    await expect(result).rejects.toThrow("controls: extra_body, fastMode");
+    await expect(result).rejects.not.toThrow("private-value");
+  });
+});
+
 describe("prepareEmbeddedAttemptTransport", () => {
+  it("never reads host credentials or prepares a provider stream for the dedicated runtime", async () => {
+    const { input, session } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "",
+    });
+    input.attempt.config = {
+      agents: {
+        defaults: {
+          embeddedAgent: {
+            runtimeServer: {
+              url: "https://runtime.example.test",
+              gatewayId: "fixture",
+              tokenFile: "/fixture/token",
+            },
+          },
+        },
+      },
+    };
+    const readCredential = vi
+      .spyOn(input.attempt.authStorage, "getApiKey")
+      .mockImplementation(() => {
+        throw new Error("host credential read");
+      });
+    const providerHandle = vi.fn(() => {
+      throw new Error("host provider setup");
+    });
+    input.getProviderRuntimeHandle = providerHandle;
+    registerProviderStreamForModel.mockClear();
+    const transport = await prepareEmbeddedAttemptTransport(input);
+    expect(transport.streamStrategy).toBe("builtin-runtime-server");
+    expect(readCredential).not.toHaveBeenCalled();
+    expect(providerHandle).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModel).not.toHaveBeenCalled();
+    expect(() =>
+      session.agent.streamFn(input.attempt.model, { messages: [], systemPrompt: "" }),
+    ).toThrow("forbids Gateway provider inference");
+  });
   beforeEach(() => {
     // These cases own prepared auth/config, not runtime plugin discovery.
     extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn: () => undefined });

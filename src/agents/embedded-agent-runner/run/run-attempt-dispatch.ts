@@ -9,6 +9,7 @@ import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
+import { usesDedicatedBuiltinRuntime } from "../../builtin-runtime/selection.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
@@ -252,9 +253,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const { sessionManager } = params;
   const { nativeSessionRuntime } = preparedRuntime;
   const authProfileStore = resolveRunAttemptAuthProfileStore();
-  const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
-    ? attemptAuthProfileStore
-    : undefined;
+  // Dedicated inference has no Gateway auth snapshot. Leave tool credentials
+  // absent so each Gateway tool can resolve its own provider lazily.
+  const agentHarnessId = runtime.agentHarness.id;
+  const toolAuthProfileStore =
+    !usesDedicatedBuiltinRuntime({ ...params, agentHarnessId }, provider, modelId) &&
+    (agentHarnessId === "openclaw" || agentHarnessBuildsOpenClawTools(agentHarnessId))
+      ? attemptAuthProfileStore
+      : undefined;
   const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
   const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
   const fallbackActive = modelId !== requestedModelId || Boolean(fallbackReason);
@@ -657,10 +663,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     internalEvents: params.internalEvents,
     runtimeContextFragments: params.runtimeContextFragments,
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
-    bootstrapPromptWarningSignature:
-      input.bootstrapPromptWarningSignaturesSeen[
-        input.bootstrapPromptWarningSignaturesSeen.length - 1
-      ],
+    bootstrapPromptWarningSignature: input.bootstrapPromptWarningSignaturesSeen.at(-1),
     suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,

@@ -39,6 +39,7 @@ type CliRoutedCommandId =
   | "plugins-list";
 
 export type CliCommandPathPolicy = {
+  loadDotEnv: boolean;
   configGuard: CliConfigGuardPolicy;
   stateStoreGuard: "run" | "skip";
   loadPlugins: CliCommandPluginLoadPolicy;
@@ -61,15 +62,11 @@ export type CliCommandCatalogEntry = {
 };
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
-  for (const arg of argv.slice(2)) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === name || arg.startsWith(`${name}=`)) {
-      return true;
-    }
-  }
-  return false;
+  const args = argv.slice(2);
+  const separator = args.indexOf("--");
+  return (separator < 0 ? args : args.slice(0, separator)).some(
+    (arg) => arg === name || arg.startsWith(name + "="),
+  );
 }
 
 // These commands own their state boundary; bootstrap must not observe or initialize it first.
@@ -82,6 +79,16 @@ const PASSIVE_STARTUP_POLICY = {
 
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
+  ...["runtime-server", "runtime-workspace-id"].map((name) => ({
+    commandPath: [name],
+    // Dedicated runtimes accept credentials only from their launch environment.
+    policy: {
+      ...PASSIVE_STARTUP_POLICY,
+      loadDotEnv: false,
+      hideBanner: true,
+      ownsProtocolStdout: true,
+    },
+  })),
   {
     commandPath: ["setup"],
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
@@ -248,11 +255,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "gateway-status" },
   },
   ...["call", "restart", "suspend", "resume"].map((subcommand): CliCommandCatalogEntry => ({

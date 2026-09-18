@@ -25,6 +25,7 @@ import {
   takeInternalToolBatchLifecycle,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
+import { getAgentLoopHost, type LocalLoopEffects, type LoopToolsInput } from "./loop-host.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import {
@@ -175,16 +176,25 @@ async function runAgentLoopCore(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
+  const host = getAgentLoopHost(config);
   const newMessages: AgentMessage[] = [];
   const state = { context: { ...context, messages: [...context.messages] } };
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
   for (const prompt of prompts) {
-    if (config.consumeQueuedMessageCancellation?.(prompt)) {
+    if (
+      host
+        ? await host.consumeCancellation(prompt)
+        : config.consumeQueuedMessageCancellation?.(prompt)
+    ) {
       continue;
     }
     await emit({ type: "message_start", message: prompt });
-    if (config.consumeQueuedMessageCancellation?.(prompt)) {
+    if (
+      host
+        ? await host.consumeCancellation(prompt)
+        : config.consumeQueuedMessageCancellation?.(prompt)
+    ) {
       continue;
     }
     await emit({ type: "message_end", message: prompt });
@@ -241,6 +251,7 @@ async function runLoop(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
+  const host = getAgentLoopHost(initialConfig);
   let config = initialConfig;
   let firstTurn = true;
   let turnOpen = true;
@@ -288,11 +299,19 @@ async function runLoop(
     pendingMessages = [];
     let injectedMessage = false;
     for (const message of messagesToInject) {
-      if (config.consumeQueuedMessageCancellation?.(message)) {
+      if (
+        host
+          ? await host.consumeCancellation(message)
+          : config.consumeQueuedMessageCancellation?.(message)
+      ) {
         continue;
       }
       await emit({ type: "message_start", message });
-      if (config.consumeQueuedMessageCancellation?.(message)) {
+      if (
+        host
+          ? await host.consumeCancellation(message)
+          : config.consumeQueuedMessageCancellation?.(message)
+      ) {
         continue;
       }
       if (message.role === "user") {
@@ -337,7 +356,6 @@ async function runLoop(
         return newMessages;
       }
 
-      // Stream assistant response
       let streamedSteering: AgentMessage[] = [];
       const streamedConfig: AgentLoopConfig = {
         ...config,
@@ -348,24 +366,47 @@ async function runLoop(
           return streamedSteering;
         },
       };
+      // The native loop always owns provider execution. Only tool effects are delegated.
       const streamed = await streamAgentResponse(
         state.context,
         config,
         signal,
         emit,
         newMessages,
-        async (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) => {
-          const batch = await executeToolCalls(
-            state.context,
-            assistantMessage,
-            streamedConfig,
-            executionSignal,
-            toolEmit,
-            toolLoopRecoveryState.criticalToolLoopSeen,
-            toolCalls,
-            scheduling,
-            scheduling.hasUnobservedAsyncToolResults,
-          );
+        async (assistantMessage, calls, executionSignal, toolEmit, scheduling) => {
+          let batch: ExecutedToolCallBatch;
+          if (host) {
+            // v1 preserves complete host batches and serializes separate streamed batches.
+            await scheduling.waitForPrevious();
+            batch = await host.tools(
+              {
+                context: state.context,
+                message: assistantMessage,
+                calls,
+                criticalToolLoopSeen: toolLoopRecoveryState.criticalToolLoopSeen,
+                steeringMessages: streamedSteering,
+                hasStreamedTools: scheduling.hasUnobservedAsyncToolResults,
+              },
+              toolEmit,
+              executionSignal,
+            );
+            scheduling.onParallelStarted();
+            if (batch.steeringMessages.length > 0) {
+              streamedSteering = batch.steeringMessages;
+            }
+          } else {
+            batch = await executeToolCalls(
+              state.context,
+              assistantMessage,
+              streamedConfig,
+              executionSignal,
+              toolEmit,
+              toolLoopRecoveryState.criticalToolLoopSeen,
+              calls,
+              scheduling,
+              scheduling.hasUnobservedAsyncToolResults,
+            );
+          }
           if (batch.intervention) {
             toolLoopRecoveryState.criticalToolLoopSeen = true;
           }
@@ -386,19 +427,19 @@ async function runLoop(
               !streamed.executedIds.has(item.id) &&
               (message.stopReason === "toolUse" || item.async === true),
           );
+      const toolsInput = {
+        context: state.context,
+        message,
+        calls: remainingToolCalls,
+        criticalToolLoopSeen: toolLoopRecoveryState.criticalToolLoopSeen,
+        steeringMessages: streamedSteering,
+        hasStreamedTools: streamed.executedIds.size > 0,
+      };
       const terminalToolBatch =
         remainingToolCalls.length > 0
-          ? await executeToolCalls(
-              state.context,
-              message,
-              streamedSteering.length > 0 ? streamedConfig : config,
-              signal,
-              emit,
-              toolLoopRecoveryState.criticalToolLoopSeen,
-              remainingToolCalls,
-              undefined,
-              streamed.executedIds.size > 0,
-            )
+          ? host
+            ? await host.tools(toolsInput, emit, signal)
+            : await runLoopHostTools(toolsInput, { config, signal, emit })
           : undefined;
       const batches = [...streamed.batches, ...(terminalToolBatch ? [terminalToolBatch] : [])];
       const executedToolBatch: ExecutedToolCallBatch | undefined = batches.length
@@ -444,14 +485,7 @@ async function runLoop(
         return newMessages;
       }
       if (executedToolBatch?.terminateRun) {
-        const terminalMessage = {
-          ...createFailureMessage(
-            config.model,
-            new Error(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE),
-            false,
-          ),
-          content: [{ type: "text" as const, text: TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE }],
-        };
+        const terminalMessage = createLoopRecoveryMessage(config.model);
         state.context.messages.push(terminalMessage);
         newMessages.push(terminalMessage);
         await emit({ type: "turn_start" });
@@ -537,6 +571,36 @@ async function runLoop(
 
   await emit({ type: "agent_end", messages: newMessages });
   return newMessages;
+}
+
+/** Host-created terminal message; a controller cannot fabricate a transcript entry. */
+export function createLoopRecoveryMessage(model: AgentLoopConfig["model"]): AssistantMessage {
+  return {
+    ...createFailureMessage(model, new Error(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE), false),
+    content: [{ type: "text", text: TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE }],
+  };
+}
+
+/** Execute the complete host batch; preparation/approval/commit/start stay adjacent. */
+export async function runLoopHostTools(
+  input: LoopToolsInput,
+  effects: LocalLoopEffects,
+): Promise<ExecutedToolCallBatch> {
+  const config =
+    input.steeringMessages.length > 0
+      ? { ...effects.config, getSteeringMessages: async () => input.steeringMessages }
+      : effects.config;
+  return executeToolCalls(
+    input.context,
+    input.message,
+    config,
+    effects.signal,
+    effects.emit,
+    input.criticalToolLoopSeen,
+    input.calls,
+    undefined,
+    input.hasStreamedTools,
+  );
 }
 
 /**

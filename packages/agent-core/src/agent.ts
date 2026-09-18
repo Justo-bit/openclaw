@@ -10,6 +10,7 @@ import type {
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
+import { getAgentLoopRunner } from "./loop-host.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -546,6 +547,17 @@ export class Agent {
     options: { skipInitialSteeringPoll?: boolean } = {},
   ): Promise<void> {
     await this.runWithLifecycle(async (signal) => {
+      const runner = getAgentLoopRunner(this);
+      if (runner) {
+        await runner({
+          prompts: messages,
+          context: this.createContextSnapshot(),
+          config: this.createLoopConfig(options),
+          emit: (event) => this.processEvents(event),
+          signal,
+        });
+        return;
+      }
       await runAgentLoop(
         messages,
         this.createContextSnapshot(),
@@ -559,6 +571,16 @@ export class Agent {
 
   private async runContinuation(): Promise<void> {
     await this.runWithLifecycle(async (signal) => {
+      const runner = getAgentLoopRunner(this);
+      if (runner) {
+        await runner({
+          context: this.createContextSnapshot(),
+          config: this.createLoopConfig(),
+          emit: (event) => this.processEvents(event),
+          signal,
+        });
+        return;
+      }
       await runAgentLoopContinue(
         this.createContextSnapshot(),
         this.createLoopConfig(),

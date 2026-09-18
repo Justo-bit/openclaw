@@ -2599,6 +2599,7 @@
                     "pages": [
                       "gateway/clients",
                       "gateway/external-apps",
+                      "gateway/builtin-runtime",
                       "gateway/protocol",
                       {
                         "group": "Gateway protocol",
