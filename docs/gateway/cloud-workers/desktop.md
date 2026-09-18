@@ -30,6 +30,8 @@ The Gateway sends WebSocket keepalives on desktop observer and node desktop or p
 
 When another operator takes control, your viewer reconnects in view-only mode. The notice identifies the new controller by their authenticated profile name, or their authenticated user ID when no profile name is set. Connections without an authenticated user identity show a generic takeover notice.
 
+Before downgrading to a release without native desktop support, stop macOS and Windows cloud workers using the supporting release. Older releases cannot fully reopen their desktop metadata. If you already downgraded, return to a supporting release to stop those workers first.
+
 ## macOS image prerequisites
 
 Prepare a macOS 15 or later worker image with `/Applications/OpenClawCloudWorker.app`, signed with a Developer ID Application identity and containing its bundled CUA driver. Build the dedicated app from a source checkout on macOS:
