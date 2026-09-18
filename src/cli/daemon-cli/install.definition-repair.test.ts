@@ -118,29 +118,53 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function fixture(edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root") {
+async function fixture(
+  edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root",
+  layout: "direct" | "user-prefix shim" = "direct",
+) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
   const state = path.join(home, ".openclaw");
-  native.root = path.join(home, "candidate");
+  const cliBinDir = layout === "user-prefix shim" ? path.join(home, "npm", "bin") : undefined;
+  native.root = cliBinDir
+    ? path.join(home, "npm", "lib", "node_modules", "openclaw")
+    : path.join(home, "candidate");
   await fs.mkdir(path.join(native.root, "dist"), { recursive: true, mode: 0o700 });
   await fs.mkdir(state, { mode: 0o700 });
   const entry = path.join(native.root, "dist", "index.js");
   await fs.writeFile(entry, "// isolated package identity\n");
   await fs.writeFile(
     path.join(native.root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2026.9.5",
+      ...(cliBinDir ? { bin: { openclaw: "openclaw.mjs" } } : {}),
+    }),
   );
   process.env = {
     NODE_ENV: "test",
     HOME: home,
     USERPROFILE: home,
-    PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    PATH: [cliBinDir, path.dirname(process.execPath), "/usr/bin", "/bin"]
+      .filter(Boolean)
+      .join(path.delimiter),
     OPENCLAW_STATE_DIR: state,
     OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   };
-  process.argv = [process.execPath, entry];
+  let initialCli = entry;
+  if (cliBinDir) {
+    await fs.mkdir(cliBinDir, { recursive: true, mode: 0o700 });
+    const publicEntry = path.join(native.root, "openclaw.mjs");
+    await fs.writeFile(publicEntry, '#!/usr/bin/env node\nimport "./dist/index.js";\n', {
+      mode: 0o700,
+    });
+    initialCli = path.join(cliBinDir, "openclaw");
+    await fs.symlink(publicEntry, initialCli);
+    expect(await fs.realpath(initialCli)).toBe(publicEntry);
+    expect(await fs.realpath(initialCli)).not.toBe(await fs.realpath(entry));
+  }
+  process.argv = [process.execPath, initialCli];
   await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(native.config));
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   mockSystemAccountHome();
@@ -183,6 +207,11 @@ async function fixture(edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreig
     existingEnvironment: existing.environment,
     config: { gateway: { mode: "local", port: 19137 } },
   });
+  if (cliBinDir) {
+    expect(plan.environment.PATH?.split(path.delimiter)).toContain(cliBinDir);
+  }
+  // The updater invokes the candidate's dist entry after the initial CLI install.
+  process.argv = [process.execPath, entry];
   native.source =
     edit === "foreign-unit"
       ? path.join(home, "foreign-unit", "gateway.service")
@@ -230,7 +259,13 @@ async function fixture(edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreig
   });
   const run = createUpdateRun({ trigger: "cli" });
   process.env.OPENCLAW_UPDATE_RUN_ID = run.runId;
-  return { original, source: native.source, runId: run.runId };
+  return {
+    original,
+    source: native.source,
+    runId: run.runId,
+    servicePath: plan.environment.PATH,
+    cliBinDir,
+  };
 }
 
 function response() {
@@ -246,10 +281,10 @@ function response() {
   return result;
 }
 
-it.skipIf(process.platform === "win32")(
-  "repairs a published-driver unit through the candidate installer with receipt and warning history",
-  async () => {
-    const f = await fixture();
+it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as const)(
+  "repairs a published-driver unit through the candidate installer with receipt and warning history (%s)",
+  async (layout) => {
+    const f = await fixture(undefined, layout);
     await runDaemonInstall({ force: true, json: true }).catch((error: unknown) => {
       if (!(error instanceof Error) || error.message !== "fixture-exit:1") {
         throw error;
@@ -264,6 +299,11 @@ it.skipIf(process.platform === "win32")(
     expect(changed).toContain("KillMode=mixed");
     expect(changed).toContain("--max-old-space-size=4096");
     expect(changed).toContain("OPERATOR_SETTING=retained");
+    const repaired = await native.command();
+    expect(repaired.environment?.PATH).toBe(f.servicePath);
+    if (f.cliBinDir) {
+      expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
+    }
     const backups = (await fs.readdir(path.dirname(f.source))).filter((file) =>
       file.startsWith(`${path.basename(f.source)}.reconcile-`),
     );
