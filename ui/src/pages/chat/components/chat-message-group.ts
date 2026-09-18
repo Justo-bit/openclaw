@@ -246,7 +246,7 @@ export function renderActivityGroup(
   }
   const groupSummaryLabel = runningOperation
     ? `${runningOperation.title}…`
-    : summarizeToolGroup(visibleActivity);
+    : summarizeToolGroup(visibleActivity, { includeFailureCount: false });
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;

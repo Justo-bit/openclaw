@@ -174,6 +174,7 @@ export function renderWorkGroupSummary(
         item.groups.flatMap((group) =>
           group.messages.flatMap(({ message }) => readPreparedActivity(message)),
         ),
+        { includeFailureCount: false },
       )
     : duration
       ? t("chat.workRun.workedFor", { duration })
