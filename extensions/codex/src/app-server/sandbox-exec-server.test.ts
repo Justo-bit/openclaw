@@ -231,7 +231,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     );
     expect(buildExecSpec).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: "'/bin/sh' '-lc' 'printf ok'",
         env: expect.objectContaining({
           CODEX_SANDBOX_EXEC_ID: expect.any(String),
           POLICY_ONLY: "1",

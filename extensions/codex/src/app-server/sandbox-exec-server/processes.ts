@@ -123,7 +123,8 @@ async function runProcess(
   throwIfProcessStartCancelled(managed);
   const remoteExec = prepareSandboxChildExec(backend, params.env);
   const execSpec = await backend.buildExecSpec({
-    command: buildRemoteCommand(params.argv),
+    // Preserve the process identity and signal status of the requested argv.
+    command: `exec ${buildRemoteCommand(params.argv)}`,
     workdir: params.cwd,
     env: remoteExec.env,
     usePty: managed.tty,
