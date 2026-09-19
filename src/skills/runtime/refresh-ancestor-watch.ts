@@ -62,7 +62,7 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
       return;
     }
     current.ready = true;
-    for (const target of [...subscriptions]) {
+    for (const target of Array.from(subscriptions)) {
       if (isCurrent() && subscriptions.has(target)) {
         target.ready();
       }
@@ -72,7 +72,7 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
     if (!isCurrent()) {
       return;
     }
-    for (const target of [...subscriptions]) {
+    for (const target of Array.from(subscriptions)) {
       if (
         isCurrent() &&
         subscriptions.has(target) &&
@@ -86,7 +86,7 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
     if (!isCurrent()) {
       return;
     }
-    for (const target of [...subscriptions]) {
+    for (const target of Array.from(subscriptions)) {
       if (isCurrent() && subscriptions.has(target)) {
         target.raw(event, rawPath, details);
       }
@@ -99,7 +99,7 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
     current.ready = false;
     const watchError = toErrorObject(error, "Skills ancestor watcher failed");
     current.error = watchError;
-    for (const target of [...subscriptions]) {
+    for (const target of Array.from(subscriptions)) {
       if (isCurrent() && subscriptions.has(target)) {
         target.error(watchError);
       }

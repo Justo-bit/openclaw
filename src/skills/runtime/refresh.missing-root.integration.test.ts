@@ -272,8 +272,8 @@ describe("shared missing skill ancestors", () => {
       await writeSkill(first, "first-proof");
       await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
       expect(changes).not.toContain(second.workspaceDir);
-      const relocated = path.join(root, "left-away");
-      await fs.rename(path.join(root, "left"), relocated);
+      // Windows cannot rename an ancestor with live descendant directory watches.
+      await fs.rm(path.join(root, "left"), { recursive: true });
       await expect.poll(() => read(first), { timeout: 3_000 }).toEqual([]);
       // Retiring one logical workspace must not retire the shared missing-root observer.
       ensureSkillsWatcher({
@@ -281,6 +281,12 @@ describe("shared missing skill ancestors", () => {
         config: { skills: { load: { watch: false } } },
       });
       await writeSkill(second, "remaining-proof");
+      await expect.poll(() => read(second), { timeout: 3_000 }).toContain("remaining-proof");
+      const skillFile = path.join(second.sourceRoot, "remaining-proof", "SKILL.md");
+      const renamedSkillFile = path.join(second.sourceRoot, "remaining-proof", "SKILL.saved");
+      await fs.rename(skillFile, renamedSkillFile);
+      await expect.poll(() => read(second), { timeout: 3_000 }).toEqual([]);
+      await fs.rename(renamedSkillFile, skillFile);
       await expect.poll(() => read(second), { timeout: 3_000 }).toContain("remaining-proof");
       await fs.rm(path.join(root, "right"), { recursive: true });
       await expect.poll(() => read(second), { timeout: 3_000 }).toEqual([]);
