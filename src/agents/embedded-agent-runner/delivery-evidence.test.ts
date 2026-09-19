@@ -5,6 +5,8 @@ import {
   collectDeliveredMediaUrls,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
+  hasCommittedOutboundDeliveryEvidence,
   getAutomaticDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleOutboundDeliveryEvidence,
@@ -50,6 +52,14 @@ describe("explicit final source-reply delivery evidence", () => {
         didDeliverSourceReplyViaMessageTool: true,
       }),
     ).toBe(true);
+  });
+  it("does not treat accepted resource work as a delivered terminal reply", () => {
+    const result = {
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
+      successfulCronAdds: 1,
+    };
+    expect(hasCompletedTerminalDeliveryEvidence(result)).toBe(false);
+    expect(hasCommittedOutboundDeliveryEvidence(result)).toBe(true);
   });
 });
 
