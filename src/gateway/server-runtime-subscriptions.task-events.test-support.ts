@@ -4,6 +4,7 @@ import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { getTaskById } from "../tasks/runtime-internal.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import {
   createTaskFixture,
@@ -13,6 +14,7 @@ import {
   reloadTaskRegistryFromStoreAsync,
 } from "../tasks/task-registry.test-support.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+import { runTaskHandler } from "./server-methods/tasks.test-helpers.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import {
   readTaskUpserts,
@@ -177,6 +179,56 @@ export function registerTaskEventSubscriptionTests(
     await vi.advanceTimersByTimeAsync(1_000);
     expect(broadcast).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["succeeded", "completed"],
+    ["cancelled", "cancelled"],
+  ] as const)(
+    "keeps %s publication and authoritative reads fresher than delayed final activity",
+    async (status, wireStatus) => {
+      const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+      unsubs = start({ broadcast });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const task = createTaskFixture("subagent", {
+        ...sessionTaskDefaults,
+        childSessionKey: "agent:main:subagent:delayed-final",
+        runId: "run-delayed-final",
+        task: "Finish after delayed activity",
+        status: "running",
+      });
+      broadcast.mockClear();
+
+      const endedAt = 11_000;
+      vi.setSystemTime(12_000);
+      emitAgentEvent({
+        runId: task.runId!,
+        stream: "assistant",
+        data: { text: "Final activity received after the run ended" },
+      });
+      finishTaskFixture({ taskId: task.taskId, status, endedAt });
+
+      const publications = readTaskUpserts(broadcast).map((event) => event.task);
+      const listed = await runTaskHandler("tasks.list", {});
+      const detail = await runTaskHandler("tasks.get", { taskId: task.taskId });
+      expect(publications.map((snapshot) => snapshot.status)).toEqual(["running", wireStatus]);
+      expect(publications[0]?.execution?.lastActivityAt).toBe(12_000);
+      expect(publications[1]).not.toHaveProperty("lastActivity");
+      expect(getTaskById(task.taskId)).toMatchObject({ status, endedAt, lastEventAt: endedAt });
+      expect(listed.calls[0]?.[0]).toBe(true);
+      expect(detail.calls[0]?.[0]).toBe(true);
+      expect(listed.payload?.tasks).toEqual([
+        expect.objectContaining({ id: task.taskId, status: wireStatus, updatedAt: endedAt }),
+      ]);
+      expect(detail.payload?.task).toMatchObject({
+        id: task.taskId,
+        status: wireStatus,
+        updatedAt: endedAt,
+      });
+      expect(publications.map((snapshot) => snapshot.updatedAt)).toEqual([10_000, endedAt]);
+    },
+  );
 
   it("suppresses identical summaries and refreshes them after restore", async () => {
     const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
