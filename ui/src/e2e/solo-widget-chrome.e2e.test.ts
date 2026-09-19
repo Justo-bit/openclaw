@@ -128,7 +128,7 @@ suite.define(() => {
         const itemFonts = await menu
           .locator("wa-dropdown-item")
           .evaluateAll((items) => items.map((item) => getComputedStyle(item).font));
-        expect(new Set(itemFonts).size).toBe(1);
+        expect([...new Set(itemFonts)]).toHaveLength(1);
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-header-menu.png") });
         const resized = { ...board, revision: 2 };
         await gateway.setMethodResponse("board.update", resized);
