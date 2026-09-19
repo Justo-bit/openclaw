@@ -10,6 +10,7 @@ import {
   createRenderTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   mountTestTranscript,
@@ -19,11 +20,7 @@ import {
   type TestContentRow,
 } from "./components/chat-transcript.test-support.ts";
 
-beforeEach(() => {
-  // Own mount-time animation frames and scroll-idle callbacks on the same clock.
-  vi.useFakeTimers();
-  installTranscriptDomMocks();
-});
+beforeEach(installTranscriptDomMocks);
 afterEach(() => {
   // Disconnect the real pane while its observers and timers still exist.
   document.body.replaceChildren();
@@ -35,6 +32,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
   "does not request older history or take reader ownership after %s",
   async (movement) => {
     transcriptDomState.measuredRowHeight = 120;
+    // Startup frames and the scroll idle debounce must share the controlled clock.
+    vi.useFakeTimers();
     const context = createInitializationContext();
     context.config.subscribe = () => () => {};
     const pane = createRenderTestChatPane();
@@ -63,7 +62,6 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       content: html`<div>Message ${index}</div>`,
     }));
     const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
-    // Complete the helper's deferred row prune without switching clocks mid-mount.
     await vi.advanceTimersByTimeAsync(0);
     const { container, renderRows, transcript } = await mounting;
     let maximum = 1400;
@@ -83,6 +81,12 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     for (const observer of resizeObservers) {
       observer.emitTarget(container, 800, 600);
     }
+    let scrolling: boolean | undefined;
+    const stopObserving = subscribeTranscriptScroll(container, (event) => {
+      if (event.type === "offset") {
+        scrolling = event.scrolling;
+      }
+    });
     container.scrollTop = 800;
     container.dispatchEvent(new Event("scroll"));
     renderRows(rows);
@@ -101,7 +105,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     }
     vi.stubGlobal("IntersectionObserver", HistoryIntersectionObserver);
     await vi.advanceTimersByTimeAsync(150);
-    expect(container.scrollTop).toBe(800);
+    stopObserving();
+    expect(scrolling).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(state.chatFollowLocked).toBe(false);
 

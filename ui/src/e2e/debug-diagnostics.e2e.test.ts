@@ -349,6 +349,8 @@ suite.define(() => {
         await cpuTrigger.focus();
         await expect.poll(() => cpuDetail.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
+        // Do not mistake the desktop hide animation for the next mobile reveal.
+        await expect.poll(() => cpuDetail.isVisible()).toBe(false);
         await page.setViewportSize({ height: 844, width: 390 });
         const mobileWidget = await widget.boundingBox();
         expect(mobileWidget).not.toBeNull();
@@ -367,6 +369,7 @@ suite.define(() => {
         await cpuTrigger.tap();
         await expect.poll(() => cpuDetail.isVisible()).toBe(true);
         const detailBounds = await cpuDetail.boundingBox();
+        expect(detailBounds).not.toBeNull();
         expect(detailBounds!.x).toBeGreaterThanOrEqual(0);
         expect(detailBounds!.x + detailBounds!.width).toBeLessThanOrEqual(390);
         expect(detailBounds!.y).toBeGreaterThanOrEqual(0);

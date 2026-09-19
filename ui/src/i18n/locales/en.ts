@@ -1129,6 +1129,10 @@ export const en: TranslationMap & {
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
     unsentDraft: "Unsent draft",
+    workspaceKinds: {
+      worktree: "Worktree",
+      checkout: "Checkout",
+    },
     noSessions: "No sessions found.",
     noActiveSessions: "No active sessions.",
     noArchivedSessions: "No archived sessions.",
