@@ -64,19 +64,14 @@ describe("PDF document extractor worker", () => {
     await extractor.extract(request);
     const abort = new AbortController();
     const reason = new Error("owning turn cancelled");
-    const timer = setTimeout(() => abort.abort(reason), 0);
-    try {
-      await expect(
-        extractor.extract({
-          ...request,
-          minTextChars: 10_000,
-          maxPixels: 4_000_000,
-          signal: abort.signal,
-        }),
-      ).rejects.toBe(reason);
-    } finally {
-      clearTimeout(timer);
-    }
+    const extraction = extractor.extract({
+      ...request,
+      minTextChars: 10_000,
+      maxPixels: 4_000_000,
+      signal: abort.signal,
+    });
+    abort.abort(reason);
+    await expect(extraction).rejects.toBe(reason);
     await expect(extractor.extract({ ...request, signal: abort.signal })).rejects.toBe(reason);
     await expect(extractor.extract(request)).resolves.toMatchObject({
       text: expect.stringContaining("First PDF page"),
