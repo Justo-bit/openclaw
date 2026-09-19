@@ -6,6 +6,14 @@ import { expect, vi } from "vitest";
 import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
+export function isLegacyUpdateDoctorCommand(argv: readonly string[]) {
+  return (
+    argv[2] === "doctor" &&
+    argv[3] === "--non-interactive" &&
+    (argv.length === 4 || argv[4] === "--fix")
+  );
+}
+
 // Native effects/results remain fixture-owned. Preserve real child admission,
 // PID binding and settlement instead of bypassing the update executor.
 export async function createUpdateCommandTransportFixture(transport: {
