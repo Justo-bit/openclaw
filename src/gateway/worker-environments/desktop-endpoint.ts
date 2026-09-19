@@ -19,9 +19,7 @@ function isAbsoluteDesktopPath(value: unknown): value is string {
   );
 }
 
-export function normalizeWorkerDesktopEndpoint(
-  value: WorkerDesktopEndpoint,
-): WorkerDesktopEndpoint {
+export function normalizeWorkerDesktopEndpoint(value: unknown): WorkerDesktopEndpoint {
   if (!isRecord(value) || value.protocol !== "rfb") {
     throw new Error('Worker environment desktop protocol must be "rfb"');
   }
@@ -34,7 +32,12 @@ export function normalizeWorkerDesktopEndpoint(
   ) {
     throw new Error("Worker environment desktop endpoint contains unknown fields");
   }
-  if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
+  if (
+    typeof value.port !== "number" ||
+    !Number.isSafeInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
     throw new Error("Worker environment desktop port must be an integer from 1 through 65535");
   }
   const passwordFilePath = value.passwordFilePath;

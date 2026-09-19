@@ -71,7 +71,7 @@ describe("worker desktop endpoint", () => {
         protocol: "rfb",
         port: 5900,
         apps,
-      } as WorkerDesktopEndpoint),
+      }),
     ).toThrow(error);
   });
 
@@ -113,7 +113,7 @@ describe("worker desktop endpoint", () => {
         normalizeWorkerDesktopEndpoint({
           ...desktop,
           allowsResize: "false",
-        } as WorkerDesktopEndpoint),
+        }),
       ).toThrow("allowsResize must be a boolean");
     },
   );
