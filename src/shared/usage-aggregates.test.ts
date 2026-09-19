@@ -306,12 +306,14 @@ describe("shared/usage-aggregates", () => {
       totalTokens: 30,
       totalCost: 3,
       activityDates: [dates[1], dates[0], dates[1]],
-      dailyBreakdown: dates.slice(0, 2).map((date, index) => ({
-        ...usage({ input: (index + 1) * 10, totalTokens: (index + 1) * 10, totalCost: index + 1 }),
-        date,
-        tokens: (index + 1) * 10,
-        cost: index + 1,
-      })),
+      dailyBreakdown: dates
+        .slice(0, 2)
+        .map((date, index) =>
+          Object.assign(
+            usage({ input: (index + 1) * 10, totalTokens: (index + 1) * 10, totalCost: index + 1 }),
+            { date, tokens: (index + 1) * 10, cost: index + 1 },
+          ),
+        ),
       dailyMessageCounts: [
         {
           date: dates[2],

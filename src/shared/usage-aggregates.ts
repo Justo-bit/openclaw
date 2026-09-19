@@ -250,7 +250,7 @@ export function createUsageAggregateAccumulator() {
           a.date.localeCompare(b.date),
         ),
         sessionActivity: Array.from(sessionActivity.values()).toSorted((a, b) =>
-          a.dates.join().localeCompare(b.dates.join()),
+          a.dates.join(",").localeCompare(b.dates.join(",")),
         ),
       })).toSorted(
         (a, b) =>
