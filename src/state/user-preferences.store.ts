@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { USER_PREFS_PROFILE_KEY_LIMIT } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -131,8 +132,25 @@ export function readUserPreferences(
 export function writeUserPreferences(
   sqlite: DatabaseSync,
   profileId: string,
-  { serialized, deletionKeys }: PreparedUserPreferenceUpdate,
+  { serialized, deletionKeys, expected }: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
+  if (expected.length > 0) {
+    const current = readUserPreferences(
+      sqlite,
+      profileId,
+      expected.map(({ prefKey }) => prefKey),
+    );
+    for (const { prefKey, valueJson } of expected) {
+      if (
+        valueJson === null
+          ? Object.hasOwn(current, prefKey)
+          : !Object.hasOwn(current, prefKey) ||
+            !isDeepStrictEqual(current[prefKey], JSON.parse(valueJson))
+      ) {
+        return err({ code: "conflict" });
+      }
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   const currentKeys = readPreferenceKeys(sqlite, profileId);
   const nextKeys = new Set(currentKeys);

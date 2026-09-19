@@ -884,6 +884,7 @@ dispatch_linux_mirror() {
 
 dispatch_linux_release_assets() {
   local release_train release_json workflow_sha request_run_id publication_state
+  local request_page requests existing_request
   release_train="$(node --input-type=module - "${BASH_SOURCE[0]%/*}/release-version.mjs" "${RELEASE_TAG}" <<'NODE'
 import { pathToFileURL } from "node:url";
 const { parseReleaseVersion, classifyReleaseTrain } = await import(pathToFileURL(process.argv[2]).href);
@@ -912,6 +913,28 @@ NODE
     jq -n --arg tag "$RELEASE_TAG" '{tag: $tag, state: "published-assets-reused"}' \
       > "$RUNNER_TEMP/linux-dispatch.json"
     echo "- Linux: existing same-tag AppImage, Debian package, signed updater manifest, and checksums verified; no build requested." >> "$GITHUB_STEP_SUMMARY"
+    return 0
+  fi
+  # A successful request hands ownership to the independent Linux builder.
+  # Search every page without API filters, whose results stop at 1,000 runs.
+  for ((request_page=1; ; request_page++)); do
+    requests="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/linux-app-release-request.yml/runs?per_page=100&page=${request_page}")" || return 1
+    existing_request="$(jq -c --arg title "Linux App Release Request [${RELEASE_TAG}] desktop=" '
+      first(.workflow_runs[] | select(
+        .head_branch == "main" and .event == "workflow_dispatch" and
+        (.display_title == ($title + "false") or .display_title == ($title + "true")) and
+        (.status != "completed" or .conclusion == "success")
+      )) // empty' <<< "$requests")" || return 1
+    if [[ -n "$existing_request" || "$(jq '.workflow_runs | length' <<< "$requests")" -lt 100 ]]; then
+      break
+    fi
+  done
+  if [[ -n "$existing_request" ]]; then
+    request_run_id="$(jq -r '.id' <<< "$existing_request")"
+    jq --arg tag "$RELEASE_TAG" \
+      '{tag: $tag, state: "request-reused", requestRunId: (.id | tostring), workflowSha: .head_sha}' \
+      <<< "$existing_request" > "$RUNNER_TEMP/linux-dispatch.json"
+    echo "- Linux: existing same-tag request reused; no duplicate build requested. Request: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${request_run_id}; inspect Linux App Release for publication status and recovery." >> "$GITHUB_STEP_SUMMARY"
     return 0
   fi
   workflow_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \

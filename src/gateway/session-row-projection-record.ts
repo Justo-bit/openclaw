@@ -10,6 +10,7 @@ import {
   type readSessionRowFacts,
 } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -20,6 +21,7 @@ export type Row = {
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
   entry?: SessionEntry;
+  selection: ReturnType<typeof readSessionListSelectionFacts>;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
   materializedSequence?: number;
   profileRevision?: number;
@@ -98,6 +100,7 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
   return {
     ...target,
     storedEntry: entry,
+    selection: readSessionListSelectionFacts(target.key, entry),
     parents: new Set(),
     membership: new Set(),
     generation: Symbol("row"),
@@ -317,6 +320,8 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     entry,
+    // Selection metadata survives archive dematerialization and refreshes with the entry.
+    selection: readSessionListSelectionFacts(row.key, entry),
     parents,
     generation,
     hasBoard:
