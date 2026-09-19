@@ -399,6 +399,7 @@
     "scripts/freebsd-service-inspect.mjs",
     "scripts/lib/freebsd-service-discovery.d.mts",
     "scripts/lib/freebsd-service-discovery.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
     "scripts/install-cli.sh",
     "scripts/install.ps1",
     "scripts/prepare-git-hooks.mjs",

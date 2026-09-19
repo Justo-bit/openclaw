@@ -10,6 +10,7 @@ import { resetProcessRegistryForTests } from "../agents/bash-process-registry.te
 import * as nativeExecution from "../agents/subagents/registry/subagent-execution-observation.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { claimAgentRunContext, resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-records.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { clearTaskActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
@@ -57,6 +58,7 @@ function registerRun(record: TaskRecord, overrides: Partial<SubagentRunRecord> =
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
+  resetAgentRunRegistryForTest();
   for (const id of taskIds) {
     clearTaskActivity(id);
   }
@@ -69,6 +71,26 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+it.each(["agent:main:dashboard:stored", "global"])(
+  "resolves stored CLI task ownership without agentId for %s",
+  (sessionKey) => {
+    const runId = "stored-cli";
+    const record: TaskRecord = {
+      ...task(runId, "running"),
+      runtime: "cli",
+      childSessionKey: sessionKey,
+      detail: undefined,
+    };
+    for (const agentId of ["main", "other"]) {
+      resetAgentRunRegistryForTest();
+      claimAgentRunContext(runId, { sessionKey, agentId }, { trackOwner: true, ownsContext: true });
+      expect(getTaskExecutionObservation(record)).toEqual({
+        state: agentId === "main" ? "running" : "unknown",
+      });
+    }
+  },
+);
 
 it("projects fixed task statuses without observing retained native executions", () => {
   const statuses = ["queued", "succeeded", "failed", "timed_out", "cancelled", "lost"] as const;

@@ -9,6 +9,10 @@ import {
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  markSqliteInspectionOperation,
+  withSqliteInspectionOperation,
+} from "./sqlite-error-diagnostics.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
@@ -60,6 +64,7 @@ type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
 export class SqliteSourceChangedError extends Error {}
 
 function sqliteSnapshotStagingError(tempDir: string, cause: unknown, allocation = false): unknown {
+  markSqliteInspectionOperation(cause, "snapshot");
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
     const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
@@ -446,7 +451,9 @@ export async function createOnlineReadOnlyBackup(
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
+    const source = withSqliteInspectionOperation("source", () =>
+      openNodeSqliteDatabase(pathname, { readOnly: true }),
+    );
     try {
       source.exec(
         `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
@@ -658,7 +665,7 @@ export function inspectSqliteSchemaHeaderInProcess(
     if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
       let readError: unknown;
       try {
-        return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+        return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
           try {
             setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
             return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);
