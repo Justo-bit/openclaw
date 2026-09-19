@@ -278,7 +278,9 @@ describe("shared missing skill ancestors", () => {
           // Drain actual debounce/stability work, including timers chained by its
           // continuations. Keep native time and watchers; do not sleep past a guess.
           await Promise.all(Array.from(pendingTimers.values(), ({ settled }) => settled));
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(watcherErrors).toEqual([]);
           if (
             pendingTimers.size === 0 &&
