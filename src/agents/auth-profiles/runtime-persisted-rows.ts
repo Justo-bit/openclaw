@@ -13,6 +13,17 @@ export class AuthProfileRuntimeReadStaleError extends Error {
   }
 }
 
+// Worker rows contain JSON values; normalization builds each caller's mutable store.
+function freezeRows(value: unknown): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return;
+  }
+  Object.freeze(value);
+  for (const child of Object.values(value)) {
+    freezeRows(child);
+  }
+}
+
 // Include WAL and rollback-journal writes from other processes, without opening
 // SQLite (which could release a host writer's POSIX locks).
 function readIdentity(databasePath: string): string {
@@ -58,7 +69,7 @@ export function createRuntimeAuthProfileRowsCache(
           const identity = readIdentity(databasePath);
           const entry = entries.get(databasePath);
           if (entry?.identity === identity && entry.revision === revision.rows) {
-            return structuredClone(entry.rows);
+            return entry.rows;
           }
           entries.delete(databasePath);
           // Only completed, certified reads can serve another caller's later snapshot.
@@ -71,14 +82,14 @@ export function createRuntimeAuthProfileRowsCache(
             revisionAtPath(databasePath).rows === revision.rows &&
             readIdentity(databasePath) === identity
           ) {
+            freezeRows(rows);
             entries.set(databasePath, { identity, revision: revision.rows, rows });
             // Bound retained credential owners; eviction never changes read authority.
             while (entries.size > 64) {
               entries.delete(entries.keys().next().value!);
             }
           }
-          // Host overlays and callers may mutate their view, never the retained rows.
-          return structuredClone(rows);
+          return rows;
         },
       };
     },

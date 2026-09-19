@@ -33,6 +33,7 @@ import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
+  prepareSessionSharingTargets,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
@@ -94,7 +95,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       : undefined;
     const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-    const canSearchSessionKey = (sessionKey: string) => {
+    const canSearchSessionKey = (
+      sessionKey: string,
+      prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
+    ) => {
       if (
         isIncognitoSessionKey(sessionKey) &&
         !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
@@ -104,12 +108,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       if (!roleVisibilityFilter) {
         return true;
       }
-      const target = resolveSessionSharingTarget({
-        cfg,
-        sessionKey,
-        agentId,
-        targetDiscoveryCache,
-      });
+      if (prepared && !prepared.ok) {
+        throw prepared.error;
+      }
+      const target = prepared
+        ? prepared.value
+        : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
       return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
     };
     if (requestedAgentId && !params.sessionKeys && configured) {
@@ -130,7 +134,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 : resolveSessionStoreAgentId(cfg, sessionKey);
             return sessionAgentId === agentId;
           })
-    )?.filter(canSearchSessionKey);
+    )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
     const searchTargets = configured
       ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
       : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
@@ -144,8 +148,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
-            ? withSessionEntryReadOnlyScope(target, () =>
-                listSessionEntriesReadOnly({
+            ? withSessionEntryReadOnlyScope(target, () => {
+                const keys = listSessionEntriesReadOnly({
                   agentId: target.agentId,
                   storePath: target.storePath,
                   projection: "list",
@@ -155,12 +159,26 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   .filter((sessionKey) => {
                     // A shared physical store can include rows owned by another agent.
                     const parsed = parseAgentSessionKey(sessionKey);
-                    if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-                      return false;
-                    }
-                    return canSearchSessionKey(sessionKey);
-                  }),
-              )
+                    return !parsed || normalizeAgentId(parsed.agentId) === agentId;
+                  });
+                const prepared = roleVisibilityFilter
+                  ? prepareSessionSharingTargets({
+                      cfg,
+                      targets: keys
+                        .filter((sessionKey) => !isIncognitoSessionKey(sessionKey))
+                        .map((sessionKey) => ({ sessionKey, agentId })),
+                    })
+                  : [];
+                let ordinal = 0;
+                return keys.filter((sessionKey) => {
+                  // Incognito checks retain their scalar lookup and place in the error order.
+                  const sharing =
+                    roleVisibilityFilter && !isIncognitoSessionKey(sessionKey)
+                      ? prepared[ordinal++]
+                      : undefined;
+                  return canSearchSessionKey(sessionKey, sharing);
+                });
+              })
             : undefined);
         if (targetSessionKeys?.length === 0) {
           return [];
