@@ -1,5 +1,7 @@
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
+import { getActiveBackgroundExecSession } from "../agents/bash-process-registry.js";
 import { getSubagentExecutionObservation } from "../agents/subagents/registry/subagent-execution-observation.js";
+import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { readTaskBackingInstance } from "./task-backing-records.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
@@ -28,6 +30,23 @@ export function getTaskExecutionObservation(
       ...(activity?.lastActivityAt !== undefined
         ? { lastActivityAt: activity.lastActivityAt }
         : {}),
+    };
+  }
+  if (isBackgroundExecTask(task)) {
+    const process = task.sourceId ? getActiveBackgroundExecSession(task.sourceId) : undefined;
+    // Process ids may be reused after retention/restart; the recorded launch and
+    // session must still match. Silence alone never proves a stopped or waiting command.
+    if (!process || process.startedAt !== task.startedAt || process.sessionKey !== task.ownerKey) {
+      return { state: "unknown" };
+    }
+    const finalizing = process.finalizing || process.processActivity?.resultSettled;
+    return {
+      state: finalizing ? "waiting" : "running",
+      ...(finalizing ? { wait: { kind: "external" } as const } : {}),
+      lastActivityAt: Math.max(
+        process.processActivity?.lastOutputAtMs ?? process.startedAt,
+        activity?.lastActivityAt ?? 0,
+      ),
     };
   }
   const backing = readTaskBackingInstance(task.detail);

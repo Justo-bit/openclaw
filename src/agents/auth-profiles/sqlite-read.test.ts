@@ -18,6 +18,7 @@ vi.mock("../../infra/sqlite-readonly-worker.js", async (importOriginal) => ({
 const rows: AuthProfileRowRead = {
   store: { status: "readable", raw: { version: 1, profiles: {} } },
   state: { status: "missing", reason: "row" },
+  cacheable: true,
 };
 const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
 function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
@@ -56,6 +57,14 @@ afterEach(async () => {
 });
 
 describe("prepared auth profile row reads", () => {
+  it("retains revocable read authority even when persisted rows come from a cache", async () => {
+    const reader = prepare();
+    reader.assertCurrent();
+    expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
+    await Promise.all(resources.revokeAgentDatabaseResources({ path: "/fixture/auth.sqlite" }));
+    expect(() => reader.assertCurrent()).toThrow("Auth profile read owner was revoked");
+    expect(child.read).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     "retains failed snapshot cleanup for disposal retry (read failure: %s)",
     async (failRead) => {

@@ -256,7 +256,6 @@ extensions/copilot/src/sdk-loader.ts	2
 extensions/copilot/src/tool-bridge.ts	6
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/crabbox/src/crabbox-worker-inspect.ts	3
-extensions/crabbox/src/crabbox-worker-provider.ts	1
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
@@ -599,7 +598,6 @@ extensions/logbook/src/config.ts	1
 extensions/logbook/src/node-host.ts	1
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
-extensions/matrix/src/approval-auth.ts	1
 extensions/matrix/src/approval-handler.runtime.ts	8
 extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
@@ -1055,7 +1053,7 @@ extensions/signal/src/send.ts	1
 extensions/signal/src/shared.ts	1
 extensions/signal/src/signal-ingress.ts	2
 extensions/slack/src/accounts.ts	6
-extensions/slack/src/action-runtime.ts	7
+extensions/slack/src/action-runtime.ts	5
 extensions/slack/src/actions.ts	9
 extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
@@ -1380,7 +1378,7 @@ packages/acp-core/src/runtime/session-identity.ts	2
 packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
-packages/agent-core/src/harness/compaction/compaction.ts	2
+packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	14
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
@@ -3226,7 +3224,7 @@ src/plugins/managed-npm-retention.ts	4
 src/plugins/manifest-capability-normalizers.ts	3
 src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-registry.ts	2
-src/plugins/manifest-setup-normalizers.ts	5
+src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	6
 src/plugins/memory-runtime.ts	1
