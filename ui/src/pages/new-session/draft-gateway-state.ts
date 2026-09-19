@@ -11,17 +11,16 @@ import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
-  acquireDraftIdentityPreferences,
-  type DraftIdentityPreferences,
-} from "./draft-identity-preferences.ts";
+  DraftPreferenceState,
+  type SubmittedWorktreePreference,
+} from "./draft-preference-state.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
-  loadNewSessionPreference,
-  patchNewSessionPreference,
-  type NewSessionPreference,
-  type PaletteSessionPreference,
-} from "./preferences.ts";
+  acquirePaletteIdentityPreferences,
+  type PaletteIdentityPreferences,
+} from "./palette-identity-preferences.ts";
+import type { NewSessionPreference, PaletteSessionPreference } from "./preferences.ts";
 import {
   resolveSubmissionOutcomeReason,
   type SubmissionOutcomeReason,
@@ -85,7 +84,8 @@ export class DraftGatewayState {
   private cloudProfileRetryAttempt = 0;
   private cloudProfileRefresh: Promise<void> | null = null;
   private cloudProfileRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  private identityPreferences: DraftIdentityPreferences | undefined;
+  private readonly preferences: DraftPreferenceState;
+  private identityPreferences: PaletteIdentityPreferences | undefined;
   private stopPreferences: (() => void) | undefined;
 
   private readonly gatewayNameTask: Task<readonly unknown[], string>;
@@ -99,6 +99,21 @@ export class DraftGatewayState {
     private readonly read: () => DraftGatewaySnapshot,
     private readonly callbacks: DraftGatewayCallbacks,
   ) {
+    this.preferences = new DraftPreferenceState(
+      () => ({
+        source: this.gatewaySource,
+        client: this.gatewayClientValue,
+        gatewayUrl: this.gatewayUrlValue,
+        recoveryScope: this.gatewayRecoveryScopeValue,
+        bootId: this.gatewayBootIdValue,
+        connected: this.gatewayConnectedValue,
+        connectionEpoch: this.gatewayConnectionEpochValue,
+        data: this.read().data,
+        pendingPlacementSessionKey: this.read().pendingPlacement.sessionKey,
+        agentsHydrated: this.read().agentsHydrated,
+      }),
+      callbacks,
+    );
     this.gatewayNameTask = new Task(host, {
       args: () =>
         [
@@ -203,7 +218,7 @@ export class DraftGatewayState {
   }
 
   get preferenceLoading(): boolean {
-    return this.identityPreferences?.mode === "loading";
+    return this.preferences.loading || this.identityPreferences?.mode === "loading";
   }
 
   resolvedGroupCategory(): string | undefined {
@@ -318,6 +333,7 @@ export class DraftGatewayState {
         this.retryPendingCatalogTarget();
       }
     }
+    this.preferences.synchronize();
     this.synchronizeIdentityPreferences(snapshot.selfUser?.id);
     this.callbacks.requestUpdate();
   }
@@ -429,7 +445,7 @@ export class DraftGatewayState {
       });
   };
 
-  get preferenceState(): DraftIdentityPreferences | undefined {
+  get preferenceState(): PaletteIdentityPreferences | undefined {
     return this.identityPreferences;
   }
 
@@ -463,50 +479,40 @@ export class DraftGatewayState {
     ) {
       return null;
     }
-    const ordinary =
-      this.identityPreferences?.mode === "remote"
-        ? (this.identityPreferences.preferences[normalizeAgentId(agentId)] ?? null)
-        : loadNewSessionPreference(this.gatewayUrlValue, agentId);
+    const ordinary = this.preferences.readPreference(agentId);
+    if (this.callbacks.preferenceScope !== "palette") {
+      return ordinary;
+    }
     const palette = this.callbacks.readPalettePreference?.();
-    return palette?.agentId === normalizeAgentId(agentId)
-      ? { ...ordinary, ...palette.selection }
-      : ordinary;
+    // Name is one-use input belonging to the foreground draft, not a default
+    // the lightweight launcher can silently borrow or consume.
+    return {
+      ...ordinary,
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
+      worktreeName: "",
+    };
   }
 
-  persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreference) {
-    // Palette selections are one-off unless its explicit remember checkbox writes its own key.
+  capturePreferenceConsumption(
+    agentId: string,
+    workspace: string,
+    expected: SubmittedWorktreePreference,
+  ) {
+    if (this.callbacks.preferenceScope === "palette") {
+      return undefined;
+    }
+    return this.preferences.capturePreferenceConsumption(agentId, workspace, expected);
+  }
+
+  persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
     if (this.callbacks.preferenceScope === "palette") {
       return;
     }
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacement.sessionKey
-    ) {
-      return;
-    }
-    const agentId = normalizeAgentId(agentIdValue);
-    const nextPatch = { workspace, ...patch };
-    const preferences = this.identityPreferences;
-    if (!preferences) {
-      patchNewSessionPreference(this.gatewayUrlValue, agentId, nextPatch);
-      return;
-    }
-    const client = this.gatewayClientValue;
-    const hello = this.read().context?.gateway.snapshot.hello;
-    preferences.patch(
-      agentId,
-      nextPatch,
-      () =>
-        this.identityPreferences === preferences &&
-        this.gatewayConnectedValue &&
-        this.gatewayClientValue === client &&
-        this.read().context?.gateway.snapshot.hello === hello,
-    );
+    return this.preferences.persistPreference(agentId, workspace, patch);
   }
 
   disconnect() {
+    this.preferences.disconnect();
     this.stopPreferences?.();
     this.stopPreferences = undefined;
     this.identityPreferences = undefined;
@@ -582,8 +588,8 @@ export class DraftGatewayState {
       isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.get") === true &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "users.prefs.set") === true;
     const preferences =
-      client && hello && profileId && advertised
-        ? acquireDraftIdentityPreferences({
+      this.callbacks.preferenceScope === "palette" && client && hello && profileId && advertised
+        ? acquirePaletteIdentityPreferences({
             client,
             hello,
             profileId,

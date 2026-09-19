@@ -322,6 +322,7 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
   const entries: Record<string, unknown> = { [PREFS_MIGRATION_KEY]: true, ...initial };
   const writes: Record<string, unknown>[] = [];
   let reject = false;
+  let beforeSave = async (_patch: Record<string, unknown>) => {};
   const fixture = await mount({
     selfUser: { id: "alice" },
     agents: [
@@ -352,6 +353,7 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
         if (reject) {
           throw new Error("Preference save failed");
         }
+        await beforeSave(params.entries);
         for (const [key, value] of Object.entries(params.entries)) {
           if (value === null) {
             delete entries[key];
@@ -405,10 +407,132 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
     setReject: (value: boolean) => {
       reject = value;
     },
+    setBeforeSave: (callback: (patch: Record<string, unknown>) => Promise<void>) => {
+      beforeSave = callback;
+    },
   };
 }
 
 describe("palette-only remembered settings", () => {
+  it("never borrows or consumes the foreground draft's one-use worktree name", async () => {
+    const ordinary = { folder: "/workspace", worktree: true, worktreeName: "foreground-task" };
+    const fixture = await mountPreferences({
+      "new-session.v1:main": ordinary,
+      [PALETTE_PREFERENCE_KEY]: {
+        agentId: "main",
+        selection: { folder: "/workspace", worktree: true, worktreeName: "old-palette-name" },
+      },
+    });
+    await vi.waitFor(() => expect(fixture.place.worktreeName).toBe("foreground-task"));
+    fixture.host.draft.setMessage("A separate background worktree task");
+    await vi.waitFor(() => expect(fixture.host.draft.canSubmit).toBe(true));
+    await fixture.host.draft.submit();
+    const params = vi.mocked(fixture.context.sessions.createResult).mock.calls[0]?.[0];
+    expect(params).toMatchObject({
+      worktree: true,
+      message: "A separate background worktree task",
+    });
+    expect(params).not.toHaveProperty("worktreeName");
+    expect(fixture.place.worktreeName).toBe("foreground-task");
+    expect(fixture.entries["new-session.v1:main"]).toEqual(ordinary);
+    expect(fixture.writes).toEqual([]);
+  });
+
+  it("uses a confirmed ordinary default after its initiating surface is disposed", async () => {
+    const fixture = await mountPreferences();
+    let entered!: () => void;
+    let release!: () => void;
+    const saving = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.setBeforeSave(async (patch) => {
+      const preference = patch["new-session.v1:main"];
+      if (isRecord(preference) && preference.folder === "/confirmed-after-disposal") {
+        entered();
+        await held;
+      }
+    });
+    fixture.place.applyFolder("/confirmed-after-disposal");
+    try {
+      await saving;
+      fixture.gateway.disconnect();
+      release();
+      await vi.waitFor(() =>
+        expect(fixture.entries["new-session.v1:main"]).toMatchObject({
+          folder: "/confirmed-after-disposal",
+        }),
+      );
+      fixture.host.draft.close();
+      fixture.host.draft.open();
+      await fixture.host.updateComplete;
+      expect(
+        fixture.host.querySelector(".palette-session-settings__workspace")?.textContent,
+      ).toContain("confirmed-after-disposal");
+    } finally {
+      release();
+    }
+  });
+
+  it("preserves the latest admitted settings through a same-owner palette replacement", async () => {
+    const fixture = await mountPreferences();
+    let entered!: () => void;
+    let release!: () => void;
+    let heldOnce = false;
+    const saving = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.setBeforeSave(async (patch) => {
+      if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
+        heldOnce = true;
+        entered();
+        await held;
+      }
+    });
+    fixture.select().onSelect("other");
+    await fixture.host.updateComplete;
+    fixture.remember().click();
+    let replacement: PaletteDraftHost | undefined;
+    try {
+      await saving;
+      fixture.select().onSelect("main");
+      await fixture.host.updateComplete;
+      fixture.host.remove();
+      replacement = document.createElement("test-palette-session-draft") as PaletteDraftHost;
+      replacement.context = fixture.context;
+      document.body.append(replacement);
+      replacement.draft.open();
+      const current = replacement;
+      await vi.waitFor(() =>
+        expect(
+          current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+            ?.disabled,
+        ).toBe(false),
+      );
+      release();
+      await vi.waitFor(() =>
+        expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "main" }),
+      );
+      expect(fixture.writes).toHaveLength(2);
+      current.draft.close();
+      current.draft.open();
+      await current.updateComplete;
+      expect(
+        current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+          ?.checked,
+      ).toBe(true);
+      expect(current.querySelector<AgentSelect>("openclaw-agent-select")?.value).toBe("main");
+    } finally {
+      release();
+      replacement?.remove();
+    }
+  });
+
   it("keeps one-off choices out of normal defaults and resets on reopen", async () => {
     const { host, entries, writes, select, worktree } = await mountPreferences({
       "new-session.v1:main": { folder: "/workspace", worktree: true },

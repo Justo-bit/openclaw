@@ -162,7 +162,7 @@ describe("new-session browser preferences", () => {
 });
 
 describe("palette placement overrides", () => {
-  it("preserves cleared placement fields without taking over model defaults", () => {
+  it("preserves cleared placement fields without taking over model defaults or one-use names", () => {
     expect(
       decodePalettePreference({
         agentId: "Main",
@@ -171,7 +171,7 @@ describe("palette placement overrides", () => {
           folder: "/workspace",
           projectId: "",
           baseRef: "",
-          worktreeName: "",
+          worktreeName: "foreground-task",
           where: { kind: "local" },
           worktree: false,
           freshWorkspace: false,
@@ -186,7 +186,6 @@ describe("palette placement overrides", () => {
         folder: "/workspace",
         projectId: "",
         baseRef: "",
-        worktreeName: "",
         where: { kind: "local" },
         worktree: false,
         freshWorkspace: false,

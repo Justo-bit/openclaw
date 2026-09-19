@@ -100,6 +100,7 @@ export async function completeDraftSessionPlacement(params: {
   setError: (error: string) => void;
   onRecoveryUnavailable: () => void;
   clearDraft: () => Promise<void>;
+  consumeWorktreeName?: () => void | Promise<void>;
   completeInBackground: (sessionKey: string, runId: string) => boolean;
   onAccepted: () => void;
   navigate: () => Promise<void>;
@@ -156,6 +157,7 @@ export async function completeDraftSessionPlacement(params: {
     mode: submittedRecovery.phase === "creating" ? "dispatch" : "recover",
     createdAt: params.createdAt,
   });
+  await params.consumeWorktreeName?.();
   const ownsStartedPlacement = () =>
     params.isLifecycleCurrent() && ownsRecovery(recovery.sessionKey);
   if (!ownsStartedPlacement()) {

@@ -38,6 +38,10 @@ const enNewSessionSetup = {
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
+    preferenceSaveUnconfirmed:
+      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
+    worktreeNameClearUnconfirmed:
+      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
     agent: "Agent",
     agents: "Agents",
     where: "Where",
@@ -90,7 +94,8 @@ const enNewSessionSetup = {
     worktreeBranchesUnavailable: "Branch suggestions are unavailable. Enter a branch or commit.",
     worktreeName: "Name",
     worktreeNamePlaceholder: "Named from the session title",
-    worktreeBranchNote: "Creates branch openclaw/<name> in a separate checkout.",
+    worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
+    worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
     incognitoDescription: "Keep this session only until the Gateway restarts",

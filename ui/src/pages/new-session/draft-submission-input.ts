@@ -46,8 +46,9 @@ export function prepareDraftSubmission(
     mentions: readonly HumanMention[];
     attachmentDraft: { attachments: ChatAttachment[] };
     pendingPlacement: PendingSessionPlacementRecoveryState;
+    visibility: NewSessionVisibility;
   },
-  agentId: string,
+  place: DraftPlaceState,
   startup?: DraftStartupResumption,
   background = false,
 ) {
@@ -66,7 +67,8 @@ export function prepareDraftSubmission(
       : buildChatApiAttachments(attachments);
   const apiAttachments = pendingPlacement ? pending.attachments : draftAttachments;
   const submissionAgentId =
-    startup?.params.agentId ?? (pendingPlacement ? pending.agentId : normalizeAgentId(agentId));
+    startup?.params.agentId ??
+    (pendingPlacement ? pending.agentId : normalizeAgentId(place.agentId));
   const gatewayUrl = pendingPlacement ? pending.gatewayUrl : context.gateway.connection.gatewayUrl;
   const client = context.gateway.snapshot.client;
   if (!client || !context.gateway.snapshot.hello) {
@@ -79,7 +81,19 @@ export function prepareDraftSubmission(
     context,
   });
   const recoveryScope = pendingPlacement ? pending.recoveryScope : client.recoveryScope;
+  const submittedPlacement =
+    startup?.params ??
+    (pendingPlacement
+      ? pending.createParams
+      : buildSelectedSessionCreateParams(place, { message, visibility: draft.visibility }));
   return {
+    consumeWorktreeName:
+      submittedPlacement &&
+      place.captureSubmittedWorktreeName(
+        submittedPlacement,
+        submissionAgentId,
+        Boolean(startup || pendingPlacement),
+      ),
     pendingPlacement,
     message,
     mentions,

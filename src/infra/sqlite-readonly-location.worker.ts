@@ -226,7 +226,7 @@ function runSession(): void {
           { kinds: ["store", "state"] },
         );
         activeTransfer = { requestId: id, transferId: handle.id };
-        send(id, { type: "start", handle });
+        send(id, { type: "start", handle: { ...handle, cacheable: rows.cacheable } });
       })().catch((error: unknown) => fail(id, error));
       return;
     }

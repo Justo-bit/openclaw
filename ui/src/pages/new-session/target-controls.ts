@@ -67,6 +67,7 @@ export function renderNewSessionPlaceControls({
   pendingPlacement,
   onConnectMachine,
   onNavigate,
+  onFocusComposer,
   requestUpdate,
 }: {
   idPrefix?: string;
@@ -78,6 +79,7 @@ export function renderNewSessionPlaceControls({
   pendingPlacement: boolean;
   onConnectMachine: () => void;
   onNavigate: ApplicationContext["navigate"];
+  onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
   const browser = place.browser;
@@ -270,6 +272,7 @@ export function renderNewSessionPlaceControls({
           onSelectWorktree: (value) => place.selectWorktree(value),
           onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
           onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
+          onConfirm: onFocusComposer,
         })
       : nothing
   }`;

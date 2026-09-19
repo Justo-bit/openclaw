@@ -188,4 +188,5 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
   "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
+  "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };

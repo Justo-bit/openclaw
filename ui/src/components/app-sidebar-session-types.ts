@@ -154,6 +154,7 @@ export type SidebarRecentSession = {
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
+  hiddenFromInvolvingMe?: boolean;
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;

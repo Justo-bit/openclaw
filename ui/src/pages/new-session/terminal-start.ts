@@ -73,6 +73,23 @@ async function startNewSessionInTerminal(
   );
 }
 
+function captureTerminalSubmissionInput(
+  place: DraftPlaceState,
+  catalogId: string,
+  initialMessage: string,
+) {
+  return {
+    catalogId,
+    agentId: normalizeAgentId(place.agentId),
+    hostId: place.terminalHostId,
+    cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
+    initialMessage,
+    worktree: place.worktree,
+    worktreeName: place.worktreeName,
+    baseRef: place.baseRef,
+  };
+}
+
 /** Native startup shares draft custody, but never falls through to chat creation. */
 export async function submitDraftInTerminal(options: {
   snapshot: DraftSubmissionSnapshot;
@@ -102,6 +119,8 @@ export async function submitDraftInTerminal(options: {
   }
   const submission = options.capture(client);
   const initialMessage = flow.message.trim();
+  const terminalInput = captureTerminalSubmissionInput(place, catalogId, initialMessage);
+  const consumeWorktreeName = place.captureSubmittedWorktreeName(terminalInput, agentId);
   submission.publish(
     buildLocalUserMessage({ text: initialMessage, createdAt: Date.now() }, "available"),
     true,
@@ -109,21 +128,12 @@ export async function submitDraftInTerminal(options: {
   place.browser.close();
   options.closeTransientUi();
   try {
-    const result = await startNewSessionInTerminal(
-      client,
-      {
-        catalogId,
-        agentId,
-        hostId: place.terminalHostId,
-        cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
-        initialMessage,
-        worktree: place.worktree,
-        worktreeName: place.worktreeName,
-        baseRef: place.baseRef,
-      },
-      submission.isCurrent,
-    );
+    const result = await startNewSessionInTerminal(client, terminalInput, submission.isCurrent);
     if (!result || !submission.isCurrent()) {
+      return;
+    }
+    await consumeWorktreeName?.();
+    if (!submission.isCurrent()) {
       return;
     }
     await submission.consume();

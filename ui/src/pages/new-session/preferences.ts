@@ -24,7 +24,7 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
     return null;
   }
   // Empty placement fields are explicit overrides, not permission to inherit a /new choice.
-  for (const key of ["folder", "projectId", "baseRef", "worktreeName"] as const) {
+  for (const key of ["folder", "projectId", "baseRef"] as const) {
     const field = value.selection[key];
     if (typeof field === "string") {
       selection[key] = field.trim();
@@ -34,6 +34,7 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
   delete selection.model;
   delete selection.agentRuntime;
   delete selection.thinkingLevel;
+  delete selection.worktreeName;
   return { agentId: normalizeAgentId(value.agentId), selection };
 }
 
@@ -261,11 +262,11 @@ export function patchNewSessionPreference(
   gatewayUrl: string,
   agentId: string,
   patch: NewSessionPreference,
-): void {
+): boolean {
   const storage = getSafeLocalStorage();
   const normalizedAgentId = normalizeAgentId(agentId);
   if (!storage || !gatewayUrl || !normalizedAgentId) {
-    return;
+    return false;
   }
   const store = readStore(storage, gatewayUrl);
   const current = normalizePreference(store.agents?.[normalizedAgentId]) ?? {};
@@ -285,7 +286,9 @@ export function patchNewSessionPreference(
         agents,
       } satisfies PersistedPreferences),
     );
+    return true;
   } catch {
-    // Browser storage can be disabled or full; preferences are best effort.
+    // Browser storage can be disabled or full; callers can report unconfirmed writes.
+    return false;
   }
 }

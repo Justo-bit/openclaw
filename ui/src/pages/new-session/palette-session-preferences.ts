@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
-import type { DraftIdentityPreferences } from "./draft-identity-preferences.ts";
+import type { PaletteIdentityPreferences } from "./palette-identity-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 
 /** A view-local selection layered over the shared, authenticated users.prefs owner. */
@@ -11,7 +11,7 @@ export class PaletteSessionPreferences {
   selection: PaletteSessionPreference | null = null;
   private edited = false;
   private loaded = false;
-  private binding: DraftIdentityPreferences | undefined;
+  private binding: PaletteIdentityPreferences | undefined;
   private scope = "";
   private source: ApplicationContext["gateway"] | undefined;
   private generation = 0;
@@ -133,10 +133,10 @@ export class PaletteSessionPreferences {
     if (!place?.agentId) {
       return null;
     }
-    return {
-      agentId: place.agentId,
-      selection: place.preferenceSelection(),
-    };
+    const selection = place.preferenceSelection();
+    // A name belongs to one submitted draft, never to remembered launcher settings.
+    delete selection.worktreeName;
+    return { agentId: place.agentId, selection };
   }
 
   private async save(preference: PaletteSessionPreference | null) {

@@ -381,6 +381,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
         pendingPlacement: Boolean(this.submission.pendingPlacement.sessionKey),
         onConnectMachine: () => this.openConnectMachine(),
         onNavigate: (route, options) => this.context?.navigate(route, options),
+        onFocusComposer: () =>
+          this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true }),
         requestUpdate: () => this.requestUpdate(),
       }),
       retrying:

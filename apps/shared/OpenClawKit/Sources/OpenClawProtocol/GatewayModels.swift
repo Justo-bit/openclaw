@@ -14830,6 +14830,7 @@ public struct SessionRow: Codable, Sendable {
     public let activitysummary: SessionActivitySummary?
     public let updatedat: AnyCodable?
     public let snapshotat: Double?
+    public let hiddenfrominvolvingme: Bool?
     public let archived: Bool?
     public let archivedat: Double?
     public let archivedby: SessionCreatedActor?
@@ -14919,6 +14920,7 @@ public struct SessionRow: Codable, Sendable {
         activitysummary: SessionActivitySummary? = nil,
         updatedat: AnyCodable? = nil,
         snapshotat: Double? = nil,
+        hiddenfrominvolvingme: Bool? = nil,
         archived: Bool? = nil,
         archivedat: Double? = nil,
         archivedby: SessionCreatedActor? = nil,
@@ -15007,6 +15009,7 @@ public struct SessionRow: Codable, Sendable {
         self.activitysummary = activitysummary
         self.updatedat = updatedat
         self.snapshotat = snapshotat
+        self.hiddenfrominvolvingme = hiddenfrominvolvingme
         self.archived = archived
         self.archivedat = archivedat
         self.archivedby = archivedby
@@ -15097,6 +15100,7 @@ public struct SessionRow: Codable, Sendable {
         case activitysummary = "activitySummary"
         case updatedat = "updatedAt"
         case snapshotat = "snapshotAt"
+        case hiddenfrominvolvingme = "hiddenFromInvolvingMe"
         case archived
         case archivedat = "archivedAt"
         case archivedby = "archivedBy"
@@ -18072,6 +18076,32 @@ public struct SessionsSendParams: Codable, Sendable {
         case attachments
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SessionsSetInvolvementParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+    public let expectedsessionid: String
+    public let hidden: Bool
+
+    public init(
+        key: String,
+        agentid: String? = nil,
+        expectedsessionid: String,
+        hidden: Bool)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.expectedsessionid = expectedsessionid
+        self.hidden = hidden
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case expectedsessionid = "expectedSessionId"
+        case hidden
     }
 }
 

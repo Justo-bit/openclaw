@@ -404,7 +404,7 @@ export class DraftSubmissionFlow {
     }
     const preparedTitle = this.callbacks.takePreparedTitle?.();
     this.blockedSubmitGate = null;
-    const input = prepareDraftSubmission(context, this, this.place.agentId, startup, background);
+    const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
     }
@@ -526,6 +526,9 @@ export class DraftSubmissionFlow {
             );
       instant = beginInstant?.();
       const result = await createRequest;
+      if (result && !placementTarget && result.initialRun.status !== "rejected") {
+        await input.consumeWorktreeName?.();
+      }
       if (requestId !== this.submitRequestToken && !placementTarget) {
         // Leaving the view cancels navigation, not a confirmed send. Retire only
         // the captured source draft; the current route may already hold new input.
@@ -569,6 +572,7 @@ export class DraftSubmissionFlow {
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
           },
+          consumeWorktreeName: input.consumeWorktreeName,
           completeInBackground: input.completeInBackground,
           onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
           navigate: () =>

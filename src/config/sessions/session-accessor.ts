@@ -131,7 +131,7 @@ export type {
 export type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
-} from "./session-accessor.entry-mutation.js";
+} from "./runtime-types.js";
 export {
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
@@ -191,6 +191,7 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+export { updateSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
 export {
   MAX_SESSION_PARTICIPANTS,
   recordSessionParticipant,
