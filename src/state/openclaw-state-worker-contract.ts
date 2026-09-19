@@ -46,7 +46,10 @@ import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker
 import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type {
+  OpenClawStateLeaseIdentity,
+  OpenClawStateLeaseAcquisition,
+} from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
@@ -66,6 +69,15 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
     "audit.events.list": {
       input: AuditEventListQuery;
       output: AuditEventListPage;
+    };
+    "stateLease.acquire": {
+      input: {
+        identity: OpenClawStateLeaseIdentity;
+        leaseMs: number;
+        operationLabel: string;
+        schemaPolicy?: "existing";
+      };
+      output: OpenClawStateLeaseAcquisition;
     };
     "deviceAuth.list": { input: { deviceId: string }; output: DeviceAuthEntry[] };
     "deviceAuth.read": {
