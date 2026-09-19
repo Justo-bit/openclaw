@@ -10,7 +10,7 @@ export class PaletteSessionPreferences {
   failed = false;
   selection: PaletteSessionPreference | null = null;
   private edited = false;
-  private loaded = false;
+  private observed: PaletteSessionPreference | null | undefined;
   private binding: PaletteIdentityPreferences | undefined;
   private scope = "";
   private source: ApplicationContext["gateway"] | undefined;
@@ -37,7 +37,7 @@ export class PaletteSessionPreferences {
       return;
     }
     this.edited = false;
-    this.loaded = false;
+    this.observed = undefined;
     this.selection = null;
     this.remember = false;
     this.failed = false;
@@ -64,23 +64,34 @@ export class PaletteSessionPreferences {
       this.source = gateway;
       this.generation += 1;
       this.edited = false;
-      this.loaded = false;
+      this.observed = undefined;
       this.saving = false;
       this.failed = false;
       this.remember = false;
       this.selection = null;
+      this.pending = null;
     }
     const binding = draft.gateway.preferenceState;
     if (binding !== this.binding) {
+      const interrupted = this.saving;
       this.binding = binding;
-      this.loaded = false;
+      this.observed = undefined;
       this.generation += 1;
       this.saving = false;
+      if (interrupted) {
+        // The old handshake cannot confirm its queued writes for this view.
+        // Preserve the latest intent for an explicit retry on the new binding.
+        this.failed = true;
+        this.remember = false;
+        this.notify();
+      }
     }
-    if (this.loaded || binding?.mode === "loading" || !draft.agentsReady()) {
+    const preference = binding?.mode === "remote" ? binding.palettePreference : null;
+    if (this.observed === preference || binding?.mode === "loading" || !draft.agentsReady()) {
       return;
     }
-    this.loaded = true;
+    // A confirmation may arrive after a same-owner replacement has already loaded.
+    this.observed = preference;
     if (
       this.edited ||
       draft.submission.submitting ||
@@ -89,7 +100,7 @@ export class PaletteSessionPreferences {
     ) {
       return;
     }
-    this.selection = binding?.mode === "remote" ? binding.palettePreference : null;
+    this.selection = preference;
     this.remember = this.selection !== null;
     this.restore(this.selection);
     this.notify();

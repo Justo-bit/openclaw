@@ -57,11 +57,17 @@ function updatePaletteInputLayout(textarea: HTMLTextAreaElement) {
   updatePaletteInputOverflow(textarea);
 }
 
+function handlePaletteInputScroll(event: Event) {
+  const textarea = event.currentTarget;
+  if (textarea instanceof HTMLTextAreaElement && textarea.isConnected) {
+    updatePaletteInputOverflow(textarea);
+  }
+}
+
 class PaletteInputLayoutDirective extends AsyncDirective {
   #textarea: HTMLTextAreaElement | undefined;
   #observer: ResizeObserver | undefined;
   #frame: number | undefined;
-  #listening = false;
 
   render(_value: string) {
     return nothing;
@@ -73,52 +79,36 @@ class PaletteInputLayoutDirective extends AsyncDirective {
     return nothing;
   }
 
-  readonly #updateOverflow = () => {
-    if (this.#textarea) {
-      updatePaletteInputOverflow(this.#textarea);
-    }
-  };
-
   readonly #scheduleLayout = () => {
     if (this.#frame !== undefined) {
       return;
     }
     this.#frame = requestAnimationFrame(() => {
       this.#frame = undefined;
-      if (this.isConnected && this.#textarea?.isConnected) {
-        this.#connect();
-        updatePaletteInputLayout(this.#textarea);
+      const textarea = this.#textarea;
+      if (!this.isConnected || !textarea?.isConnected) {
+        return;
       }
+      if (!this.#observer && typeof ResizeObserver === "function") {
+        // Observe once per connected lifetime. Lit owns the field's scroll
+        // listener; this directive owns only resize observation and layout work.
+        this.#observer = new ResizeObserver(this.#scheduleLayout);
+        const root = textarea.closest(".cmd-palette__entry");
+        if (root) {
+          this.#observer.observe(root);
+          const actions = root.querySelector(".cmd-palette__input-actions");
+          if (actions) {
+            this.#observer.observe(actions);
+          }
+        }
+      }
+      updatePaletteInputLayout(textarea);
     });
   };
 
-  #connect() {
-    const textarea = this.#textarea;
-    if (!this.isConnected || !textarea || this.#listening) {
-      return;
-    }
-    this.#listening = true;
-    textarea.addEventListener("scroll", this.#updateOverflow, { passive: true });
-    if (typeof ResizeObserver === "function") {
-      // The frame guard coalesces size changes; an unchanged final box settles
-      // observation without a separate cache of element widths.
-      this.#observer = new ResizeObserver(this.#scheduleLayout);
-      const root = textarea.closest(".cmd-palette__entry");
-      if (root) {
-        this.#observer.observe(root);
-        const actions = root.querySelector(".cmd-palette__input-actions");
-        if (actions) {
-          this.#observer.observe(actions);
-        }
-      }
-    }
-  }
-
   protected override disconnected() {
-    this.#textarea?.removeEventListener("scroll", this.#updateOverflow);
     this.#observer?.disconnect();
     this.#observer = undefined;
-    this.#listening = false;
     if (this.#frame !== undefined) {
       cancelAnimationFrame(this.#frame);
       this.#frame = undefined;
@@ -126,7 +116,6 @@ class PaletteInputLayoutDirective extends AsyncDirective {
   }
 
   protected override reconnected() {
-    this.#connect();
     this.#scheduleLayout();
   }
 }
@@ -152,6 +141,7 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
           .value=${props.value}
           ?disabled=${props.disabled}
           ?readonly=${props.readOnly}
+          @scroll=${handlePaletteInputScroll}
           ${ref(props.onInputRef)}
           @input=${(event: Event) => {
             if (event.currentTarget instanceof HTMLTextAreaElement) {

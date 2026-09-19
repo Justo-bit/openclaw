@@ -118,14 +118,24 @@ describe("command palette input", () => {
     render(renderCommandPaletteInput(inputProps), host);
     await vi.advanceTimersByTimeAsync(20);
     const input = host.querySelector("textarea")!;
-    const removeInputListener = vi.spyOn(input, "removeEventListener");
     const entry = host.querySelector(".cmd-palette__entry")!;
     expect(observe).toHaveBeenCalledWith(entry);
     const initialHeight = input.style.height;
+    const initialEntryAttributes = entry
+      .getAttributeNames()
+      .map((name) => [name, entry.getAttribute(name)]);
     render(renderCommandPaletteInput({ ...inputProps, value: "pending" }), host);
     render(nothing, host);
     expect(disconnect).toHaveBeenCalledOnce();
-    expect(removeInputListener).toHaveBeenCalledWith("scroll", expect.any(Function));
+    Object.defineProperties(input, {
+      scrollHeight: { configurable: true, value: 100 },
+      clientHeight: { configurable: true, value: 20 },
+    });
+    input.scrollTop = 20;
+    input.dispatchEvent(new Event("scroll"));
+    expect(entry.getAttributeNames().map((name) => [name, entry.getAttribute(name)])).toEqual(
+      initialEntryAttributes,
+    );
     await vi.advanceTimersByTimeAsync(20);
     expect(input.style.height).toBe(initialHeight);
   });

@@ -27,7 +27,10 @@ export function createGateway(
   connected: boolean,
   options: { methods?: string[]; request?: GatewayRequestHandler } = {},
 ): GatewayHarness {
-  const request = options.request ?? (() => ({ models: [] }));
+  const request =
+    options.request ??
+    ((method: string) =>
+      method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
   const client = createTestGatewayClient((...args) => {
     // Creation targeting has its own catalog. Search fixtures provide an empty
     // valid destination response without consuming their scripted search replies.

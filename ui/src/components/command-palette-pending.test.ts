@@ -124,10 +124,11 @@ describe("CommandPalette pending searches", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "zzfixtureunique");
     await vi.advanceTimersByTimeAsync(50);
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledOnce();
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
     expect(palette.textContent).not.toContain("No results");
     transcript.resolve({
+      sessions: roster.sessions,
       results: [
         {
           sessionKey: "agent:main:fixture",
@@ -153,7 +154,7 @@ describe("CommandPalette pending searches", () => {
     {
       name: "indexing",
       result: { indexing: true },
-      notice: "Transcript matches may be incomplete",
+      notice: "Indexing older messages — search again shortly.",
     },
     { name: "archived", result: { archivedTranscriptsExcluded: 2 }, notice: "archived" },
   ])(

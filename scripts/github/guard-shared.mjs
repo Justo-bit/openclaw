@@ -135,7 +135,9 @@ export function createIssueMutationHelpers({
 }) {
   const ignoreUnavailableWritePermission = (action) => (error) => {
     if (error?.status === 403) {
-      warn(`Skipping ${action}; token does not have write permission.`);
+      warn(
+        `Skipping ${action}; GitHub API rejected the request: ${sanitizeGuardDisplayValue(error.message)}`,
+      );
       return;
     }
     if (error?.status === 404 || error?.status === 422) {

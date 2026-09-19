@@ -6,11 +6,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { filterVisibleSessionRows, getVisibleSessionRows } from "../lib/sessions/index.ts";
-import {
-  parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-} from "../lib/sessions/session-key.ts";
+import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -44,11 +40,14 @@ const SESSION_SEARCH_MAX_CHARS = 4_096;
 function exceedsSessionSearchLimit(query: string): boolean {
   return Array.from(query).length > SESSION_SEARCH_MAX_CHARS;
 }
-const SESSION_SEARCH_MAX_PAGES = 4;
-const SESSION_SEARCH_PAGE_SIZE = 50;
-const SESSION_TRANSCRIPT_MAX_LIST_PAGES = 4;
-const SESSION_TRANSCRIPT_MAX_REQUESTS = 4;
-const SESSION_TRANSCRIPT_MAX_SESSION_KEYS = 200;
+const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+} as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
 export class CommandPalette extends OpenClawLightDomContentsElement {
@@ -91,7 +90,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private sessionSearchFailed = false;
   @state() private sessionSearchPartial = false;
   @state() private archivedTranscriptsExcluded = 0;
-  @state() private sessionSearchIncomplete = false;
+  @state() private sessionSearchIndexing = false;
 
   private readonly subscriptions = new SubscriptionsController(this);
   @state() private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -275,7 +274,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
     this.archivedTranscriptsExcluded = 0;
-    this.sessionSearchIncomplete = false;
+    this.sessionSearchIndexing = false;
   }
 
   private clearCatalogSearch() {
@@ -380,94 +379,33 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.context?.agentSelection === context?.agentSelection &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
-    const transcriptSearchAvailable = isGatewayMethodAdvertised(
-      gateway.snapshot,
-      "sessions.search",
-    );
-    const defaultAgentId =
-      context?.agentSelection.state.selectedId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot);
-    const transcriptSearch = transcriptSearchAvailable
-      ? searchVisibleSessionTranscripts({
-          client,
-          query: search,
-          result: undefined,
-          listSessions: sessions.list,
-          listOptions: {
-            includeGlobal: false,
-            includeUnknown: false,
-            configuredAgentsOnly: true,
-          },
-          resolveAgentId: (sessionKey) =>
-            parseAgentSessionKey(sessionKey)?.agentId ?? defaultAgentId,
-          isCurrent,
-          maxListPages: SESSION_TRANSCRIPT_MAX_LIST_PAGES,
-          maxSearchRequests: SESSION_TRANSCRIPT_MAX_REQUESTS,
-          maxSessionKeys: SESSION_TRANSCRIPT_MAX_SESSION_KEYS,
-          mapPageRows: (rows) =>
-            filterVisibleSessionRows(rows, {
-              agentId: "",
-              defaultAgentId,
-              filterByAgent: false,
-            }),
-        })
-          .then((result) => ({ error: false as const, result }))
-          .catch(() => ({ error: true as const, result: null }))
-      : Promise.resolve(null);
-    const visibleRows: ReturnType<typeof getVisibleSessionRows> = [];
-    const visibleKeys = new Set<string>();
-    const seenOffsets = new Set<number>([0]);
-    let pagesLoaded = 0;
-    let offset: number | undefined;
+    const transcriptSearch = searchVisibleSessionTranscripts({
+      client,
+      query: search,
+      listOptions: SESSION_SEARCH_SCOPE,
+      isCurrent,
+    })
+      .then((result) => ({ error: false as const, result }))
+      .catch(() => ({ error: true as const, result: null }));
     try {
-      while (visibleRows.length < SESSION_SEARCH_LIMIT && pagesLoaded < SESSION_SEARCH_MAX_PAGES) {
-        const result = await sessions.list({
-          search,
-          limit: SESSION_SEARCH_PAGE_SIZE,
-          ...(offset === undefined ? {} : { offset }),
-          includeGlobal: false,
-          includeUnknown: false,
-        });
-        pagesLoaded += 1;
-        if (!isCurrent() || !result) {
-          return;
-        }
-        const pageRows = getVisibleSessionRows(result, {
-          agentId: "",
-          defaultAgentId,
-          filterByAgent: false,
-        });
-        for (const row of pageRows) {
-          if (!visibleKeys.has(row.key)) {
-            visibleKeys.add(row.key);
-            visibleRows.push(row);
-          }
-        }
-        if (visibleRows.length >= SESSION_SEARCH_LIMIT || !result.hasMore) {
-          break;
-        }
-        const nextOffset =
-          typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
-            ? Math.max(0, Math.floor(result.nextOffset))
-            : result.sessions.length > 0
-              ? (offset ?? 0) + result.sessions.length
-              : null;
-        // Malformed pagination must not turn a palette query into an RPC loop.
-        if (nextOffset === null || seenOffsets.has(nextOffset)) {
-          break;
-        }
-        seenOffsets.add(nextOffset);
-        offset = nextOffset;
+      const result = await sessions.list({
+        ...SESSION_SEARCH_SCOPE,
+        search,
+        limit: SESSION_SEARCH_LIMIT,
+      });
+      if (!isCurrent() || !result) {
+        return;
       }
+      const visibleRows = result.sessions;
+      const visibleKeys = new Set(visibleRows.map((row) => row.key));
       const transcriptOutcome = await transcriptSearch;
       if (!isCurrent()) {
         return;
       }
-      const transcriptResult = transcriptOutcome?.result ?? null;
-      this.sessionSearchPartial = transcriptOutcome?.error === true;
+      const transcriptResult = transcriptOutcome.result;
+      this.sessionSearchPartial = transcriptOutcome.error;
       this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
-      this.sessionSearchIncomplete =
-        transcriptOutcome?.error !== true &&
-        (transcriptResult?.indexing === true || transcriptResult?.truncated === true);
+      this.sessionSearchIndexing = transcriptResult?.indexing === true;
       this.sessionItems = buildCommandPaletteSessionItems({
         visibleRows,
         visibleKeys,
@@ -536,7 +474,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       ),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
-      sessionSearchIncomplete: this.sessionSearchIncomplete,
+      sessionSearchIndexing: this.sessionSearchIndexing,
       archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
       desktopAvailable: this.desktopAvailable,
       custodianAvailable: this.custodianAvailable,

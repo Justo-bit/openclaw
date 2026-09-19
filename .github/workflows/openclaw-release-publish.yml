@@ -62,7 +62,7 @@ on:
         required: false
         type: string
       openclaw_npm_resume_run_id:
-        description: Successful original OpenClaw NPM Release run id when resuming an already-published package
+        description: Optional original npm publisher run id; otherwise recovered from the published package provenance
         required: false
         type: string
       npm_dist_tag:
@@ -1854,7 +1854,7 @@ jobs:
           CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: ${{ steps.children.outputs.openclaw_npm_already_published }}
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: ${{ steps.children.outputs.openclaw_npm_expected_workflow_ref }}
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: ${{ steps.children.outputs.openclaw_npm_expected_workflow_sha }}
-          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id }}
+          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id || steps.children.outputs.openclaw_npm_resume_run_id }}
           CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
           CLAWHUB_AUTHORIZATION_OUTCOME: ${{ steps.clawhub_authorization.outcome }}
           CLAWHUB_RECEIPT_OUTCOME: ${{ steps.clawhub_receipt.outcome }}
@@ -1934,7 +1934,7 @@ jobs:
 
           openclaw_result=""
           openclaw_pid=""
-          if [[ -n "${openclaw_npm_run_id}" ]]; then
+          if [[ -n "${openclaw_npm_run_id}" && "${openclaw_npm_already_published}" != "true" ]]; then
             openclaw_result="$RUNNER_TEMP/openclaw-npm-result.txt"
             wait_run_pid=""
             # The start step owns approval. Collection must never retry a
@@ -1991,7 +1991,7 @@ jobs:
           CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
-          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id }}
+          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id || steps.children.outputs.openclaw_npm_resume_run_id }}
           CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
           COMPLETION_OUTCOME: ${{ steps.complete.outcome }}
           PUBLISH_JOB_STATUS: ${{ job.status }}
@@ -2000,6 +2000,7 @@ jobs:
           if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
             source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
             record_postpublish_diagnostics terminal
+            print_release_resume_command
           fi
 
       - name: Upload postpublish diagnostics

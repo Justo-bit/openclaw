@@ -476,62 +476,154 @@ describe("palette-only remembered settings", () => {
     }
   });
 
-  it("preserves the latest admitted settings through a same-owner palette replacement", async () => {
-    const fixture = await mountPreferences();
-    let entered!: () => void;
-    let release!: () => void;
-    let heldOnce = false;
-    const saving = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    fixture.setBeforeSave(async (patch) => {
-      if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
-        heldOnce = true;
-        entered();
-        await held;
-      }
-    });
-    fixture.select().onSelect("other");
-    await fixture.host.updateComplete;
-    fixture.remember().click();
-    let replacement: PaletteDraftHost | undefined;
-    try {
-      await saving;
+  it.each([false, true])(
+    "refreshes confirmed remount settings without overriding edited choices (edited=%s)",
+    async (edited) => {
+      const fixture = await mountPreferences();
+      let entered!: () => void;
+      let release!: () => void;
+      let heldOnce = false;
+      const saving = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fixture.setBeforeSave(async (patch) => {
+        if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
+          heldOnce = true;
+          entered();
+          await held;
+        }
+      });
       fixture.select().onSelect("main");
       await fixture.host.updateComplete;
-      fixture.host.remove();
-      replacement = document.createElement("test-palette-session-draft") as PaletteDraftHost;
-      replacement.context = fixture.context;
-      document.body.append(replacement);
-      replacement.draft.open();
-      const current = replacement;
-      await vi.waitFor(() =>
+      fixture.remember().click();
+      let replacement: PaletteDraftHost | undefined;
+      try {
+        await saving;
+        fixture.select().onSelect("other");
+        await fixture.host.updateComplete;
+        fixture.host.remove();
+        replacement = document.createElement("test-palette-session-draft") as PaletteDraftHost;
+        replacement.context = fixture.context;
+        document.body.append(replacement);
+        replacement.draft.open();
+        const current = replacement;
+        await vi.waitFor(() =>
+          expect(
+            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+              ?.disabled,
+          ).toBe(false),
+        );
+        if (edited) {
+          const select = expectDefined(
+            current.querySelector<AgentSelect>("openclaw-agent-select"),
+            "replacement agent",
+          );
+          select.onSelect("other");
+          await current.updateComplete;
+          select.onSelect("main");
+          await current.updateComplete;
+        }
+        release();
+        await vi.waitFor(() =>
+          expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
+        );
+        expect(fixture.writes).toHaveLength(2);
+        await vi.waitFor(() =>
+          expect(
+            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+              ?.checked,
+          ).toBe(!edited),
+        );
+        expect(current.querySelector<AgentSelect>("openclaw-agent-select")?.value).toBe(
+          edited ? "main" : "other",
+        );
+      } finally {
+        release();
+        replacement?.remove();
+      }
+    },
+  );
+
+  it.each(["selection", "deletion"] as const)(
+    "surfaces an unconfirmed queued %s after reconnect and retries the latest intent",
+    async (intent) => {
+      const fixture = await mountPreferences();
+      let entered!: () => void;
+      let release!: () => void;
+      let heldOnce = false;
+      const saving = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fixture.setBeforeSave(async (patch) => {
+        if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
+          heldOnce = true;
+          entered();
+          await held;
+        }
+      });
+      fixture.host.draft.setMessage("Keep this exact reconnect prompt");
+      await fixture.host.updateComplete;
+      const prompt = expectDefined(fixture.host.querySelector("textarea"), "palette prompt");
+      prompt.focus();
+      prompt.setSelectionRange(5, 9);
+      fixture.select().onSelect("other");
+      await fixture.host.updateComplete;
+      fixture.remember().click();
+      try {
+        await saving;
+        await fixture.host.updateComplete;
+        if (intent === "selection") {
+          fixture.select().onSelect("main");
+        } else {
+          fixture.remember().click();
+        }
+        await fixture.host.updateComplete;
+        fixture.context.gateway.snapshot.phase = "reconnecting";
+        fixture.publish();
+        await fixture.host.updateComplete;
+        fixture.context.gateway.snapshot.phase = "connected";
+        fixture.context.gateway.snapshot.hello = {
+          ...expectDefined(fixture.context.gateway.snapshot.hello, "Gateway hello"),
+        };
+        fixture.publish();
+        await vi.waitFor(() => expect(fixture.remember().disabled).toBe(false));
         expect(
-          current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-            ?.disabled,
-        ).toBe(false),
-      );
-      release();
-      await vi.waitFor(() =>
-        expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "main" }),
-      );
-      expect(fixture.writes).toHaveLength(2);
-      current.draft.close();
-      current.draft.open();
-      await current.updateComplete;
-      expect(
-        current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
-          ?.checked,
-      ).toBe(true);
-      expect(current.querySelector<AgentSelect>("openclaw-agent-select")?.value).toBe("main");
-    } finally {
-      release();
-      replacement?.remove();
-    }
-  });
+          fixture.host.querySelector('.palette-session-settings__error[role="alert"]'),
+        ).not.toBeNull();
+        expect(fixture.remember().checked).toBe(false);
+        expect(fixture.select().value).toBe("main");
+        expect(fixture.host.draft.message).toBe("Keep this exact reconnect prompt");
+        expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 9]);
+        release();
+        await vi.waitFor(() =>
+          expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
+        );
+        expectDefined(
+          fixture.host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
+          "retry remembered settings",
+        ).click();
+        await vi.waitFor(() => {
+          if (intent === "selection") {
+            expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "main" });
+          } else {
+            expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
+          }
+          expect(
+            fixture.host.querySelector('.palette-session-settings__error[role="alert"]'),
+          ).toBeNull();
+        });
+        expect(fixture.remember().checked).toBe(intent === "selection");
+      } finally {
+        release();
+      }
+    },
+  );
 
   it("keeps one-off choices out of normal defaults and resets on reopen", async () => {
     const { host, entries, writes, select, worktree } = await mountPreferences({

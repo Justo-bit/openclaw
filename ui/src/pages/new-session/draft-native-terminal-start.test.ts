@@ -12,7 +12,7 @@ import {
   registerTextPayload,
   stubObjectUrls,
 } from "./draft-submission-flow.test-support.ts";
-import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
+import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -249,7 +249,7 @@ describe("DraftSubmissionFlow native terminal", () => {
   it.each(["accepted", "rejected"])(
     "provisions the chosen worktree and consumes its name only for %s native startup",
     async (outcome) => {
-      patchNewSessionPreference("ws://gateway.example", "main", {
+      replaceBrowserPreference("ws://gateway.example", "main", {
         workspace: "/repo",
         folder: "/repo",
         worktree: true,

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
@@ -50,222 +49,6 @@ describe("CommandPalette search", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
-
-  it.each([false, true])(
-    "keeps transcript snippets with a server metadata match: %s",
-    async (serverMatch) => {
-      const metadata = createSessionResult("agent:main:metadata", "needle");
-      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-      const roster = {
-        ...metadata,
-        count: 2,
-        totalCount: 2,
-        sessions: [...metadata.sessions, ...contextOnly.sessions],
-      } as SessionsListResult;
-      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-        options?.search && !serverMatch ? metadata : roster,
-      );
-      const searchResult: SessionsSearchResult = {
-        results: [
-          {
-            sessionKey: "agent:main:context",
-            sessionId: "context",
-            messageId: "message-context",
-            role: "assistant",
-            timestamp: 42,
-            snippet: "The needle appears only in the conversation body.",
-            score: 10,
-          },
-        ],
-      };
-      const request = vi.fn(async (method: string) =>
-        method === "models.list" ? { models: [] } : searchResult,
-      );
-      const { gateway } = createGateway(true, {
-        methods: ["sessions.search"],
-        request,
-      });
-      const { palette } = await mountPalette(createContext(gateway, list));
-
-      await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
-          1,
-        ),
-      );
-      await palette.updateComplete;
-
-      expect(request).toHaveBeenCalledWith("sessions.search", {
-        agentId: "main",
-        sessionKeys: ["agent:main:metadata", "agent:main:context"],
-        query: "needle",
-        limit: 25,
-      });
-      const chatItems = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
-      expect(chatItems).toHaveLength(2);
-      expect(chatItems[0]?.textContent).toContain("needle");
-      expect(chatItems[1]?.textContent).toContain("Unrelated title");
-      expect(chatItems[1]?.textContent).toContain("needle appears only in the conversation body");
-      expect(palette.querySelectorAll(".cmd-palette__input")).toHaveLength(1);
-    },
-  );
-
-  it.each(["main", "reviewer"])(
-    "searches a bare default session key in selected agent %s",
-    async (agentId) => {
-      const roster = createSessionResult("main", "Default chat");
-      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-        options?.search ? { ...roster, count: 0, sessions: [] } : roster,
-      );
-      const request = vi.fn(async (method: string) =>
-        method === "models.list"
-          ? { models: [] }
-          : {
-              results: [
-                {
-                  sessionKey: "main",
-                  sessionId: "default",
-                  messageId: "message-default",
-                  role: "assistant" as const,
-                  timestamp: 42,
-                  snippet: "The needle is in the default chat body.",
-                  score: 10,
-                },
-              ],
-            },
-      );
-      const { gateway } = createGateway(true, {
-        methods: ["sessions.search"],
-        request,
-      });
-      const context = createContext(gateway, list);
-      context.agentSelection.set(agentId);
-      const { palette } = await mountPalette(context);
-
-      await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
-          1,
-        ),
-      );
-      await palette.updateComplete;
-
-      expect(request).toHaveBeenCalledWith("sessions.search", {
-        agentId,
-        sessionKeys: ["main"],
-        query: "needle",
-        limit: 25,
-      });
-      expect(palette.textContent).toContain("Default chat");
-      expect(palette.textContent).toContain("needle is in the default chat body");
-    },
-  );
-
-  it("keeps metadata matches selectable when transcript search fails", async () => {
-    const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => metadata);
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      throw new Error("transcript index unavailable");
-    });
-    const { gateway } = createGateway(true, {
-      methods: ["sessions.search"],
-      request,
-    });
-    const { palette } = await mountPalette(createContext(gateway, list));
-
-    await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
-    );
-    await palette.updateComplete;
-
-    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    const metadataItem = findPaletteOption(palette, "Needle planning");
-    expect(metadataItem?.textContent).toContain("Needle planning");
-    metadataItem?.click();
-    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
-    expect(palette.textContent).toContain(
-      "Transcript search unavailable — showing chat titles and metadata",
-    );
-    expect(palette.textContent).not.toContain("Chat search failed");
-  });
-
-  it.each([
-    {
-      state: "indexing",
-      response: { indexing: true },
-      notice: "Transcript matches may be incomplete — indexing or search limits apply",
-    },
-    {
-      state: "truncated",
-      response: { truncated: true },
-      notice: "Transcript matches may be incomplete — indexing or search limits apply",
-    },
-    {
-      state: "archived",
-      response: { archivedTranscriptsExcluded: 3 },
-      notice: "3 archived transcripts excluded; open a session to restore its searchable history.",
-    },
-  ])(
-    "shows a partial-search notice when transcript results are $state",
-    async ({ response, notice }) => {
-      const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-      const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
-      const roster = {
-        ...metadata,
-        count: 2,
-        totalCount: 2,
-        sessions: [...metadata.sessions, ...contextOnly.sessions],
-      } as SessionsListResult;
-      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-        options?.search ? metadata : roster,
-      );
-      const request = vi.fn(async (method: string) =>
-        method === "models.list"
-          ? { models: [] }
-          : {
-              results: [
-                {
-                  sessionKey: "agent:main:context",
-                  sessionId: "context",
-                  messageId: "message-context",
-                  role: "assistant" as const,
-                  timestamp: 42,
-                  snippet: "The needle also appears in this transcript.",
-                  score: 10,
-                },
-              ],
-              ...response,
-            },
-      );
-      const { gateway } = createGateway(true, {
-        methods: ["sessions.search"],
-        request,
-      });
-      const { palette } = await mountPalette(createContext(gateway, list));
-
-      await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.waitFor(() =>
-        expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
-          1,
-        ),
-      );
-      await palette.updateComplete;
-
-      expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-      expect(palette.textContent).toContain(notice);
-      expect(palette.textContent).toContain("Needle planning");
-      expect(palette.textContent).toContain("Unrelated title");
-      expect(palette.textContent).toContain("needle also appears in this transcript");
-    },
-  );
 
   it("lazily searches automation names and descriptions once per connection", async () => {
     const request = vi.fn(async (method: string) => {
@@ -323,7 +106,11 @@ describe("CommandPalette search", () => {
           refreshFailed: true,
         })
         .mockResolvedValueOnce({ models: [] });
-      const harness = createGateway(true, { methods: ["models.list"], request });
+      const harness = createGateway(true, {
+        methods: ["models.list"],
+        request: (method, params) =>
+          method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+      });
       const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
       await enterQuery(palette, "needle");
       await vi.advanceTimersByTimeAsync(50);
@@ -367,7 +154,11 @@ describe("CommandPalette search", () => {
         models: [],
         providerOutcomes: [{ provider: "ollama", status: "ready" }],
       });
-    const harness = createGateway(true, { methods: ["models.list"], request });
+    const harness = createGateway(true, {
+      methods: ["models.list"],
+      request: (method, params) =>
+        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+    });
     const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
     await enterQuery(palette, "needle");
     await vi.advanceTimersByTimeAsync(50);
@@ -396,7 +187,11 @@ describe("CommandPalette search", () => {
       .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
       .mockRejectedValueOnce(new Error("catalog unavailable"))
       .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
-    const harness = createGateway(true, { methods: ["models.list"], request });
+    const harness = createGateway(true, {
+      methods: ["models.list"],
+      request: (method, params) =>
+        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+    });
     const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
     await enterQuery(palette, "needle");
     await vi.advanceTimersByTimeAsync(50);
@@ -428,7 +223,11 @@ describe("CommandPalette search", () => {
         .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "old", name: "Needle old" }] })
         .mockReturnValueOnce(stale.promise)
         .mockResolvedValue({ models: [{ provider: "fixture", id: "new", name: "Needle new" }] });
-      const harness = createGateway(true, { methods: ["models.list"], request });
+      const harness = createGateway(true, {
+        methods: ["models.list"],
+        request: (method, params) =>
+          method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+      });
       const context = createContext(harness.gateway, async () => null);
       const { palette, provider } = await mountPalette(context);
       await enterQuery(palette, "needle");
@@ -440,7 +239,11 @@ describe("CommandPalette search", () => {
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");
       } else if (replacement === "source") {
-        const next = createGateway(true, { methods: ["models.list"], request });
+        const next = createGateway(true, {
+          methods: ["models.list"],
+          request: (method, params) =>
+            method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+        });
         provider.setContext(createContext(next.gateway, async () => null));
       } else if (replacement === "connection") {
         harness.setConnected(false);
@@ -781,46 +584,36 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("keeps bounded metadata pagination when transcript search is unavailable", async () => {
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) => {
-      const offset = options?.offset ?? 0;
-      return {
-        ...createSessionResult(`agent:main:hidden-${offset}`, `Hidden ${offset}`),
-        totalCount: 250,
-        hasMore: true,
-        nextOffset: offset + 50,
-        sessions: [
-          {
-            key: `agent:main:hidden-${offset}`,
-            kind: "direct",
-            displayName: `Hidden ${offset}`,
-            spawnedBy: "agent:main:main",
-            updatedAt: 1,
-          },
-        ],
-      } as SessionsListResult;
-    });
+  it("requests metadata after discovery exclusions and before the result limit", async () => {
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () =>
+      createSessionResult("agent:main:visible", "Visible planning"),
+    );
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(createContext(gateway, list));
-
-    await enterQuery(palette, "hidden");
+    await enterQuery(palette, "planning");
     await vi.advanceTimersByTimeAsync(50);
-    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(4));
-
-    expect(list.mock.calls.map(([options]) => options?.offset ?? 0)).toEqual([0, 50, 100, 150]);
+    await palette.updateComplete;
+    expect(list).toHaveBeenCalledExactlyOnceWith({
+      search: "planning",
+      limit: 10,
+      includeGlobal: false,
+      includeUnknown: false,
+      configuredAgentsOnly: true,
+      excludeSubagents: true,
+      excludeCron: true,
+      excludeSystem: true,
+    });
+    expect(palette.textContent).toContain("Visible planning");
   });
 
-  it("matches category metadata from the full visible roster", async () => {
+  it("shows category metadata matches from the Gateway search", async () => {
     const categorized = createSessionResult("agent:main:categorized", "Unrelated title");
     const categorizedRow = categorized.sessions.at(0);
     if (!categorizedRow) {
       throw new Error("Expected categorized session fixture");
     }
     categorized.sessions[0] = { ...categorizedRow, category: "Tak" };
-    const empty = { ...categorized, count: 0, sessions: [] } as SessionsListResult;
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-      options?.search ? empty : categorized,
-    );
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => categorized);
     const request = vi.fn(async (method: string) =>
       method === "models.list" ? { models: [] } : ({ results: [] } satisfies SessionsSearchResult),
     );
