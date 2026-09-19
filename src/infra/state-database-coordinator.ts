@@ -13,6 +13,7 @@ import {
   tryAcquireExclusiveSqliteCoordinator,
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
 import {
@@ -481,8 +482,7 @@ export function withStateSchemaFence<T>(
   return runWithSqliteCoordinator(coordinator, "state schema mutation", operation);
 }
 
-/** A live cached connection excludes file publication, not other cached connections. */
-export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
+function resolveStateDatabaseHandleReadContext(params: CoordinatorOptions) {
   const pathname =
     params.coordinatorPath ??
     resolveLifecycleCoordinatorPath("state-handles", {
@@ -496,24 +496,40 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
       throw new SqliteCoordinatorError("SQLite binding write scope is no longer current");
     }
     writeScope.assertCurrent();
-    return writeScope.pin();
+    return { pathname, scope: writeScope };
   }
   const sourceScope = sourceReadScopes.getStore()?.get(pathname);
   if (sourceScope?.active) {
     sourceScope.assertCurrent();
-    return sourceScope.pin();
+    return { pathname, scope: sourceScope };
   }
   if (heldCoordinators.has(pathname)) {
     throw new StateDatabaseCoordinatorContentionError("state-handles");
   }
-  ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
-  const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
-    busyTimeoutMs: params.busyTimeoutMs,
-  });
-  if (!coordinator) {
-    throw new StateDatabaseCoordinatorContentionError("state-handles");
+  return { pathname, scope: undefined };
+}
+
+/** Validate the caller's local authority; the executing copy worker acquires the native lease. */
+export function assertStateDatabaseSourceReadContext(databasePath: string): void {
+  resolveStateDatabaseHandleReadContext({ databasePath });
+}
+
+/** A live cached connection excludes file publication, not other cached connections. */
+export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
+  const { pathname, scope } = resolveStateDatabaseHandleReadContext(params);
+  if (scope) {
+    return scope.pin();
   }
-  return coordinator;
+  return withSqliteInspectionOperation("coordinator", () => {
+    ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
+    const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
+      busyTimeoutMs: params.busyTimeoutMs,
+    });
+    if (!coordinator) {
+      throw new StateDatabaseCoordinatorContentionError("state-handles");
+    }
+    return coordinator;
+  });
 }
 
 /** Acquire only after closing local cached owners under the state lifecycle gate. */

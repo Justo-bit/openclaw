@@ -59,19 +59,32 @@ describe("PDF document extractor worker", () => {
     expect(pixels).toBeGreaterThan(request.maxPixels / 2);
   });
 
-  it("cancels queued or active extraction and allows the next document to succeed", async () => {
+  it("joins canceled extraction before allowing the next document to succeed", async () => {
     const extractor = createPdfDocumentExtractor();
     await extractor.extract(request);
+    const worker = workers.at(-1)!;
+    expect(worker.threadId).toBeGreaterThan(0);
     const abort = new AbortController();
     const reason = new Error("owning turn cancelled");
-    const extraction = extractor.extract({
-      ...request,
-      minTextChars: 10_000,
-      maxPixels: 4_000_000,
-      signal: abort.signal,
+    const postMessage = worker.postMessage.bind(worker);
+    const dispatch = vi.spyOn(worker, "postMessage").mockImplementationOnce((...args) => {
+      postMessage(...args);
+      // Cancel at dispatch so a fast worker reply cannot beat the abort.
+      abort.abort(reason);
     });
-    abort.abort(reason);
-    await expect(extraction).rejects.toBe(reason);
+    try {
+      await expect(
+        extractor.extract({
+          ...request,
+          minTextChars: 10_000,
+          maxPixels: 4_000_000,
+          signal: abort.signal,
+        }),
+      ).rejects.toBe(reason);
+      expect(worker.threadId).toBe(-1);
+    } finally {
+      dispatch.mockRestore();
+    }
     await expect(extractor.extract({ ...request, signal: abort.signal })).rejects.toBe(reason);
     await expect(extractor.extract(request)).resolves.toMatchObject({
       text: expect.stringContaining("First PDF page"),
