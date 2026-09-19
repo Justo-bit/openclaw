@@ -20,6 +20,7 @@ afterEach(() => {
 
 it.each([
   "one rotation",
+  "pinned refresh claim and settlement",
   "continued rotation",
   "pinned profile rotation",
   "cleanup failure",
@@ -49,8 +50,9 @@ it.each([
       if (change === "admission refusal") {
         throw refusal;
       }
-      const profileId = reads === 1 ? "custom:retired" : "custom:current";
-      if (reads === 1 || change === "continued rotation") {
+      const refresh = change === "pinned refresh claim and settlement";
+      const profileId = refresh || reads > 1 ? "custom:current" : "custom:retired";
+      if (reads === 1 || (refresh && reads === 2) || change === "continued rotation") {
         noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
           credentialsChanged: true,
           stateChanged: false,
@@ -62,7 +64,17 @@ it.each([
           status: "readable",
           raw: {
             version: 1,
-            profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+            profiles: {
+              [profileId]: refresh
+                ? {
+                    type: "oauth",
+                    provider: "custom",
+                    access: "fixture-settled",
+                    refresh: "fixture-refresh",
+                    expires: Date.UTC(2036, 0, 1),
+                  }
+                : { type: "api_key", provider: "custom", key: "fixture" },
+            },
           },
         },
         state: { status: "missing", reason: "row" },
@@ -76,11 +88,14 @@ it.each([
     modelId: "fixture",
     agentDir,
     ...(change === "pinned profile rotation" ? { authProfileId: "custom:retired" } : {}),
+    ...(change === "pinned refresh claim and settlement"
+      ? { authProfileId: "custom:current" }
+      : {}),
   });
-  if (change === "one rotation") {
+  if (change === "one rotation" || change === "pinned refresh claim and settlement") {
     await expect(resolution).resolves.toEqual({
       authProfileId: "custom:current",
-      authProfileMode: "api_key",
+      authProfileMode: change === "pinned refresh claim and settlement" ? "oauth" : "api_key",
     });
   } else if (change === "continued rotation") {
     await expect(resolution).rejects.toThrow("Auth profile store changed during its runtime read");
@@ -99,6 +114,8 @@ it.each([
   expect(events).toEqual(
     change === "cleanup failure" || change === "admission refusal"
       ? ["read", "disposed"]
-      : ["read", "disposed", "read", "disposed"],
+      : change === "pinned refresh claim and settlement" || change === "continued rotation"
+        ? ["read", "disposed", "read", "disposed", "read", "disposed"]
+        : ["read", "disposed", "read", "disposed"],
   );
 });

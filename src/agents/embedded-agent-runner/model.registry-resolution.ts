@@ -7,7 +7,7 @@ import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "..
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
-import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -195,14 +195,19 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const readStore = () => loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
-  const store = await readStore().catch((error: unknown) => {
-    if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
-      throw error;
+  const readStore = async (remainingTransitions: number): Promise<AuthProfileStore> => {
+    try {
+      return await loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
+    } catch (error) {
+      if (!(error instanceof AuthProfileRuntimeReadStaleError) || remainingTransitions === 0) {
+        throw error;
+      }
+      // One OAuth refresh publishes both its claim and settlement. Each can invalidate a
+      // read; recapture only after cleanup, with the same agent and explicit account pin.
+      return readStore(remainingTransitions - 1);
     }
-    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
-    return readStore();
-  });
+  };
+  const store = await readStore(2);
   const profileId =
     explicitProfileId ??
     listOpenAIAuthProfileProvidersForAgentRuntime({
