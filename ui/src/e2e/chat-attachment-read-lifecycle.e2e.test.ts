@@ -240,6 +240,7 @@ suite.define(() => {
               {
                 type: "image",
                 fileName: "late-selection.png",
+                origin: "file",
                 mimeType: "image/png",
                 content: ONE_PIXEL_PNG_B64,
               },
@@ -442,6 +443,7 @@ suite.define(() => {
                     {
                       content: Buffer.from(fileContents).toString("base64"),
                       fileName,
+                      origin: "file",
                       mimeType: "text/plain",
                       type: "file",
                     },
@@ -572,6 +574,7 @@ suite.define(() => {
           {
             content: Buffer.from(contents).toString("base64"),
             fileName: "offline.txt",
+            origin: "file",
             mimeType: "text/plain",
           },
         ],
@@ -675,7 +678,14 @@ suite.define(() => {
       expect(send.params).toMatchObject({
         sessionKey: firstSession,
         message: "restart draft A with image",
-        attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png", mimeType: "image/png" }],
+        attachments: [
+          {
+            content: ONE_PIXEL_PNG_B64,
+            fileName: "pixel.png",
+            mimeType: "image/png",
+            origin: "file",
+          },
+        ],
       });
       await expect.poll(() => activeComposer(restoredPage).inputValue()).toBe("");
       await expect.poll(() => activeAttachments(restoredPage).count()).toBe(0);
@@ -746,7 +756,7 @@ suite.define(() => {
       await composer.press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ fileName: "second.txt", mimeType: "text/plain" }],
+        attachments: [{ fileName: "second.txt", mimeType: "text/plain", origin: "file" }],
         message: "Send both files",
       });
     });
@@ -781,7 +791,14 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
-        attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png", mimeType: "image/png" }],
+        attachments: [
+          {
+            content: ONE_PIXEL_PNG_B64,
+            fileName: "pixel.png",
+            mimeType: "image/png",
+            origin: "file",
+          },
+        ],
         message: "Include the image that is still loading",
       });
     });

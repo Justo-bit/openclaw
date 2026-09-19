@@ -32,6 +32,7 @@ export class ChatAttachmentReadLifecycle {
     const entries = files.map((file): ChatAttachmentRead => ({
       attachment: {
         id: generateAttachmentId(),
+        origin: "file",
         mimeType: file.type || "application/octet-stream",
         fileName: file.name || undefined,
         sizeBytes: file.size,

@@ -399,6 +399,45 @@ it("includes WAL, SHM, and rollback-journal sidecars in inspection size", () => 
     timeout: 4_581_000,
     killSignal: "SIGKILL",
   });
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync");
+});
+
+it("selects bounded online fallback for opted-in synchronous snapshots", () => {
+  const source = createDatabase(0);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-staging-");
+  vi.mocked(spawnSync).mockReturnValueOnce({
+    pid: 1,
+    output: [null, '{"ok":true,"location":"private.sqlite"}', ""],
+    stdout: '{"ok":true,"location":"private.sqlite"}',
+    stderr: "",
+    status: 0,
+    signal: null,
+  });
+
+  expect(runSqliteReadOnlyWorkerSync(source, stagingRoot, "sync-fallback")).toBe("private.sqlite");
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync-fallback");
+});
+
+it("uses online backup instead of raw WAL copying for synchronous fallback", () => {
+  const source = createDatabase(0);
+  const writer = new (requireNodeSqlite().DatabaseSync)(source);
+  const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-live-");
+  try {
+    writer.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE live(value TEXT); INSERT INTO live VALUES ('committed');",
+    );
+    const location = runSqliteReadOnlyWorkerSync(source, stagingRoot, "sync-fallback");
+    const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT value FROM live").get()).toEqual({ value: "committed" });
+      expect(fs.existsSync(`${location}-wal`)).toBe(false);
+      expect(fs.existsSync(`${location}-shm`)).toBe(false);
+    } finally {
+      snapshot.close();
+    }
+  } finally {
+    writer.close();
+  }
 });
 
 describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)", (mode) => {

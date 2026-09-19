@@ -1319,7 +1319,10 @@
   transition: background var(--duration-fast) ease;
 }
 
-.slash-menu-item:hover,
+.slash-menu-item[role="option"] {
+  cursor: pointer;
+}
+
 .slash-menu-item--active {
   background: var(--bg-hover);
 }
@@ -1574,11 +1577,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 56px;
 }
 
-.chat-attachment-thumb--pasted-text {
-  width: min(162px, calc(100vw - 64px));
-  background: var(--chat-composer-surface, var(--popover));
-}
-
 .chat-attachment-thumb--browser-annotation {
   display: grid;
   flex: 0 0 auto;
@@ -1741,13 +1739,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   background: color-mix(in srgb, var(--chat-composer-surface, var(--popover)) 86%, var(--text));
 }
 
-.chat-attachment-file--pasted-text {
-  justify-content: flex-start;
-  gap: 10px;
-  padding: 8px 32px 8px 12px;
-  background: transparent;
-}
-
 .chat-attachment-file--video {
   padding: 0 12px 0 0;
   gap: 8px;
@@ -1823,11 +1814,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-attachment-file--pasted-text .chat-attachment-file__name {
-  font-size: 0.72rem;
-  line-height: 1.15;
 }
 
 .chat-attachment-file__body {
