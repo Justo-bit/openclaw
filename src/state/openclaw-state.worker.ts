@@ -1,5 +1,7 @@
 import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/path-resolve.js";
-import { inspectAuthProfileJsonCellReadOnly } from "../agents/auth-profiles/sqlite.js";
+import { readAuthProfileRows } from "../agents/auth-profiles/sqlite-json.js";
+import { isMissingDatabasePath } from "../agents/auth-profiles/sqlite-read-pool.js";
+import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import {
   readNativeHookRelayBridgeSnapshotFromDatabase,
   listNativeHookRelayBridgeSnapshotsInDatabase,
@@ -184,11 +186,27 @@ function createSharedStateWorkerBackend(
           if (command.type === "authProfiles.personal") {
             return readUserModelAuthProfile(command.input.profileId, options);
           }
-          const target = { kind: "shared-state" as const, ...options };
-          return {
-            store: inspectAuthProfileJsonCellReadOnly(target, "store"),
-            state: inspectAuthProfileJsonCellReadOnly(target, "state"),
+          const missing: AuthProfileRowRead = {
+            store: { status: "missing", reason: "database" },
+            state: { status: "missing", reason: "database" },
+            cacheable: false,
           };
+          try {
+            return (
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) => readAuthProfileRows(db, context.databasePath, "shared-state"),
+                options,
+              ) ?? missing
+            );
+          } catch {
+            return isMissingDatabasePath(context.databasePath)
+              ? missing
+              : {
+                  store: { status: "unreadable" as const },
+                  state: { status: "unreadable" as const },
+                  cacheable: false,
+                };
+          }
         };
         return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
       }
@@ -316,6 +334,18 @@ function createSharedStateWorkerBackend(
           command.input.generation,
           readStableSqliteFileGeneration(context.databasePath),
         );
+      }
+      if (command.type === "database.inspectIdle") {
+        // Idle maintenance must never materialize a connection for an artifact-preserving reader.
+        if (
+          !nativeDatabase?.db.isOpen ||
+          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
+            nativeDatabase
+        ) {
+          return "retire";
+        }
+        assertOpenClawStateDatabaseOwner(nativeDatabase.db, { pathname: nativeDatabase.path });
+        return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
       }
       if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
         return executeUserPreferenceCommand(command, {

@@ -138,6 +138,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.cli-watchdog.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "src/gateway/server.incomplete-stream.test.ts",
+  "src/gateway/server.encrypted-tool-continuation.test.ts",
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",

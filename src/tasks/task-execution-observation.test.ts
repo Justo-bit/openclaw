@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  addSession,
+  deleteSession,
+  markBackgrounded,
+  markExited,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import * as nativeExecution from "../agents/subagents/registry/subagent-execution-observation.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -55,6 +63,7 @@ afterEach(() => {
   for (const id of runIds) {
     subagentRuns.delete(id);
   }
+  resetProcessRegistryForTests();
   taskIds.clear();
   runIds.clear();
   vi.restoreAllMocks();
@@ -151,4 +160,53 @@ it("keeps running task observations current through generation replacement and d
   subagentRuns.delete(successor.runId);
   subagentRuns.delete(original.runId);
   expect(getTaskExecutionObservation(record)).toEqual({ state: "unknown", lastActivityAt: 30 });
+});
+
+it("observes background exec ownership through silence, removal, cleanup, and exit", () => {
+  const process = createProcessSessionFixture({ id: "quiet-copy", startedAt: 1_000 });
+  process.sessionKey = "agent:main:main";
+  const activity = { resultSettled: false, lastOutputAtMs: 1_000 };
+  process.processActivity = activity;
+  addSession(process);
+  const record: TaskRecord = {
+    ...task("exec-task", "running"),
+    runtime: "cli",
+    taskKind: "exec",
+    runId: "exec:quiet-copy",
+    sourceId: process.id,
+    childSessionKey: undefined,
+    detail: undefined,
+    startedAt: process.startedAt,
+  };
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "unknown" });
+  markBackgrounded(process);
+  vi.setSystemTime(process.startedAt + 53 * 60_000);
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "running", lastActivityAt: 1_000 });
+  expect(getTaskExecutionObservation({ ...record, ownerKey: "agent:other:main" })).toEqual({
+    state: "unknown",
+  });
+  activity.lastOutputAtMs = 2_000;
+  deleteSession(process.id);
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "running", lastActivityAt: 2_000 });
+  activity.resultSettled = true;
+  process.finalizing = true;
+  expect(getTaskExecutionObservation(record)).toEqual({
+    state: "waiting",
+    wait: { kind: "external" },
+    lastActivityAt: 2_000,
+  });
+  markExited(process, 0, null, "completed", "exit");
+  record.status = "succeeded";
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "finished" });
+  record.status = "running";
+  resetProcessRegistryForTests();
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "unknown" });
+  const replacement = createProcessSessionFixture({
+    id: process.id,
+    startedAt: 5_000,
+    backgrounded: true,
+  });
+  replacement.sessionKey = process.sessionKey;
+  addSession(replacement);
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "unknown" });
 });

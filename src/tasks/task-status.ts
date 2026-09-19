@@ -1,9 +1,9 @@
 // Builds task status summaries and formatted status text for user-facing surfaces.
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { matchesTaskStatusFilter, type TaskRecord } from "./task-registry.types.js";
@@ -125,13 +125,16 @@ export function sanitizeTaskStatusText(
   return sanitized;
 }
 
-/** Sanitize bounded task input for detail views without flattening its layout. */
-export function sanitizeTaskPromptText(value: unknown, maxChars: number): string {
+/** Explicit task lookups retain the sanitized input; list/event titles stay bounded. */
+export function sanitizeTaskPromptText(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value));
-  return sanitized ? truncateTaskStatusText(sanitized, maxChars) : "";
+  // Task input is source, not assistant prose: deduplication and tag cleanup
+  // would change repeated commands or literal shell arguments.
+  return stripInlineLeakedInternalContext(
+    stripInternalRuntimeContext(value, { preserveSurroundingWhitespace: true }),
+  ).trim();
 }
 
 export function formatTaskStatusTitleText(value: unknown, fallback = "Background task"): string {

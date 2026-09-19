@@ -137,6 +137,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/doctor-contract-api.capacity.test.ts",
   "extensions/matrix/doctor-contract-api.credentials.test.ts",
   "extensions/matrix/doctor-contract-api.test.ts",
+  "extensions/matrix/src/approval-config.storage.test.ts",
   "extensions/matrix/src/matrix/client/create-client.storage.test.ts",
   "extensions/matrix/src/matrix/client/file-sync-store.test.ts",
   "extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts",
