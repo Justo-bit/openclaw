@@ -180,9 +180,20 @@ describe("config IO plugin metadata snapshots", () => {
       channels: ["research-chat"],
     });
     const mergedRegistry = { plugins: [primary, secondary], diagnostics: [] };
+    const secondaryDiagnostic = {
+      level: "warn" as const,
+      code: "persisted-registry-stale-source" as const,
+      message: "Retained secondary registry metadata",
+    };
     const snapshots = new Map([
       ["/srv/ops", workspaceSnapshot("/srv/ops", [primary], ["primary"])],
-      ["/srv/research", workspaceSnapshot("/srv/research", [secondary])],
+      [
+        "/srv/research",
+        {
+          ...workspaceSnapshot("/srv/research", [secondary]),
+          registryDiagnostics: [secondaryDiagnostic],
+        },
+      ],
     ]);
     mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
       ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
@@ -209,6 +220,7 @@ describe("config IO plugin metadata snapshots", () => {
     ]);
     expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
     expect(snapshot?.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
+    expect(snapshot?.registryDiagnostics).toEqual([secondaryDiagnostic]);
     expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
     expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
     expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(

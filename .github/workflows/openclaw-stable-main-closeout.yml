@@ -470,12 +470,15 @@ jobs:
             .targetSha == $tag_sha and
             .rerunGroup == "all" and
             (.runReleaseSoak == "true" or ($stable_soak_waiver | test("[^[:space:]]"))) and
-            .controls.performanceBlocking == true and
+            (.controls.performanceBlocking == true or ($stable_soak_waiver | test("[^[:space:]]"))) and
             .childRuns.productPerformance.conclusion == "success"
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          if ! jq -e '.controls.performanceBlocking == true' "$manifest_dir/$manifest_asset" >/dev/null; then
+            echo "::warning::Blocking product performance waived by operator stable soak waiver; advisory performance child passed."
+          fi
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
           if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then

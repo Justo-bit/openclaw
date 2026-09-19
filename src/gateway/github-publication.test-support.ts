@@ -195,7 +195,8 @@ export let commandCalls: Array<{ argv: string[]; input?: string }>;
 export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   setRuntimeConfigSnapshot({
     agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
-    session: { store: path.join(root, "sessions.json") },
+    // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
+    session: { store: path.join(root, "sessions.json"), maintenance: { mode: "warn" } },
   });
   const { loadGatewaySessionEntryReadOnly } =
     await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
@@ -400,9 +401,6 @@ export function installGitHubPublicationTestHarness(): void {
         }
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
-        }
-        if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
-          return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
         }
         if (command.startsWith("git commit-tree ")) {
           return commandResult(`${NEW_HEAD}\n`);

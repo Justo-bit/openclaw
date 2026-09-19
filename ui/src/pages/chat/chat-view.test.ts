@@ -37,6 +37,14 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import {
+  createAttachmentSidebarHarness,
+  getAttachmentMenuOption,
+  renderAttachmentHarness,
+  requireAttachmentInput,
+  selectAttachmentMenuOption,
+  selectFile,
+} from "./chat-attachment-picker.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -5981,38 +5989,6 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
-  function renderAttachmentHarness(
-    getAttachments: () => ChatAttachment[],
-    onAttachmentsChange: (attachments: ChatAttachment[]) => void,
-  ) {
-    return renderChatView({
-      attachments: getAttachments(),
-      getAttachments,
-      onAttachmentsChange,
-    });
-  }
-
-  function selectFile(input: HTMLInputElement, file: File) {
-    Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function getAttachmentMenuOption(container: Element, label: string) {
-    return Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
-    ).find((button) => button.textContent?.trim() === label);
-  }
-
-  function requireAttachmentInput(container: Element, selector: string, label: string) {
-    return requireElement(container, selector, label) as HTMLInputElement;
-  }
-
-  function selectAttachmentMenuOption(button: HTMLButtonElement | undefined) {
-    button
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: button }, bubbles: true }));
-  }
-
   it("highlights only the chat pane receiving a file drag", () => {
     const first = renderChatView();
     const second = renderChatView();
@@ -6210,6 +6186,7 @@ describe("chat attachment picker", () => {
         id: "ordinary-text-file",
         fileName: "pasted-text-1.txt",
         mimeType: "text/plain",
+        origin: "file",
         sizeBytes: 4,
       },
       dataUrl: `data:text/plain;base64,${btoa("file")}`,
@@ -6239,7 +6216,7 @@ describe("chat attachment picker", () => {
     );
   });
 
-  it("shows a cached short preview for pasted text", () => {
+  it("opens a pasted text excerpt in the side panel with the text-field action", async () => {
     let attachments: ChatAttachment[] = [];
     let container = renderAttachmentHarness(
       () => attachments,
@@ -6250,17 +6227,31 @@ describe("chat attachment picker", () => {
     const textarea = getComposerTextarea(container);
     const text = `First words from a long pasted note ${"x".repeat(1100)}`;
     textarea.dispatchEvent(createPasteEvent(text));
-    container = renderChatView({ attachments });
+    const sidebar = createAttachmentSidebarHarness();
+    container = renderChatView({ attachments, onOpenSidebar: sidebar.open });
+    document.body.append(container);
 
-    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toContain(
-      "First words from a l...",
+    await waitForFast(() => {
+      expect(container.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+        "First words from a long pasted…",
+      );
+    });
+    expect(attachments[0]?.origin).toBe("paste");
+    expect(container.querySelector("openclaw-chat-pasted-text openclaw-tooltip")).toBeNull();
+    requireElement(
+      container,
+      ".chat-selection-annotations__chip",
+      "pasted text chip",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sidebar.open).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
     );
-    expect(container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
-      "Show in text field",
-    );
+    expect(
+      sidebar.container.querySelector(".chat-attachment-text-action")?.textContent?.trim(),
+    ).toBe("Show in text field");
   });
 
-  it("preserves pasted-text presentation and restore behavior across handoff", () => {
+  it("preserves pasted-text presentation and restore behavior across handoff", async () => {
     let attachments: ChatAttachment[] = [];
     const producer = renderAttachmentHarness(
       () => attachments,
@@ -6293,7 +6284,9 @@ describe("chat attachment picker", () => {
 
     const onAttachmentsChange = vi.fn();
     const onDraftChange = vi.fn();
+    const sidebar = createAttachmentSidebarHarness();
     const remounted = renderChatView({
+      onOpenSidebar: sidebar.open,
       attachments,
       getAttachments: () => attachments,
       draft: "intro",
@@ -6301,36 +6294,27 @@ describe("chat attachment picker", () => {
       onAttachmentsChange,
       onDraftChange,
     });
-    expect(remounted.querySelector(".chat-attachment-file__name")?.textContent).toContain(
-      "First words from a r...",
-    );
+    document.body.append(remounted);
+    await waitForFast(() => {
+      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+        "First words from a remounted p…",
+      );
+    });
+    expect(attachments[0]?.origin).toBe("paste");
     requireElement(
       remounted,
-      '[aria-label="Show in text field"]',
+      ".chat-selection-annotations__chip",
+      "pasted text chip",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireElement(
+      sidebar.container,
+      ".chat-attachment-text-action",
       "show pasted text button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
     expect(getChatAttachmentDataUrl(original)).toBeNull();
-  });
-
-  it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
-    let attachments: ChatAttachment[] = [];
-    let container = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const textarea = getComposerTextarea(container);
-    const text = `${"a".repeat(19)}🦞${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(text));
-    container = renderChatView({ attachments });
-
-    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
-      `${"a".repeat(19)}...`,
-    );
   });
 
   it("keeps normal short plain-text paste in the textarea", () => {
@@ -6359,8 +6343,10 @@ describe("chat attachment picker", () => {
     );
     const onDraftChange = vi.fn();
     const onShowAttachmentsChange = vi.fn();
+    const sidebar = createAttachmentSidebarHarness();
     const preview = expectDefined(
       renderChatView({
+        onOpenSidebar: sidebar.open,
         attachments: [attachment],
         draft: "intro",
         getDraft: () => "intro",
@@ -6369,9 +6355,16 @@ describe("chat attachment picker", () => {
       }),
       'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
     );
+    document.body.append(preview);
+    await waitForFast(() => {
+      expect(preview.querySelector(".chat-selection-annotations__chip")).not.toBeNull();
+    });
+    requireElement(preview, ".chat-selection-annotations__chip", "pasted text chip").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     const showInTextFieldButton = requireElement(
-      preview,
-      '[aria-label="Show in text field"]',
+      sidebar.container,
+      ".chat-attachment-text-action",
       "show pasted text in text field button",
     ) as HTMLButtonElement;
 
@@ -7678,21 +7671,6 @@ describe("chat model controls", () => {
     },
   );
 
-  it("applies a model selection immediately", () => {
-    const { state } = createOpenAiHeaderState();
-    const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '[data-chat-model-option]:not([data-chat-model-default="true"])',
-      ),
-    ).find((button) => button.getAttribute("aria-selected") === "false");
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
-    modelOption?.click();
-
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
-  });
-
   it.each([
     ["session", "Selecting a model changes only this session."],
     ["agent", "Selecting a model updates this agent's default."],
@@ -7726,7 +7704,7 @@ describe("chat model controls", () => {
       expect(onModelSelect).toHaveBeenCalledWith(
         modelOption?.dataset.chatModelOption,
         "main",
-        null,
+        undefined,
       );
     },
   );
@@ -7917,7 +7895,11 @@ describe("chat model controls", () => {
     getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onFastModeSelect).not.toHaveBeenCalled();
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith(
+      modelOption?.dataset.chatModelOption,
+      "main",
+      undefined,
+    );
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
@@ -8389,7 +8371,7 @@ describe("chat model controls", () => {
       expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
       search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", null);
+      expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", undefined);
       expect(details?.open).toBe(false);
 
       onModelSelect.mockClear();
@@ -8398,7 +8380,7 @@ describe("chat model controls", () => {
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",
-        null,
+        undefined,
       );
       expect(details?.open).toBe(false);
       container.remove();
@@ -8466,7 +8448,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
 
     details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
-    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", undefined);
     container.remove();
   });
 
@@ -9197,7 +9179,11 @@ describe("chat model controls", () => {
     );
     expect(modelOption).toBeInstanceOf(HTMLButtonElement);
     modelOption?.click();
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith(
+      modelOption?.dataset.chatModelOption,
+      "main",
+      undefined,
+    );
 
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
@@ -9547,7 +9533,7 @@ describe("chat model controls", () => {
       ?.click();
 
     await waitForFast(() => {
-      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main", null);
+      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main", undefined);
     });
     render(renderChatModelControls(props), container);
     expect(

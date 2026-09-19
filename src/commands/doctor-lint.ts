@@ -3,15 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
-import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
+import {
+  createConfigIO,
+  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
+} from "../config/config.js";
 import { maybeLoadDotEnvForConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import {
   registerBundledHealthChecks,
   resolveBundledHealthCheckPluginStateMode,
 } from "../flows/bundled-health-checks.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import type { DoctorHealthCheckContext } from "../flows/doctor-health-contribution-types.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import {
   exitCodeFromFindings,
@@ -183,16 +189,32 @@ async function prepareDoctorLintExecution(
   const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
   const effectiveOpts: DoctorLintCliOptions = updateReadiness ? { ...opts, updateReadiness } : opts;
   const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
-  const readConfigSnapshot = (deferredPluginMigrations?: readonly DeferredPluginMigration[]) =>
-    pluginStateMode === "direct"
-      ? readConfigFileSnapshot({ observe: false })
-      : createConfigIO({
-          env: sourceEnv,
-          configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
-          observe: false,
-          pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
-          deferredPluginMigrations,
-        }).readConfigFileSnapshot();
+  const prepareRuntimeValidation =
+    pluginStateMode === "isolated" ||
+    !effectiveOpts.onlyIds?.length ||
+    effectiveOpts.onlyIds.includes(RUNTIME_TOOL_SCHEMA_CHECK_ID);
+  const readConfigSnapshot = async (
+    deferredPluginMigrations?: readonly DeferredPluginMigration[],
+  ) => {
+    const io =
+      pluginStateMode === "direct"
+        ? { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata }
+        : createConfigIO({
+            env: sourceEnv,
+            configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
+            observe: false,
+            pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
+            deferredPluginMigrations,
+          });
+    return pluginStateMode === "deferred" || !prepareRuntimeValidation
+      ? io.readConfigFileSnapshot({ observe: false })
+      : (
+          await io.readConfigFileSnapshotWithPluginMetadata({
+            observe: false,
+            prepareValidation: "runtime",
+          })
+        ).snapshot;
+  };
   const stateView: DoctorLintStateView = {
     cleanupWarnings,
     pluginMetadataEnv: sourceEnv,
@@ -266,19 +288,20 @@ async function executeDoctorLint(
     };
   }
 
+  const cfg = captureRuntimeConfig(snapshot.config);
   const sourceEnv = { ...stateView.sourceEnv };
-  const defaultAgentId = tryResolveDefaultAgentId(snapshot.config);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime,
-    cfg: snapshot.config,
-    cwd: defaultAgentId ? resolveAgentWorkspaceDir(snapshot.config, defaultAgentId) : process.cwd(),
+    cfg,
+    cwd: defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : process.cwd(),
     env: sourceEnv,
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   const availabilityFindings = registerBundledHealthChecks({
-    cfg: snapshot.config,
+    cfg,
     cwd: ctx.cwd,
     env: stateView.pluginMetadataEnv,
     runWithPluginStateSnapshot: stateView.runWithPluginStateSnapshot,
@@ -303,6 +326,7 @@ async function executeDoctorLint(
   const coreCtx = {
     ...ctx,
     env: opts.updateReadiness ? stateView.pluginMetadataEnv : sourceEnv,
+    lintConfigSnapshot: snapshot,
     deep: opts.deep === true,
     runWithPrivateStateSnapshot,
     runWithSourceState,
@@ -531,7 +555,7 @@ async function createStateSnapshotFailureExecution(
 
 function withCoreLintContext(
   check: HealthCheck,
-  ctx: HealthCheckContext & {
+  ctx: DoctorHealthCheckContext & {
     readonly deep?: boolean;
     readonly runWithPrivateStateSnapshot: DoctorLintStateRunner;
     readonly runWithSourceState: DoctorLintStateRunner;

@@ -2,7 +2,7 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type {
   LegacyStateMigrationStepReceipt,
@@ -93,6 +93,8 @@ export type DoctorHealthFlowContext = {
 
 /** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */
 export type DoctorHealthCheckContext = HealthCheckContext & {
+  /** Read-only lint validates the source once; mutable Doctor passes must reread it. */
+  readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
 };

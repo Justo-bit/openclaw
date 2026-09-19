@@ -50,7 +50,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
-  listSessionEntriesReadOnly,
+  loadExactSessionEntryFromStoreReadOnly,
   patchSessionEntryCore,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
@@ -84,11 +84,11 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
@@ -116,6 +116,7 @@ import { existingSessionSelectionWouldChange } from "./session-create-selection-
 import {
   type PreparedGatewaySessionLifecycle,
   type PrepareGatewaySessionLifecycle,
+  projectPreparedSessionWorkspace,
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
@@ -203,7 +204,7 @@ export async function createGatewaySession(params: {
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
-  /** Registry identity recorded only when this request creates a logical session node. */
+  /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;
   pendingProjectGitUrl?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
@@ -440,13 +441,13 @@ export async function createGatewaySession(params: {
       };
     }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntryExists = listSessionEntriesReadOnly({
+    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
       agentId,
       storePath: durableStorePath,
+      sessionKey: explicitTargetKey,
       projection: "list",
-      clone: false,
-    }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
-    if (durableEntryExists || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
+    });
+    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return {
         ok: false,
         error: errorShape(
@@ -1286,9 +1287,13 @@ export async function createGatewaySession(params: {
               })
             : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
-          ...(projectId && createdNewEntry ? { projectId } : {}),
-          ...(pendingProjectGitUrl && createdNewEntry ? { pendingProjectGitUrl } : {}),
-          ...(pendingWorktree && createdNewEntry ? { pendingWorktree } : {}),
+          ...projectPreparedSessionWorkspace(existingEntry, {
+            projectId,
+            pendingProjectGitUrl,
+            pendingWorktree,
+            spawnedCwd,
+            preparedLifecycle,
+          }),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -1299,13 +1304,6 @@ export async function createGatewaySession(params: {
                 modelSelectionLocked: true,
                 pluginOwnerId: catalogPluginOwnerId,
               }
-            : {}),
-          // Session worktrees adopt cwd only during admin-gated creation; public patching stays
-          // restricted to spawned subagent and ACP lineage.
-          ...(spawnedCwd ? { spawnedCwd } : {}),
-          ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
-          ...(preparedLifecycle?.repositoryWorkspaceId
-            ? { repositoryWorkspaceId: preparedLifecycle.repositoryWorkspaceId }
             : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode
@@ -1591,7 +1589,7 @@ export async function createGatewaySession(params: {
     if (createdNewEntry) {
       // The created fact belongs to this row generation; record it before a
       // same-key delete can acquire the lifecycle fence and purge that state.
-      recordSessionCreated({
+      recordSessionCreated(params.cfg, {
         sessionKey: createdContext.key,
         agentId: createdContext.agentId,
         entry: createdContext.entry,

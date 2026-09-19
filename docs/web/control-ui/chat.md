@@ -31,7 +31,14 @@ Saving keeps your existing draft and does not send a message.
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
 same editor beside it. **Save** or Enter saves changes; **Cancel** or Escape discards the edit; and the trash
-button deletes the comment. The composer's comment count is a passive indicator.
+button deletes the comment. Hover, keyboard-focus, or click the composer's comment
+count to open its preview. Deleting one comment keeps the remaining list open;
+Escape, a click outside, or moving the pointer away dismisses it. The count's
+**Remove all comments** action clears pending comments in one click and returns
+focus to the composer. **Undo** in the removal notification restores them. The
+clear action appears on hover or keyboard focus and stays visible on touch.
+Clearing pending comments preserves ordinary attachments, the message draft,
+and comments already sent in the conversation.
 Archiving another split pane leaves the current comment editor and keyboard focus in place.
 Saved comments and their source markers follow the composer's existing draft and
 queue recovery behavior. When you send, each comment is attached as a text file
@@ -53,7 +60,10 @@ when the session is known locally. Unknown or ambiguous session references remai
 navigable without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` and `qa-café/index.md` retain workspace file handling, including
-Unicode names and percent-encoded Markdown link destinations.
+Unicode names and percent-encoded Markdown link destinations. Explicit Markdown
+file links also support spaces, emoji, and punctuation in filenames; for example,
+`[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Plain-text and
+inline-code file detection stays conservative to avoid turning prose into links.
 
 While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes.
 
@@ -66,6 +76,12 @@ worktree**. Both start the task in the background and keep your current
 conversation and draft open. The card disappears after the task starts; select
 the new session in the sidebar when you want to follow its progress.
 **Start in this session** runs the task in the current conversation.
+
+Before starting a worktree, OpenClaw checks that the suggested folder is a Git
+repository with a commit. If it is not, the card keeps the prompt and lets you
+select a registered project or enter the correct repository path. Select
+**Start in a new worktree** again to continue; no child session is started for
+an invalid source folder.
 
 ## Composer capability menu
 
@@ -196,7 +212,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions retain their sidebar nesting and reject pin requests. Subagent runs also reject pin requests and do not appear in sidebar navigation.
     - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Search the active transcript with **⌘F** on Mac or **Ctrl+F** on Windows/Linux; Mac **Ctrl+F** remains available for native text navigation. Search includes recovered full-message text and updates when an in-flight recovery finishes. Press **Escape** while search is focused to close it, clear the query, and return focus to the control that opened it. Clearing the search keeps recovered text available in the thread.
-    - Thread search in the command palette (⌘K on Mac, Ctrl+K on Windows/Linux, or the search button in the top-left control cluster) follows a bounded number of matching pages across agents, searches active sessions, filters internal child/cron rows, and lists visible matches next to navigation commands. On the **Sessions** page at `/sessions`, the quick filter searches visible session metadata on the Gateway before pagination, including names, agent identity, model/runtime labels, run status, and goal text and usage. The selected agent (or **All agents**) and **Active / Archived / All** filters still apply. **Limit** sets the server page size (50 by default); **Load more sessions** appends the next matching page. Table sorting, grouping, overview counts, and **Rows per page** operate on the loaded rows, not a globally sorted result. **Search transcripts** searches message content separately and is not narrowed by the quick filter. Available session titles stay with transcript matches even when their sessions are outside the filtered table. Opening a session link preserves its full UUID identity when session identifiers share a prefix, including after reloading links from Sessions, Worktrees, and Tasks.
+    - Thread search in the command palette (⌘K on Mac, Ctrl+K on Windows/Linux, or the search button in the top-left control cluster) searches the authorized active-session scope across configured agents on the Gateway, filters internal child/cron/system rows before result limits, and lists the best visible matches next to navigation commands. The result limit does not restrict which sessions can match. Only actual indexing, unavailable transcript history, or search failures show status messages; more matches than the displayed limit is normal. On the **Sessions** page at `/sessions`, the quick filter searches visible session metadata on the Gateway before pagination, including names, agent identity, model/runtime labels, run status, and goal text and usage. The selected agent (or **All agents**) and **Active / Archived / All** filters still apply. **Limit** sets the server page size (50 by default); **Load more sessions** appends the next matching page. Table sorting, grouping, overview counts, and **Rows per page** operate on the loaded rows, not a globally sorted result. **Search transcripts** searches message content across the complete selected session scope on the Gateway, separately from the quick filter and roster page size. Available session titles stay with transcript matches even when their sessions are outside the filtered table. Opening a session link preserves its full UUID identity when session identifiers share a prefix, including after reloading links from Sessions, Worktrees, and Tasks.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Cmd/Ctrl-click opens the session in a new browser tab. Multi-selected rows (Alt/Option-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch Archive reports per-session failures while archiving eligible rows, whereas batch Delete keeps its separate idle-or-already-archived eligibility. Archive stays disabled for agent main sessions (including `global` in global scope) and the `unknown` sentinel. For any other session, including one with active work, the Gateway stops and fully drains that session's work before archiving it. The selected archived session stays open with an archived notice and **Unarchive** action; deleting the selected session switches Chat back to that agent's main session. If you switch agents while a rename, archive, delete, or batch update is finishing, its completion preserves the newly selected agent's session list, pagination, and ongoing updates, including in Archived and All views.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
@@ -215,10 +231,11 @@ Chat error banners, including cloud runner failures, show short messages in full
     - **Review** retains task and detail selections independently of file tabs. A pending file or artifact updates only its own open tab: it cannot select itself over a newer tab, reopen a closed preview, or return after you leave the chat page. Switching tabs or hiding the whole side panel preserves the pending preview without changing your chosen layout when it finishes. Text attachments retain their Preview or View Raw Text mode while switching between open files. Background download-link refreshes keep an unchanged attachment's reader in place, including keyboard focus and code-block controls.
     - Each task has a main view and a unified side panel. The task toolbar's **Swap** button exchanges the main view and active side-panel tab; its tooltip names both views, for example **Swap Chat and Dashboard**. Chat, Dashboard, Browser, Terminal, Files, and Review can all be main. Other side-panel tabs remain available. **Focus** in the main pane header gives that view the full task area; **Restore split** brings the side panel back. Swapping or focusing preserves live content and drafts. Closing the whole side panel hides it without changing the main view, and the browser remembers each task's arrangement.
     - The task toolbar's **Layout** menu positions the side panel left, right, or below the main area. It adapts to each pane's own width rather than the window, falls back to a bottom strip in a narrow pane or compact window, and hides its dock controls until the pane widens. Phone-sized viewports still open review content full-screen.
+    - A new Browser side panel uses the task pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.
     - Diff syntax highlighting uses each file's language and the current theme; unknown file types and oversized previews remain plain text. Inline and session diffs do not require the optional [Diffs plugin](/tools/diffs), which creates standalone viewer links and PNG/PDF attachments.
     - **Split view:** open it from the chat title bar (beside the thread diff, background tasks, and thread files toggles), then split the active pane right or down for as many panes as fit. Each pane has its own thread, transcript, composer, and tool stream.
-    - Agents with the `screen` tool can request the same pane, sidebar, terminal, browser, focus, and navigation changes while a capable Control UI is connected. Protocol v1 applies the command to every connected capable Control UI; see [Screen](/tools/screen).
+    - Agents with the `screen` tool can request pane, sidebar, terminal, browser, desktop, portal, focus, and navigation changes in the capable Control UI browser that requested the turn. Other connected browsers keep their own layout; see [Screen](/tools/screen).
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
     - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane at the full available width and height, including its header with the close control. Widening the window restores the saved column and row proportions without losing drafts.
@@ -306,9 +323,21 @@ an explanation in chat.
 
 ### Source previews and copying code
 
-Select **Open** on a text attachment to read it directly in the **Files** side
-panel. Plain-text attachments, including pasted `.txt` files, CSV, and JSON,
-preserve line breaks and indentation. Markdown attachments render as documents
+Long clipboard text appears as a compact chip in the composer and transcript.
+Its label shows the first 30 characters of a plain-text excerpt, with HTML and
+Markdown formatting removed. Empty or unavailable excerpts show **Pasted text**.
+In the transcript, chips sit above the text bubble alongside other attachments;
+multiple chips share a row and wrap when needed. Click a chip or press Enter to
+open the existing attachment side panel and copy the original text, preserving
+markup, line breaks, and indentation. The composer panel also offers **Show in
+text field** and removal. Messages containing only comment or pasted-text chips
+use a transparent shell.
+Newly uploaded text files remain file cards, even when their names resemble
+pasted-text attachments. Older history without origin metadata recognizes
+`text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
+
+Select **Open** on an uploaded text attachment to read it directly in the **Files** side
+panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged
 text, its code blocks keep your expansion and wrapping choices after loading.
 A different attachment or changed text starts with fresh controls. Long previews
@@ -446,6 +475,10 @@ Use the mouse wheel or trackpad over the composer or its surrounding space to
 scroll the conversation while the composer stays pinned. Long drafts, task
 progress cards, and menus keep their own scrolling when their content overflows.
 
+Scrolling down at the end keeps the final reply above the pull request bar and
+composer as images or other message content finish resizing. Scrolling upward
+keeps your reading position instead.
+
 The task progress card above the composer collapses after deliberate upward
 scrolling settles. Returning to the end and progress updates leave it collapsed;
 completion can reopen it only while you are already at the end. Manual choices
@@ -502,6 +535,8 @@ Press Escape, select **Close image preview**, or click outside the image to clos
 and return focus to the tile you opened.
 
 Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
+
+In automatic visible-reply mode, this includes standalone `MEDIA:` lines in model-authored commentary committed to the transcript, not just final replies. Only references captured before transcript hooks and retained in that commentary are eligible; hook-added references remain text, and normal media access and live run/session checks still apply. Message-tool-only delivery uses `message(action=send)` with structured attachment fields instead. Tool/plugin output and streamed block payloads must also use structured fields. See [WebChat commentary compatibility](/reference/rich-output-protocol#webchat-commentary-compatibility).
 
 Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a **From** attribution row above the message. Known senders, including the current agent, retain their agent identity. Unknown or unlisted senders show no avatar beside the bubble or in the attribution row, and no empty inline avatar space remains. The message column stays aligned with neighboring messages. Select a linked source to open its session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
 

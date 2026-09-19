@@ -438,6 +438,7 @@ src/config/validation-issues.ts
 src/config/validation-plugin-config.ts
 src/config/validation-plugin-registry.ts
 src/config/validation-plugin-rules.ts
+src/config/validation-prepared.ts
 src/config/validation.ts
 src/config/validation.types.ts
 src/config/version.ts
@@ -648,6 +649,7 @@ src/infra/shell-wrapper-resolution.ts
 src/infra/sqlite-audit-record-store.async.ts
 src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
+src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-coordinator.ts
 src/infra/sqlite-error-diagnostics.ts
@@ -656,9 +658,12 @@ src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity.ts
+src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
+src/infra/sqlite-read-cache.ts
+src/infra/sqlite-reader-lifecycle.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
@@ -672,7 +677,10 @@ src/infra/sqlite-schema-contract.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-strict.ts
@@ -680,6 +688,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts
 src/infra/sqlite-worker-broker-admission.ts
@@ -688,6 +697,7 @@ src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-identity.ts
+src/infra/sqlite-worker-lifecycle-preparation.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
@@ -695,6 +705,7 @@ src/infra/stale-lock-file.ts
 src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
+src/infra/state-database-coordinator-errors.ts
 src/infra/state-database-coordinator-paths.ts
 src/infra/state-database-coordinator.ts
 src/infra/state-lease-process-owner.ts
@@ -727,6 +738,7 @@ src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
+src/infra/worker-cpu.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool.ts
@@ -859,6 +871,7 @@ src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
 src/plugins/manifest-model-provider-normalizers.ts
 src/plugins/manifest-owner-policy.ts
+src/plugins/manifest-platforms.ts
 src/plugins/manifest-record.ts
 src/plugins/manifest-registry-installed.ts
 src/plugins/manifest-registry.ts
@@ -938,6 +951,7 @@ src/plugins/provider-owner-index.ts
 src/plugins/provider-policy-owners.ts
 src/plugins/provider-policy-surface.ts
 src/plugins/provider-public-artifacts.ts
+src/plugins/provider-registry-index.ts
 src/plugins/provider-registry-selection.ts
 src/plugins/provider-registry-shared.ts
 src/plugins/provider-thinking-catalog.ts
@@ -1096,6 +1110,7 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
+src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts

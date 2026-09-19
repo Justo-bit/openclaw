@@ -2809,7 +2809,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: control-ui-test-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -3018,6 +3018,7 @@ jobs:
             ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
             ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
+            ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
             ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
             ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
@@ -3039,7 +3040,15 @@ jobs:
           name: control-ui-real-gateway-timeout-${{ github.run_attempt }}
           path: |
             .artifacts/control-ui-e2e-timeouts/real-gateway-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
-            .artifacts/control-ui-e2e/real-gateway/quota-refresh-*/quota.public.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload quota auth and transport diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-quota-diagnostics-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/real-gateway/quota-refresh-*/quota.public.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -4196,7 +4205,8 @@ jobs:
               ;;
           esac
 
-  # Keep five core Programs; ordinary hybrid runs serialize them across two hosted jobs.
+  # Keep five core stripes; the runner isolates large targets into serial child processes.
+  # Ordinary hybrid runs serialize the stripes across two hosted jobs.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
