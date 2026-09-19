@@ -1,0 +1,50 @@
+name: Build Fixed OpenClaw Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout OpenClaw 2026.9.5
+        uses: actions/checkout@v4
+        with:
+          ref: v2026.9.5
+          fetch-depth: 0
+
+      - name: Setup OpenClaw Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: off
+
+      - name: Build Play debug APK
+        working-directory: apps/android
+        run: ./gradlew :app:assemblePlayDebug
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          APK="$(find apps/android/app/build/outputs/apk/play/debug -type f -name '*.apk' | head -1)"
+          test -n "$APK"
+          cp "$APK" OpenClaw-Fixed-2026.9.5.apk
+          sha256sum OpenClaw-Fixed-2026.9.5.apk > OpenClaw-Fixed-2026.9.5.apk.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-fixed-2026.9.5
+          path: |
+            OpenClaw-Fixed-2026.9.5.apk
+            OpenClaw-Fixed-2026.9.5.apk.sha256
+          if-no-files-found: error
+          retention-days: 7
