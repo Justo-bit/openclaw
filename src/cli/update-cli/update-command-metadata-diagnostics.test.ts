@@ -21,6 +21,74 @@ import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
+it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
+  "keeps private exception identities out of reports across %s edges",
+  async (edge) => {
+    openOpenClawStateDatabase();
+    const detail =
+      "Connection refused token=synthetic-nested-secret at /home/operator/private/npmrc on registry.private.example";
+    const leaf = Object.assign(
+      new Error(detail, {
+        cause: Object.assign(new Error("Socket closed"), { code: "ECONNRESET" }),
+      }),
+      {
+        name: "PrivateLeafError",
+        code: "PRIVATE_LEAF_CODE",
+      },
+    );
+    const cause =
+      edge === "aggregate"
+        ? new AggregateError([leaf], "Transport failed")
+        : edge === "suppressed"
+          ? Object.assign(new Error("Transport failed"), {
+              name: "SuppressedError",
+              error: leaf,
+              suppressed: Object.assign(new Error("Cleanup failed"), {
+                code: "PRIVATE_CLEANUP_CODE",
+              }),
+            })
+          : edge === "structured"
+            ? { message: "Transport failed", name: "PrivateObjectError", cause: leaf }
+            : new Error("Transport failed", { cause: leaf });
+    Object.assign(cause, { code: "PRIVATE_NESTED_CODE" });
+    const error = Object.assign(new TypeError("Lookup failed", { cause }), {
+      name: "PrivateRootError",
+      code: "EACCES",
+      error: "PRIVATE_NON_CAUSE",
+      errors: ["PRIVATE_NON_AGGREGATE"],
+      suppressed: "PRIVATE_NOT_SUPPRESSED",
+    });
+    vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
+
+    await expect(
+      updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
+    ).rejects.toBe(error);
+    const recordedRun = ledger.listUpdateRuns()[0];
+    const report = await prepareUpdateFailureReport({
+      attemptId: recordedRun!.runId,
+      recordedRun,
+      result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
+    });
+    expect(report.body).toContain("EACCES");
+    expect(report.body).toContain("ECONNRESET");
+    expect(report.body).toContain("Transport failed");
+    expect(report.body).toContain("Connection refused");
+    for (const output of [report.body, JSON.stringify(recordedRun)]) {
+      for (const privateText of [
+        "PRIVATE_",
+        "PrivateLeafError",
+        "PrivateObjectError",
+        "PrivateRootError",
+        "synthetic-nested-secret",
+        "/home/operator",
+        "registry.private.example",
+      ]) {
+        expect(output).not.toContain(privateText);
+      }
+    }
+  },
+);
+
 it.each([
   { diagnosticWriteFails: false, metadata: null },
   { diagnosticWriteFails: true, metadata: null },

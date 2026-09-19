@@ -420,6 +420,7 @@ export function recordUpdateRunPhase(
   phase: UpdateRunPhase,
   patch: RunPatch & { step?: UpdateRunStep } = {},
   options: LedgerOptions = {},
+  captureBefore?: Parameters<typeof mutateRun>[3],
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -467,6 +468,7 @@ export function recordUpdateRunPhase(
       }
     },
     options,
+    captureBefore,
   );
 }
 

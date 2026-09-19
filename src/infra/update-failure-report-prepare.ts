@@ -316,21 +316,6 @@ async function renderBoundedDiagnostics(
   return diagnostics;
 }
 
-function resolveReportPaths(
-  attemptId: string,
-  stateDir: string,
-): {
-  reportDir: string;
-  reportPath: string;
-} {
-  const key = createHash("sha256").update(attemptId).digest("hex");
-  const reportDir = path.join(stateDir, "update-reports");
-  return {
-    reportDir,
-    reportPath: path.join(reportDir, `${key}.md`),
-  };
-}
-
 /** Builds the exact sanitized body the user must review before submission. */
 export async function prepareUpdateFailureReport(
   request: UpdateFailureReportInput,
@@ -429,12 +414,15 @@ export async function prepareUpdateFailureReport(
     " ",
   );
   const issue = prepareGithubIssue({ title, body });
-  const { reportPath } = resolveReportPaths(input.attemptId, stateDir);
   return {
     ...issue,
     attemptId: input.attemptId,
     previewDigest: createHash("sha256").update(issue.body).digest("hex"),
-    savedReportPath: reportPath,
+    savedReportPath: path.join(
+      stateDir,
+      "update-reports",
+      `${createHash("sha256").update(input.attemptId).digest("hex")}.md`,
+    ),
     ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

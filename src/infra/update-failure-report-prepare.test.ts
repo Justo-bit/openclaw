@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+
+// Prepare the real catalog/worker prerequisites before individual test deadlines.
+await preparePublicUpdateFailureIdentifiers();
 
 const context = { env: {}, stateDir: "/report-test-state" };
 

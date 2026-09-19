@@ -105,8 +105,32 @@ import {
 // from a run ID, process absence, or another invocation's diagnostic history.
 const previewAdmissions = new WeakMap<
   object,
-  { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
+  { record: UpdateRunRecord; env: NodeJS.ProcessEnv; active?: boolean }
 >();
+
+/** Advance preview custody only across this owner's committed target writes. */
+export function recordUpdateCommandTarget(
+  run: UpdateCommandOptions["run"],
+  patch: { target?: UpdateRunRecord["target"]; step?: UpdateRunStep },
+): void {
+  if (!run) {
+    return;
+  }
+  let before: UpdateRunRecord | undefined;
+  const committed = recordUpdateRunPhase(
+    run.runId,
+    "requested",
+    patch,
+    { env: run.env },
+    (record) => {
+      before = record;
+    },
+  );
+  const admission = previewAdmissions.get(run);
+  if (admission && isDeepStrictEqual(before, admission.record)) {
+    admission.record = committed;
+  }
+}
 
 export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
@@ -274,11 +298,11 @@ export async function withUpdatePreviewSignals<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
-  if (!admission || !opts.run) {
+  if (!admission || !opts.run || admission.active) {
     return await withMutableUpdateSignals(opts, operation);
   }
-  previewAdmissions.delete(opts.run);
-  const { record: expected, env } = admission;
+  admission.active = true;
+  const { env } = admission;
   let interrupted = false;
   let shutdown: Promise<void> | undefined;
   const unregister = registerSignalExitBarrier(async () => {
@@ -292,10 +316,10 @@ export async function withUpdatePreviewSignals<T>(
     // Missing/displaced canonical state, pending recovery, or a changed row is
     // not permission to open a writable runtime or dispose of another owner.
     await assertUpdateRecoveryAdmission({ env });
-    if (!isDeepStrictEqual(getUpdateRun(expected.runId, { env }), expected)) {
+    if (!isDeepStrictEqual(getUpdateRun(admission.record.runId, { env }), admission.record)) {
       return;
     }
-    finishInterruptedUpdatePreview(expected, { env });
+    finishInterruptedUpdatePreview(admission.record, { env });
   });
   const onSignal = (code: number) => {
     interrupted = true;
@@ -315,6 +339,7 @@ export async function withUpdatePreviewSignals<T>(
     return await operation();
   } finally {
     await shutdown;
+    previewAdmissions.delete(opts.run);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     unregister();

@@ -63,12 +63,14 @@ export function mutateRunInTransaction(
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: UpdateRunLedgerOptions,
+  captureBefore?: (record: UpdateRunRecord) => void,
 ): UpdateRunRecord {
   const record = readUpdateRunRecord(db, runId);
   if (!record) {
     throw new Error(`Unknown update run: ${runId}`);
   }
   const before = JSON.stringify(record);
+  captureBefore?.(structuredClone(record));
   update(record);
   return before === JSON.stringify(record) ? record : persistRun(db, record, options);
 }
@@ -77,11 +79,12 @@ export function mutateRun(
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: UpdateRunLedgerOptions,
+  captureBefore?: Parameters<typeof mutateRunInTransaction>[4],
 ): UpdateRunRecord {
   // An existing run can belong to a restored older runtime. History updates
   // must never reopen through bootstrap/migration merely to report its outcome.
   return runExistingOpenClawStateWriteTransaction(
-    ({ db }) => mutateRunInTransaction(db, runId, update, options),
+    ({ db }) => mutateRunInTransaction(db, runId, update, options, captureBefore),
     options,
     {
       schemaSql: updateRunLedgerSchema,
@@ -108,9 +111,7 @@ export function recordUpdateRunDiagnostics(
   try {
     if (
       typeof diagnostics !== "function" &&
-      !diagnostics.failure &&
-      !diagnostics.recovery &&
-      !diagnostics.rollbackOutcome
+      !(diagnostics.failure || diagnostics.recovery || diagnostics.rollbackOutcome)
     ) {
       return;
     }

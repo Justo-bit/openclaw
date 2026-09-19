@@ -4,7 +4,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
-import { extractErrorCode, formatErrorMessage, readErrorName } from "./errors.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+  readErrorName,
+} from "./errors.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-identifiers.js";
 import type { UpdateFailureFactSchema } from "./update-run-schema.js";
@@ -24,63 +30,70 @@ export function createUpdateErrorFact(
   error: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact {
-  const errorObject = readErrorMetadata(() => (error instanceof Error ? error : undefined));
-  const name = readErrorMetadata(() =>
-    errorObject ? errorObject.constructor.name : readErrorName(error),
+  // The formatter must never reach raw cause identities or stringify private object metadata.
+  const errors = collectErrorGraphCandidates(error ?? String(error), (current) => [
+    ...(readErrorMetadata(() => readErrorCauses(current)) ?? []),
+    readErrorMetadata(() => current.cause),
+  ]).map((current) => {
+    const rawName = readErrorMetadata(() =>
+      current instanceof Error ? current.constructor.name : readErrorName(current),
+    );
+    const name =
+      typeof rawName === "string" && isPublicUpdateFailureCode(rawName) ? rawName : "Error";
+    const code = extractErrorCode(current);
+    const detail = readErrorMetadata(() =>
+      isRecord(current)
+        ? current.message
+        : typeof current === "object" || typeof current === "function"
+          ? undefined
+          : formatErrorMessage(current),
+    );
+    const { message } = createUpdateFailureFact(
+      {
+        check,
+        code: name,
+        errorName: name,
+        message: typeof detail === "string" && detail ? detail : name,
+      },
+      env,
+    );
+    return Object.assign(new Error(message), {
+      name,
+      code: code && isPublicUpdateFailureCode(code) ? code : undefined,
+    });
+  });
+  const primary = errors[0];
+  const stack = readErrorMetadata(() => (error instanceof Error ? error.stack : undefined));
+  const root = readErrorMetadata(() =>
+    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
   );
-  const errorName =
-    typeof name === "string" && /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/u.test(name) ? name : "Error";
-  const message = readErrorMetadata(() => errorObject?.message);
-  const stack = readErrorMetadata(() => errorObject?.stack);
-  const code = extractErrorCode(error);
-  let root: string | null = null;
-  try {
-    root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  } catch {
-    // Unavailable source provenance must not replace the original exception.
-  }
   const prefixes = root
     ? [`${root.replaceAll("\\", "/")}/`, pathToFileURL(`${root}${path.sep}`).href]
     : [];
-  const location =
-    typeof stack === "string"
-      ? stack
-          .split("\n")
-          .slice(1)
-          .flatMap((frame) => {
-            const file = /((?:file:\/\/)?(?:\/|[A-Z]:[\\/])[^()\r\n]+:\d+:\d+)\)?$/u
-              .exec(frame)?.[1]
-              ?.replaceAll("\\", "/");
-            const prefix = prefixes.find((candidate) => file?.startsWith(candidate));
-            const local = prefix && file ? path.posix.normalize(file.slice(prefix.length)) : null;
-            // Private plugin and dependency directories are not public application locations.
-            if (!local || local.includes("/node_modules/")) {
-              return [];
-            }
-            return (
-              /^((?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+)$/u.exec(local)?.[1] ??
-              []
-            );
-          })[0]
-      : undefined;
+  let location: string | undefined;
+  for (const frame of typeof stack === "string" ? stack.split("\n").slice(1) : []) {
+    const file = /((?:file:\/\/)?(?:\/|[A-Z]:[\\/])[^()\r\n]+:\d+:\d+)\)?$/u
+      .exec(frame)?.[1]
+      ?.replaceAll("\\", "/");
+    const prefix = prefixes.find((candidate) => file?.startsWith(candidate));
+    const local = prefix && file ? path.posix.normalize(file.slice(prefix.length)) : null;
+    // Private plugin and dependency directories are not public application locations.
+    if (
+      local &&
+      !local.includes("/node_modules/") &&
+      /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(local)
+    ) {
+      location = local;
+      break;
+    }
+  }
   return createUpdateFailureFact(
     {
       check,
-      code: code && isPublicUpdateFailureCode(code) ? code : errorName,
-      errorName,
+      code: primary?.code ?? primary?.name ?? "Error",
+      errorName: primary?.name ?? "Error",
       location: location ?? null,
-      message: formatErrorMessage(
-        errorObject
-          ? new Error(
-              typeof message === "string" && message
-                ? message
-                : isPublicUpdateFailureCode(errorName)
-                  ? errorName
-                  : "[redacted-error-class]",
-              { cause: error },
-            )
-          : error,
-      ),
+      message: formatErrorMessage(new AggregateError(errors, primary?.message)),
     },
     env,
   );
@@ -106,20 +119,17 @@ export function createUpdateFailureFact(
           "$1=[redacted-host]",
         )
     : diagnostic;
+  const location =
+    fact.location &&
+    /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)
+      ? line(fact.location, 160)
+      : null;
   return {
     check: line(fact.check, 128),
     code: line(fact.code, 80),
     ...(message ? { message: line(message, 200) } : {}),
     ...(fact.errorName ? { errorName: line(fact.errorName, 80) } : {}),
-    ...(fact.location !== undefined
-      ? {
-          location:
-            fact.location &&
-            /^(?:src|dist|packages|extensions)\/[A-Za-z0-9_./-]+:\d+:\d+$/u.test(fact.location)
-              ? line(fact.location, 160)
-              : null,
-        }
-      : {}),
+    ...(fact.location !== undefined ? { location } : {}),
     ...(fact.affectedKey ? { affectedKey: line(fact.affectedKey, 128) } : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
   };
