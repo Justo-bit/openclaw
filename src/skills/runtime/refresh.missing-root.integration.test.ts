@@ -242,7 +242,9 @@ describe("shared missing skill ancestors", () => {
         });
       }),
     );
-    expect(watch.mock.calls.filter(([watched]) => watched === root)).toHaveLength(1);
+    expect(
+      watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
+    ).toHaveLength(1);
     const changes: string[] = [];
     const unregister = registerSkillsChangeListener((event) => {
       if (event.workspaceDir) {

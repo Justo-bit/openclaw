@@ -93,7 +93,7 @@ export function createSkillsWatcherMock() {
         if (
           !createdWatchers[candidate]?.closed &&
           options.depth === 0 &&
-          normalizedRoot.startsWith(`${watchRoot}/`) &&
+          normalizedRoot.startsWith(watchRoot.endsWith("/") ? watchRoot : `${watchRoot}/`) &&
           !options.ignored(path.join(root, "SKILL.md")) &&
           watchRoot.length >= closest
         ) {
