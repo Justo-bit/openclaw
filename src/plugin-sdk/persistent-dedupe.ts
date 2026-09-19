@@ -371,7 +371,9 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     try {
       return await work;
     } finally {
-      inflight.delete(scopedKey);
+      if (inflight.get(scopedKey) === work) {
+        inflight.delete(scopedKey);
+      }
     }
   }
 
@@ -406,6 +408,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const scopedKey = resolveScopedKey(namespace, trimmed);
     memoryGeneration++;
     memory.delete(scopedKey);
+    inflight.delete(scopedKey);
     const store = captureStore(namespace);
     return operations.enqueue(store.namespace, async () => {
       try {

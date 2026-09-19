@@ -421,6 +421,62 @@ describe("persistent dedupe worker", () => {
     },
   );
 
+  it("records again after an intervening forget and retains the replacement operation", async () => {
+    await withOpenClawTestState({ label: "dedupe-record-forget-record" }, async () => {
+      const observe = workerClient.observePluginStateInWorker;
+      const entered = [createDeferredCore(), createDeferredCore()];
+      const gates = [createDeferredCore(), createDeferredCore()];
+      let index = 0;
+      vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementation(async (params) => {
+        const current = index;
+        index += 1;
+        const result = await observe(params);
+        entered[current]?.resolve();
+        await gates[current]?.promise;
+        return result;
+      });
+      const dedupe = createPersistentDedupe({
+        ...options,
+        memoryMaxSize: 10,
+        onDiskError: (error: unknown) => {
+          throw error;
+        },
+      });
+      const first = dedupe.checkAndRecord("shared");
+      await entered[0]!.promise;
+      const forgetting = dedupe.forget("shared");
+      const replacement = dedupe.checkAndRecord("shared");
+      let duplicate: Promise<boolean> | undefined;
+      try {
+        gates[0]!.resolve();
+        expect(await first).toBe(true);
+        expect(await forgetting).toBe(true);
+        expect(
+          await Promise.race([
+            entered[1]!.promise.then(() => "entered"),
+            replacement.then(() => "settled"),
+          ]),
+        ).toBe("entered");
+        duplicate = dedupe.checkAndRecord("shared");
+        let duplicateResult: boolean | undefined;
+        void duplicate.then(
+          (value) => {
+            duplicateResult = value;
+          },
+          () => {},
+        );
+        await setImmediate();
+        expect(duplicateResult).toBe(false);
+        gates[1]!.resolve();
+        expect(await replacement).toBe(true);
+        expect(await createPersistentDedupe(options).hasRecent("shared")).toBe(true);
+      } finally {
+        gates.forEach((gate) => gate.resolve());
+        await Promise.allSettled([first, forgetting, replacement, duplicate]);
+      }
+    });
+  });
+
   it("captures database selection before queueing while later calls follow the new environment", async () => {
     await withOpenClawTestState({ label: "dedupe-queued-source" }, async (state) => {
       await withOpenClawTestState(
