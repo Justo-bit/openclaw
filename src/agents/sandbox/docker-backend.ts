@@ -118,6 +118,7 @@ async function createContainerSandboxBackend(
     env: params.cfg.docker.env,
     image: params.cfg.docker.image,
     podmanTarget,
+    assertCurrent: params.assertRuntimeCurrent,
   });
   handle.createFsBridge = ({ sandbox }) => createSandboxFsBridge({ sandbox, containerOnlyMounts });
   return handle;
@@ -142,6 +143,7 @@ function createContainerSandboxBackendHandle(params: {
   env?: Record<string, string>;
   image: string;
   podmanTarget?: SandboxContainerEngineTarget;
+  assertCurrent?: () => void;
 }): SandboxBackendHandle {
   return {
     id: params.engine.id,
@@ -197,6 +199,7 @@ function createContainerSandboxBackendHandle(params: {
         containerName: params.containerName,
         podmanTarget: params.podmanTarget,
         ...command,
+        assertCurrent: params.assertCurrent,
       });
     },
   };
@@ -207,6 +210,7 @@ async function runContainerSandboxShellCommand(
     engine: SandboxContainerEngine;
     containerName: string;
     podmanTarget?: SandboxContainerEngineTarget;
+    assertCurrent?: () => void;
   } & SandboxBackendCommandParams,
 ) {
   await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
@@ -222,6 +226,8 @@ async function runContainerSandboxShellCommand(
   if (params.args?.length) {
     dockerArgs.push(...params.args);
   }
+  // The engine-target probe above can outlive the admitted workspace owner.
+  params.assertCurrent?.();
   return execContainerRaw(params.engine, dockerArgs, {
     input: params.stdin,
     allowFailure: params.allowFailure,

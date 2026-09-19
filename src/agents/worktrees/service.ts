@@ -819,6 +819,9 @@ export class ManagedWorktreeService {
     params: RemoveWorktreeParams,
     timing: ReturnType<typeof startGitOperationTiming>,
   ): Promise<RemoveManagedWorktreeResult> {
+    timing?.markRemovalStage("preparation");
+    params.signal?.throwIfAborted();
+    params.commitGuard?.();
     const record = this.requireLiveRecord(params.id);
     const claimToken = params.claimToken ?? randomUUID();
     claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken });
@@ -842,6 +845,7 @@ export class ManagedWorktreeService {
           ),
       );
     } catch (error) {
+      timing?.markRemovalStage("finalization");
       abortWorktreeRemoval(this.env, record.id, claimToken);
       throw error;
     }
@@ -861,199 +865,187 @@ export class ManagedWorktreeService {
     // opaque token makes the claim exclusive against competing removers; a caller
     // that already claimed (removeIfLossless) passes its token to keep one claim.
     const claimToken = params.claimToken!;
-    try {
-      record = await this.rebindLiveRepository(record, params);
-      const gitOptions = {
-        signal: params.signal,
-        beforeRun: params.commitGuard,
-        killProcessTree: true,
-      };
-      return await withManagedWorktreeGit(
-        { record, env: this.env, getConfig: this.getConfig ?? getRuntimeConfig, ...gitOptions },
-        async (git) => {
-          const pendingRef = `refs/openclaw/removals/${record.id}`;
-          const pending = await git.run(
-            record.repoRoot,
-            ["show-ref", "--verify", "--quiet", pendingRef],
-            gitOptions,
+    record = await this.rebindLiveRepository(record, params);
+    const gitOptions = {
+      signal: params.signal,
+      beforeRun: params.commitGuard,
+      killProcessTree: true,
+    };
+    return await withManagedWorktreeGit(
+      { record, env: this.env, getConfig: this.getConfig ?? getRuntimeConfig, ...gitOptions },
+      async (git) => {
+        const pendingRef = `refs/openclaw/removals/${record.id}`;
+        const pending = await git.run(
+          record.repoRoot,
+          ["show-ref", "--verify", "--quiet", pendingRef],
+          gitOptions,
+        );
+        if (pending.code !== 1) {
+          if (pending.code !== 0) {
+            throw commandError("git show-ref --verify", pending);
+          }
+          throw new Error(
+            `Previous worktree removal may be incomplete; inspect ${record.path} before cleanup. Recovery snapshot preserved at ${pendingRef}.`,
           );
-          if (pending.code !== 1) {
-            if (pending.code !== 0) {
-              throw commandError("git show-ref --verify", pending);
-            }
-            throw new Error(
-              `Previous worktree removal may be incomplete; inspect ${record.path} before cleanup. Recovery snapshot preserved at ${pendingRef}.`,
-            );
-          }
-          const head = await requireManagedWorktreeHead(record, gitOptions);
-          if (params.inspectedHead && params.inspectedHead !== head) {
-            throw new Error("Worktree HEAD changed after lossless inspection; checkout preserved.");
-          }
-          const state = await lockState(record);
-          if (state.kind === "live" || state.kind === "foreign") {
-            throw new WorktreeRemovalLockError(
-              state.kind === "live" ? "busy" : "foreign-lock",
-              state.kind === "live"
-                ? `worktree is locked by live OpenClaw pid ${state.pid}`
-                : `worktree has a foreign lock${state.reason ? `: ${state.reason}` : ""}`,
-            );
-          }
-          if (state.kind !== "none") {
-            params.commitGuard?.();
-            await git.require(record.repoRoot, ["worktree", "unlock", record.path], {
-              signal: params.signal,
-              beforeRun: params.commitGuard,
-              killProcessTree: true,
-            });
-          }
-          timing?.markRemovalStage("snapshot");
-          let snapshotRef: string | undefined;
-          let snapshotError: string | undefined;
-          try {
-            const provisionedPaths = getRegistryWorktreeProvisionedPaths(this.env, record.id);
-            if (provisionedPaths === undefined) {
-              throw new Error("provisioned path ledger is unavailable");
-            }
-            const snapshot = await captureManagedWorktreeSnapshot({
-              record,
-              env: this.env,
-              reason: params.reason,
-              provisionedPaths,
-              git,
-              signal: params.signal,
-              assertCurrent: params.commitGuard,
-            });
-            snapshotRef = snapshot.snapshotRef;
-            params.commitGuard?.();
-            updateRegistryWorktree(this.env, record.id, {
-              snapshotRef,
-              provisionedState: snapshot.provisionedState,
-            });
-          } catch (error) {
-            snapshotError = error instanceof Error ? error.message : String(error);
-            try {
-              clearRegistryWorktreeProvisionedChunks(this.env, record.id);
-            } catch (cleanupError) {
-              throw new WorktreeSnapshotError(
-                `${snapshotError}; provisioned snapshot cleanup failed: ${String(cleanupError)}`,
-                { cause: cleanupError },
-              );
-            }
-            if (!params.allowSnapshotLoss) {
-              throw new WorktreeSnapshotError(snapshotError, { cause: error });
-            }
-            snapshotRef = undefined;
-          }
-          const snapshot =
-            snapshotError || !snapshotRef
-              ? undefined
-              : await git.require(
-                  record.repoRoot,
-                  ["rev-parse", "--verify", `${snapshotRef}^{commit}`],
-                  gitOptions,
-                );
-          const deletionOptions =
-            snapshot && snapshotRef
-              ? await prepareSnapshotBranchDeletion(record, snapshotRef, snapshot, gitOptions)
-              : undefined;
-          if (
-            (await requireManagedWorktreeHead(record, gitOptions)) !== head ||
-            (snapshot &&
-              (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !==
-                head)
-          ) {
-            throw new Error(
-              "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
-            );
-          }
-          timing?.markRemovalStage("checkoutRemoval");
-          params.signal?.throwIfAborted();
-          params.commitGuard?.();
-          if (params.requireLossless && snapshot) {
-            // The snapshot sees hidden index edits that status alone can miss.
-            const changed = await git.require(
-              record.repoRoot,
-              ["diff-tree", "--no-commit-id", "--name-only", "-r", head, snapshot],
-              gitOptions,
-            );
-            if (changed) {
-              abortWorktreeRemoval(this.env, record.id, claimToken);
-              updateRegistryWorktree(
-                this.env,
-                record.id,
-                {
-                  runEndCleanup: { outcome: "retained-dirty", at: this.now() },
-                },
-                { onlyIfLive: true, onlyIfActiveAt: record.lastActiveAt },
-              );
-              return { removed: false };
-            }
-          }
-          if (snapshot) {
-            await prepareArchive?.(snapshot);
-          }
-          // Pin the completed capture before deletion. Failed or interrupted deletion
-          // must never replace it with a snapshot of a partially removed checkout.
-          await git.require(
-            record.repoRoot,
-            ["update-ref", pendingRef, snapshot ?? head, ""],
-            gitOptions,
+        }
+        const head = await requireManagedWorktreeHead(record, gitOptions);
+        if (params.inspectedHead && params.inspectedHead !== head) {
+          throw new Error("Worktree HEAD changed after lossless inspection; checkout preserved.");
+        }
+        const state = await lockState(record);
+        if (state.kind === "live" || state.kind === "foreign") {
+          throw new WorktreeRemovalLockError(
+            state.kind === "live" ? "busy" : "foreign-lock",
+            state.kind === "live"
+              ? `worktree is locked by live OpenClaw pid ${state.pid}`
+              : `worktree has a foreign lock${state.reason ? `: ${state.reason}` : ""}`,
           );
-          // Once admitted, let deletion settle; cancellation could leave a partial checkout
-          // that a later removal would snapshot over the complete recovery snapshot.
-          const removed = await git.run(
-            record.repoRoot,
-            [
-              "worktree",
-              "remove",
-              ...(params.requireLossless ? [] : ["--force"]),
-              "--",
-              record.path,
-            ],
-            { beforeRun: params.commitGuard, killProcessTree: true },
-          );
-          if (removed.code !== 0) {
-            throw commandError("git worktree remove", removed);
-          }
-          timing?.markRemovalStage("finalization");
+        }
+        if (state.kind !== "none") {
           params.commitGuard?.();
-          if (deletionOptions) {
-            await git.require(
-              record.repoRoot,
-              ["branch", "-d", "--", record.branch],
-              deletionOptions,
-            );
-          }
-          // Only prune the recorded checkout's empty parent; a changed allocation
-          // root is neither required for removal nor authority to walk other parents.
-          await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
-          params.commitGuard?.();
-          const removedAt = this.now();
-          // Persist the run-end outcome atomically with finalization: a post-finalize
-          // write could race a restore plus newer cleanup and overwrite the newer fact.
-          updateRegistryWorktree(this.env, record.id, {
-            removedAt,
-            snapshotRef,
-            ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+          await git.require(record.repoRoot, ["worktree", "unlock", record.path], {
+            signal: params.signal,
+            beforeRun: params.commitGuard,
+            killProcessTree: true,
           });
-          finalizeWorktreeRemoval(this.env, record.id);
-          await git.require(
+        }
+        timing?.markRemovalStage("snapshot");
+        let snapshotRef: string | undefined;
+        let snapshotError: string | undefined;
+        try {
+          const provisionedPaths = getRegistryWorktreeProvisionedPaths(this.env, record.id);
+          if (provisionedPaths === undefined) {
+            throw new Error("provisioned path ledger is unavailable");
+          }
+          const snapshot = await captureManagedWorktreeSnapshot({
+            record,
+            env: this.env,
+            reason: params.reason,
+            provisionedPaths,
+            git,
+            signal: params.signal,
+            assertCurrent: params.commitGuard,
+          });
+          snapshotRef = snapshot.snapshotRef;
+          params.commitGuard?.();
+          updateRegistryWorktree(this.env, record.id, {
+            snapshotRef,
+            provisionedState: snapshot.provisionedState,
+          });
+        } catch (error) {
+          snapshotError = error instanceof Error ? error.message : String(error);
+          try {
+            clearRegistryWorktreeProvisionedChunks(this.env, record.id);
+          } catch (cleanupError) {
+            throw new WorktreeSnapshotError(
+              `${snapshotError}; provisioned snapshot cleanup failed: ${String(cleanupError)}`,
+              { cause: cleanupError },
+            );
+          }
+          if (!params.allowSnapshotLoss) {
+            throw new WorktreeSnapshotError(snapshotError, { cause: error });
+          }
+          snapshotRef = undefined;
+        }
+        const snapshot =
+          snapshotError || !snapshotRef
+            ? undefined
+            : await git.require(
+                record.repoRoot,
+                ["rev-parse", "--verify", `${snapshotRef}^{commit}`],
+                gitOptions,
+              );
+        const deletionOptions =
+          snapshot && snapshotRef
+            ? await prepareSnapshotBranchDeletion(record, snapshotRef, snapshot, gitOptions)
+            : undefined;
+        if (
+          (await requireManagedWorktreeHead(record, gitOptions)) !== head ||
+          (snapshot &&
+            (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !==
+              head)
+        ) {
+          throw new Error(
+            "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
+          );
+        }
+        timing?.markRemovalStage("checkoutRemoval");
+        params.signal?.throwIfAborted();
+        params.commitGuard?.();
+        if (params.requireLossless && snapshot) {
+          // The snapshot sees hidden index edits that status alone can miss.
+          const changed = await git.require(
             record.repoRoot,
-            ["update-ref", "-d", pendingRef, snapshot ?? head],
+            ["diff-tree", "--no-commit-id", "--name-only", "-r", head, snapshot],
             gitOptions,
           );
-          return {
-            removed: true,
-            ...(snapshotRef ? { snapshotRef } : {}),
-            ...(snapshotError ? { snapshotError } : {}),
-          };
-        },
-      );
-    } catch (error) {
-      timing?.markRemovalStage("finalization");
-      abortWorktreeRemoval(this.env, record.id, claimToken);
-      throw error;
-    }
+          if (changed) {
+            abortWorktreeRemoval(this.env, record.id, claimToken);
+            updateRegistryWorktree(
+              this.env,
+              record.id,
+              {
+                runEndCleanup: { outcome: "retained-dirty", at: this.now() },
+              },
+              { onlyIfLive: true, onlyIfActiveAt: record.lastActiveAt },
+            );
+            return { removed: false };
+          }
+        }
+        if (snapshot) {
+          await prepareArchive?.(snapshot);
+        }
+        // Pin the completed capture before deletion. Failed or interrupted deletion
+        // must never replace it with a snapshot of a partially removed checkout.
+        await git.require(
+          record.repoRoot,
+          ["update-ref", pendingRef, snapshot ?? head, ""],
+          gitOptions,
+        );
+        // Once admitted, let deletion settle; cancellation could leave a partial checkout
+        // that a later removal would snapshot over the complete recovery snapshot.
+        const removed = await git.run(
+          record.repoRoot,
+          ["worktree", "remove", ...(params.requireLossless ? [] : ["--force"]), "--", record.path],
+          { beforeRun: params.commitGuard, killProcessTree: true },
+        );
+        if (removed.code !== 0) {
+          throw commandError("git worktree remove", removed);
+        }
+        timing?.markRemovalStage("finalization");
+        params.commitGuard?.();
+        if (deletionOptions) {
+          await git.require(
+            record.repoRoot,
+            ["branch", "-d", "--", record.branch],
+            deletionOptions,
+          );
+        }
+        // Only prune the recorded checkout's empty parent; a changed allocation
+        // root is neither required for removal nor authority to walk other parents.
+        await fs.rmdir(path.dirname(record.path)).catch(() => undefined);
+        params.commitGuard?.();
+        const removedAt = this.now();
+        // Persist the run-end outcome atomically with finalization: a post-finalize
+        // write could race a restore plus newer cleanup and overwrite the newer fact.
+        updateRegistryWorktree(this.env, record.id, {
+          removedAt,
+          snapshotRef,
+          ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+        });
+        finalizeWorktreeRemoval(this.env, record.id);
+        await git.require(
+          record.repoRoot,
+          ["update-ref", "-d", pendingRef, snapshot ?? head],
+          gitOptions,
+        );
+        return {
+          removed: true,
+          ...(snapshotRef ? { snapshotRef } : {}),
+          ...(snapshotError ? { snapshotError } : {}),
+        };
+      },
+    );
   }
 
   async restore(params: { id: string } & WorktreeMutationGuard): Promise<ManagedWorktreeRecord> {

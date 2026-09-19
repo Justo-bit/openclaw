@@ -22,6 +22,7 @@ import {
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
 import { localWorkspaceStore, type LocalWorkspaceProjection } from "./local-workspace-store.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
@@ -44,16 +45,6 @@ import {
   deleteStagedWorkerWorkspaceResult,
 } from "./workspace-result-staging.js";
 import { runWorkspaceInventoryCommandToFile } from "./workspace-sync-inventory.js";
-
-export type LocalWorkspaceOwner = {
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string | null;
-  worktree: ManagedWorktreeRecord;
-  assertCurrent: () => void;
-  env?: NodeJS.ProcessEnv;
-};
 
 type Direction = "canonical" | "projection";
 

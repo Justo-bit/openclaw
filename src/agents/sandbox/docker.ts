@@ -458,6 +458,7 @@ async function createSandboxContainer(params: {
   mountPlan: SandboxMountPlan;
   podmanRuntimeInfo?: PodmanSandboxRuntimeInfo;
   onAllocated?: () => void;
+  assertCurrent?: () => void;
 }) {
   const { engine, name, cfg, workspaceDir, scopeKey } = params;
   const podmanPolicy =
@@ -495,12 +496,15 @@ async function createSandboxContainer(params: {
   appendCustomBinds(args, { ...cfg, binds: params.mountPlan.binds });
   await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
+    params.assertCurrent?.();
     await execContainer(engine, args);
   });
   params.onAllocated?.();
+  params.assertCurrent?.();
   await execContainer(engine, ["start", name]);
 
   if (cfg.setupCommand?.trim()) {
+    params.assertCurrent?.();
     await execContainer(engine, ["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
@@ -645,6 +649,7 @@ async function ensureSandboxContainerLifecycle(
             : {}),
         });
       } else {
+        params.assertCurrent?.();
         await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
         hasContainer = false;
         running = false;
@@ -668,6 +673,7 @@ async function ensureSandboxContainerLifecycle(
     // Persist managed mount custody before provider allocation. A process crash
     // must not leave a writer invisible to workspace quiescence and retirement.
     if (params.workspaceSource === "managed-worktree") {
+      params.assertCurrent?.();
       await updateRegistry(readyEntry);
     }
     let allocated = false;
@@ -688,6 +694,7 @@ async function ensureSandboxContainerLifecycle(
         onAllocated: () => {
           allocated = true;
         },
+        assertCurrent: params.assertCurrent,
       });
       if (params.workspaceSource !== "managed-worktree") {
         await updateRegistry(readyEntry);
@@ -704,6 +711,7 @@ async function ensureSandboxContainerLifecycle(
       });
     }
   } else if (!running) {
+    params.assertCurrent?.();
     await execContainer(engine, ["start", containerName]);
   }
   await updateRegistry({

@@ -9,11 +9,9 @@ import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
 } from "../../state/openclaw-state-db.js";
-import {
-  withLocalWorkspaceProjection,
-  type LocalWorkspaceOwner,
-} from "./local-workspace-projection.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { localWorkspaceStore } from "./local-workspace-store.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 let root: string;
 let owner: LocalWorkspaceOwner;
@@ -145,8 +143,48 @@ describe("local sandbox workspace reconciliation", () => {
         },
       };
       try {
+        const engine = await import("../../agents/sandbox/container-engine.js");
+        const execute = engine.execContainer;
+        let allocationCurrent = true;
+        const effects: string[] = [];
+        const observe = vi
+          .spyOn(engine, "execContainer")
+          .mockImplementation(async (target, args, options) => {
+            const result = await execute(target, args, options);
+            if (args[0] === "image" && args[1] === "inspect") {
+              allocationCurrent = false;
+            }
+            if (["create", "start", "exec"].includes(args[0]!)) {
+              effects.push(args[0]!);
+            }
+            return result;
+          });
+        try {
+          await expect(
+            resolveSandboxContext({
+              config,
+              agentId: owner.agentId,
+              sessionKey: owner.sessionKey,
+              workspaceDir: owner.worktree.path,
+              assertCurrent: () => {
+                if (!allocationCurrent) {
+                  throw new Error("allocation revoked");
+                }
+              },
+            }),
+          ).rejects.toThrow("allocation revoked");
+          expect(effects).toEqual([]);
+        } finally {
+          observe.mockRestore();
+        }
+        let fileAuthority = true;
         const sandbox = await resolveSandboxContext({
           config,
+          assertCurrent: () => {
+            if (!fileAuthority) {
+              throw new Error("filesystem owner revoked");
+            }
+          },
           agentId: owner.agentId,
           sessionKey: owner.sessionKey,
           workspaceDir: owner.worktree.path,
@@ -198,6 +236,24 @@ describe("local sandbox workspace reconciliation", () => {
         });
         expect(result.code).toBe(0);
         expect(result.stdout).toContain("source.txt");
+        const runShell = sandbox.backend.runShellCommand.bind(sandbox.backend);
+        sandbox.backend.runShellCommand = async (command) => {
+          const probeResult = await runShell(command);
+          if (command.stdin === undefined) {
+            fileAuthority = false;
+          }
+          return probeResult;
+        };
+        await expect(
+          sandbox.fsBridge.writeFile({ filePath: "revoked-write.txt", data: "must not write" }),
+        ).rejects.toThrow("filesystem owner revoked");
+        await expect(
+          fs.stat(path.join(sandbox.workspaceDir, "revoked-write.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          fs.stat(path.join(owner.worktree.path, "revoked-write.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        sandbox.backend.runShellCommand = runShell;
         const resumed = await resolveSandboxContext({
           config,
           agentId: owner.agentId,

@@ -5,6 +5,35 @@ describe("managed browser workspace custody", () => {
   const harness = createSandboxBrowserTestHarness();
   const { dockerMocks, registryMocks, buildConfig, ensureTestSandboxBrowser } = harness;
 
+  it("does not restart a browser after authority closes during container inspection", async () => {
+    let current = true;
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:revoked-browser",
+      workspaceDir: harness.testWorkspaceDir,
+      agentWorkspaceDir: harness.testWorkspaceDir,
+      cfg: buildConfig(false),
+      withWorkspace: async (run) => await run(),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("browser owner revoked");
+        }
+      },
+    });
+    const starts = dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start").length;
+    const callback =
+      harness.bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget;
+    dockerMocks.dockerContainerState.mockImplementation(async () => {
+      await Promise.resolve();
+      current = false;
+      return { exists: true, running: false };
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    await expect(callback({})).rejects.toThrow("browser owner revoked");
+    expect(dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start")).toHaveLength(
+      starts,
+    );
+  });
+
   it("rejoins workspace custody before a late browser start", async () => {
     let owned = false;
     const entered = vi.fn();

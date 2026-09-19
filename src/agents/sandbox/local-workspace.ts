@@ -54,6 +54,12 @@ export function bindLocalSandboxWorkspace(
   if (!backend) {
     throw new Error("Managed guest project has no sandbox execution owner");
   }
+  const shell = backend.runShellCommand.bind(backend);
+  backend.runShellCommand = async (params) => {
+    // Path preparation can await host and container probes after tool entry.
+    projection.assertCurrent();
+    return await shell(params);
+  };
   const build = backend.buildExecSpec.bind(backend);
   const finalize = backend.finalizeExec?.bind(backend);
   backend.buildExecSpec = async (params) => {

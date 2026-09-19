@@ -96,6 +96,31 @@ describe("docker sandbox backend manager", () => {
     });
   });
 
+  it("rechecks runtime authority after awaited engine validation before filesystem exec", async () => {
+    let current = true;
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    const backend = await createDockerSandboxBackend({
+      sessionKey: "agent:coder:main",
+      scopeKey: "agent:coder:main",
+      workspaceDir: "/workspace",
+      agentWorkspaceDir: "/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig()),
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("runtime revoked");
+        }
+      },
+    });
+    dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      current = false;
+    });
+    await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
+      "runtime revoked",
+    );
+    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+  });
+
   it("forwards the canonical scope key to container provisioning", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
     const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;

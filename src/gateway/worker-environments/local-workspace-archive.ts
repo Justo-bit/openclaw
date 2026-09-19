@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
-import type { LocalWorkspaceOwner } from "./local-workspace-projection.js";
 import type { LocalWorkspaceProjection, localWorkspaceStore } from "./local-workspace-store.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import type { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,

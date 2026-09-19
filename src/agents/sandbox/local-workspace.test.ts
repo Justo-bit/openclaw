@@ -97,3 +97,60 @@ it.runIf(process.platform !== "win32")(
     }
   },
 );
+
+it.runIf(process.platform !== "win32")(
+  "rejects a filesystem mutation when authority closes during path preparation",
+  async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bound-revocation-"));
+    let current = true;
+    let observedPreparation = false;
+    const backend: SandboxBackendHandle = {
+      id: "local-test",
+      runtimeId: "local-test",
+      runtimeLabel: "local-test",
+      workdir: root,
+      buildExecSpec: async () => ({ argv: ["true"], env: {}, stdinMode: "pipe-closed" }),
+      runShellCommand: async (params) => {
+        const result = await runCommandBuffered(
+          ["sh", "-c", params.script, "sandbox-test", ...(params.args ?? [])],
+          {
+            input: params.stdin,
+            signal: params.signal,
+            timeoutMs: 10000,
+          },
+        );
+        if (params.stdin === undefined) {
+          observedPreparation = true;
+          current = false;
+        }
+        if (result.code !== 0 && !params.allowFailure) {
+          throw new Error(result.stderr.toString());
+        }
+        return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
+      },
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: { workspaceDir: root, agentWorkspaceDir: root, containerWorkdir: root, backend },
+    });
+    sandbox.fsBridge = createSandboxFsBridge({ sandbox });
+    bindLocalSandboxWorkspace(sandbox, {
+      workspaceDir: root,
+      provision: async (run) => await run(),
+      checkpoint: async () => {},
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("revoked during preparation");
+        }
+      },
+    });
+    try {
+      await expect(
+        sandbox.fsBridge.writeFile({ filePath: "late.txt", data: "must not write" }),
+      ).rejects.toThrow("revoked during preparation");
+      expect(observedPreparation).toBe(true);
+      await expect(fs.stat(path.join(root, "late.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);

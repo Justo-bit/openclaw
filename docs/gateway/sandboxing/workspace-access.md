@@ -69,7 +69,11 @@ The managed worktree remains the canonical workspace for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
 this checkout while capturing or applying changes, records pending results and
 rollback journals in SQLite, and resumes
-only after settlement. Conflicts preserve both versions and block further
+only after settlement. Captured workspace authority is checked again after
+filesystem and engine preparation, immediately before filesystem commands,
+container creation/start/setup, and late browser restarts. Closing the owner
+during preparation prevents those effects rather than rejecting only afterward.
+Conflicts preserve both versions and block further
 settlement until resolved. A retry or restart recovers the same pending result.
 Archive, reset, and deletion settle changes before retiring their runtimes;
 projection cleanup follows the existing managed-worktree snapshot retention.

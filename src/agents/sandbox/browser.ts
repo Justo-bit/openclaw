@@ -204,7 +204,7 @@ async function ensureSandboxBrowserImage(image: string) {
 
 async function ensureDockerNetwork(
   network: string,
-  opts?: { allowContainerNamespaceJoin?: boolean },
+  opts?: { allowContainerNamespaceJoin?: boolean; assertCurrent?: () => void },
 ) {
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
@@ -218,6 +218,7 @@ async function ensureDockerNetwork(
     if (inspect.code === 0) {
       return;
     }
+    opts?.assertCurrent?.();
     await execDocker(["network", "create", "--driver", "bridge", network]);
   });
 }
@@ -352,6 +353,7 @@ async function ensureSandboxBrowserContainer(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
       await stopExistingForContainer();
+      params.assertCurrent?.();
       await execDocker(["rm", "-f", containerName], { allowFailure: true });
       hasContainer = false;
       running = false;
@@ -386,6 +388,7 @@ async function ensureSandboxBrowserContainer(
         });
       } else {
         await stopExistingForContainer();
+        params.assertCurrent?.();
         await execDocker(["rm", "-f", containerName], { allowFailure: true });
         hasContainer = false;
         running = false;
@@ -414,6 +417,7 @@ async function ensureSandboxBrowserContainer(
     }
     cdpAuthToken = crypto.randomBytes(24).toString("hex");
     await ensureDockerNetwork(browserDockerCfg.network, {
+      assertCurrent: params.assertCurrent,
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
@@ -459,10 +463,13 @@ async function ensureSandboxBrowserContainer(
     }
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
+      params.assertCurrent?.();
       await execDocker(args);
     });
+    params.assertCurrent?.();
     await execDocker(["start", containerName]);
   } else if (!running) {
+    params.assertCurrent?.();
     await execDocker(["start", containerName]);
   }
 
@@ -531,6 +538,7 @@ async function ensureSandboxBrowserContainer(
     const startTarget = async () => {
       const currentState = await dockerContainerState(containerName);
       if (currentState.exists && !currentState.running) {
+        params.assertCurrent?.();
         await execDocker(["start", containerName]);
       }
       const ok = await waitForSandboxCdp({
@@ -539,6 +547,7 @@ async function ensureSandboxBrowserContainer(
         timeoutMs: params.cfg.browser.autoStartTimeoutMs,
       });
       if (!ok) {
+        params.assertCurrent?.();
         await execDocker(["rm", "-f", containerName], { allowFailure: true });
         throw new Error(
           `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,

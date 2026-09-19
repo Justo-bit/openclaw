@@ -429,6 +429,16 @@ export function installGitHubPublicationTestHarness(): void {
         }
         return commandResult();
       });
+    // The publication transport is synthetic, but source-policy selection reads
+    // canonical session custody. Seed that same trusted, non-sandboxed owner
+    // instead of bypassing the new config-policy boundary in these tests.
+    setRuntimeConfigSnapshot({
+      agents: { list: [{ id: "main", default: true, workspace: "/repo/worktree" }] },
+    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
+    );
   });
 
   afterEach(async () => {
