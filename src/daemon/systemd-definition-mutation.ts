@@ -375,8 +375,8 @@ export async function withSystemdDefinitionMutation<T>(
             await options?.definitionTransaction?.fileWritten(file, contents);
           }
         } catch (error) {
-          // Roll back only our unchanged publication; a failing rollback must not recurse.
-          if (rollback) {
+          // Receipt recovery owns ordering across files; standalone rollback must not recurse.
+          if (rollback && !options?.definitionTransaction) {
             await restore(file, previous);
           }
           throw error;

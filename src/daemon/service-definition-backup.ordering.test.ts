@@ -1,10 +1,14 @@
 import "./service-definition-backup.mocks.test-support.js";
 import fs from "node:fs/promises";
+import { PassThrough } from "node:stream";
 import { DOMParser } from "linkedom";
 import { expect, it, vi } from "vitest";
+import { installLaunchAgent } from "./launchd-install.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
+import { stageSystemdService } from "./systemd-install.js";
+import * as systemdScope from "./systemd-scope.js";
 
 vi.mock("./service-audit.js", () => ({
   auditGatewayServiceConfig: async () => ({ issues: [], definitionDrift: [] }),
@@ -124,3 +128,130 @@ it("warns with the retained launcher and recovery step when compensation cannot 
   await fs.access(taskReference(f.task()));
   await fs.access(f.files[1]!);
 });
+
+it.each([
+  { fault: "checkpoint", receipt: true },
+  { fault: "ownership", receipt: true },
+  { fault: "ownership", receipt: false },
+])(
+  "keeps the systemd environment referenced after $fault failure (receipt=$receipt)",
+  async ({ fault, receipt }) => {
+    const f = await fixture("linux");
+    const environmentPath = f.files[1]!;
+    const rename = fs.rename.bind(fs);
+    let published = false;
+    const publication = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (destination === f.sourcePath && published) {
+        throw new Error("injected unit restoration failure");
+      }
+      await rename(source, destination);
+      if (destination === f.sourcePath) {
+        published = true;
+      }
+    });
+    const ownership = vi
+      .spyOn(systemdScope, "assertNoSystemGatewayOwnership")
+      .mockImplementation(async () => {
+        if (fault === "ownership" && published) {
+          throw new Error("injected ownership inspection failure");
+        }
+      });
+    await expect(
+      stageSystemdService({
+        env: f.env,
+        stdout: new PassThrough(),
+        programArguments: ["/usr/bin/node", "/new/index.js", "gateway"],
+        environment: { ...f.command.environment, OPERATOR_SETTING: "candidate" },
+        environmentValueSources: { OPERATOR_SETTING: "file" },
+        definitionTransaction: receipt
+          ? {
+              ...f.capture.hooks,
+              fileWritten: async (file, contents) => {
+                await f.capture.hooks.fileWritten(file, contents);
+                if (file === f.sourcePath && fault === "checkpoint") {
+                  throw new Error("injected checkpoint failure");
+                }
+              },
+            }
+          : undefined,
+      }),
+    ).rejects.toThrow("injected");
+    const candidate = await fs.readFile(f.sourcePath);
+    expect(candidate.toString()).toContain(environmentPath);
+    expect(await fs.readFile(environmentPath, "utf8")).toContain("candidate");
+    if (!receipt) {
+      return;
+    }
+
+    ownership.mockRestore();
+    await expect(f.capture.compensate()).rejects.toThrow("injected unit restoration failure");
+    expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+    await fs.access(environmentPath);
+    publication.mockRestore();
+    await f.capture.compensate();
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    await expect(fs.access(environmentPath)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it.each(["publication", "activation"])(
+  "leaves LaunchAgent inputs and references together for receipt compensation after %s failure",
+  async (fault) => {
+    const f = await fixture("darwin");
+    let candidate: Buffer | undefined;
+    let loaded = false;
+    native.launchctl.mockImplementation(async (args) => {
+      if (args[0] === "bootstrap") {
+        loaded = true;
+        throw new Error("injected activation failure");
+      }
+      if (args[0] === "bootout") {
+        loaded = false;
+      }
+      if (args[0] !== "print" || loaded) {
+        return { code: 0, stdout: "state = running\npid = 42", stderr: "", termination: "exit" };
+      }
+      return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
+    });
+    await expect(
+      installLaunchAgent({
+        env: f.env,
+        stdout: new PassThrough(),
+        programArguments: ["/usr/bin/node", "/new/index.js", "gateway"],
+        environment: f.command.environment,
+        definitionTransaction: {
+          ...f.capture.hooks,
+          fileWritten: async (file, contents) => {
+            await f.capture.hooks.fileWritten(file, contents);
+            if (file === f.sourcePath && !candidate) {
+              candidate = await fs.readFile(file);
+              if (fault === "publication") {
+                throw new Error("injected publication failure");
+              }
+            }
+          },
+        },
+      }),
+    ).rejects.toThrow("injected");
+    expect(candidate).toBeDefined();
+    expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
+    expect(loaded).toBe(fault === "activation");
+    for (const input of f.files.slice(1)) {
+      expect(candidate!.toString()).toContain(input);
+      await fs.access(input);
+    }
+    const unlink = fs.unlink.bind(fs);
+    vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+      if (f.files.slice(1).includes(String(file))) {
+        expect(loaded).toBe(false);
+        expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      }
+      await unlink(file);
+    });
+    await f.capture.compensate();
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    for (const input of f.files.slice(1)) {
+      await expect(fs.access(input)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);

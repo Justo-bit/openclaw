@@ -376,13 +376,13 @@ async function writeSystemdUnit(
         });
         await assertNoSystemGatewayOwnership(env);
         await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
-        try {
-          await assertNoSystemGatewayOwnership(env);
-        } catch (ownershipError) {
-          await mutation.restore(unitPath, existingUnit);
-          throw ownershipError;
-        }
+        await assertNoSystemGatewayOwnership(env);
       } catch (error) {
+        // Receipt compensation owns the complete reference-before-input restoration.
+        if (definitionTransaction) {
+          throw error;
+        }
+        await mutation.restore(unitPath, existingUnit);
         let rollbackError: unknown;
         try {
           await mutation.restore(backupPath, existingBackup);

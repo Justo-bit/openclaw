@@ -168,26 +168,20 @@ async function restoreLaunchAgentOwnedFile(params: {
   path: string;
   contents: Buffer | null;
   mode: number;
-  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<void> {
   if (params.contents === null) {
-    await params.definitionTransaction?.beforeWrite();
-    await params.definitionTransaction?.filePrepared(params.path, null);
     assertGatewayServiceUpdateCurrent();
-    params.definitionTransaction?.assertCurrent();
     await fs.unlink(params.path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
     });
-    await params.definitionTransaction?.fileWritten(params.path, null);
     return;
   }
   await publishServiceFile({
     filePath: params.path,
     contents: params.contents,
     mode: params.mode,
-    definitionTransaction: params.definitionTransaction,
   });
 }
 
@@ -212,10 +206,7 @@ async function restoreLaunchAgentInstallArtifacts(params: {
   ];
   const restoreAncillary = async (present: boolean) => {
     for (const file of ancillary.filter((entry) => (entry.contents !== null) === present)) {
-      await restoreLaunchAgentOwnedFile({
-        ...file,
-        definitionTransaction: params.snapshot.definitionTransaction,
-      });
+      await restoreLaunchAgentOwnedFile(file);
     }
   };
   await restoreAncillary(true);
@@ -225,7 +216,6 @@ async function restoreLaunchAgentInstallArtifacts(params: {
       plistPath: params.plistPath,
       contents: params.snapshot.plist.contents,
       mode: params.snapshot.plist.mode,
-      definitionTransaction: params.snapshot.definitionTransaction,
     });
   }
   if (params.snapshot.plist === null) {
@@ -317,6 +307,9 @@ async function activateLaunchAgent(params: {
       retryPendingTeardown: true,
     });
   } catch (error) {
+    if (params.snapshot.definitionTransaction) {
+      throw error;
+    }
     try {
       await restoreLaunchAgentInstall({
         domain,
@@ -364,6 +357,10 @@ export async function installLaunchAgent(
   try {
     ({ plistPath, stdoutPath } = await writeLaunchAgentPlist(args));
   } catch (error) {
+    // The receipt owner restores the native reference before retiring generated inputs.
+    if (args.definitionTransaction) {
+      throw error;
+    }
     try {
       await restoreLaunchAgentInstallArtifacts({
         env: args.env,
