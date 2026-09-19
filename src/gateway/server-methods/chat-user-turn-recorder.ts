@@ -34,7 +34,9 @@ export type GatewayChatUserTurnPersist = (options?: {
 
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
-  persist: GatewayChatUserTurnPersist;
+  persist: (
+    ...args: Parameters<GatewayChatUserTurnPersist>
+  ) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
   persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
@@ -221,6 +223,11 @@ export function createGatewayChatUserTurnController(params: {
             }
             mentionInbox.recordCommittedInput({
               sourceId,
+              committedSource: {
+                generation: anchor.generation,
+                sequence: anchor.rawSeq,
+                timestamp: message.timestamp,
+              },
               agentId: anchor.agentId,
               sessionKey: session.sessionKey,
               sessionId: anchor.sessionId,
@@ -233,7 +240,7 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
   });
-  const persist: GatewayChatUserTurnPersist = async (options) => {
+  const persist: GatewayChatUserTurnController["persist"] = async (options) => {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
     }

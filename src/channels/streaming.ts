@@ -19,7 +19,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { selectProgressLabel } from "../shared/progress-labels.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { escapeMarkdownText } from "../shared/text/escape-markdown.js";

@@ -142,6 +142,7 @@ export type SidebarRecentSession = {
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
   worktreeId?: string;
+  workspaceKind?: "worktree" | "checkout";
   execNode?: string;
   placementState?: SessionPlacementState;
   placementProviderId?: string;
@@ -155,6 +156,7 @@ export type SidebarRecentSession = {
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
+  hiddenFromInvolvingMe?: boolean;
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
@@ -163,6 +165,15 @@ export type SidebarRecentSession = {
   childAttention?: readonly SidebarSessionAttention[];
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Hidden run state remains visible when persistent children are expanded. */
+  subagentSummary?: Pick<
+    SidebarRecentSession,
+    | "childAttention"
+    | "unreadChildCount"
+    | "queuedChildCount"
+    | "runningChildCount"
+    | "failedChildCount"
+  >;
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -178,6 +189,8 @@ export type SidebarRecentSession = {
   runtimeMs?: number;
   runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
+  /** Detail queries retain their original parents when hidden runs are skipped. */
+  childLoadParentKeys?: readonly string[];
   children: readonly SidebarRecentSession[];
   isChild: boolean;
   loadingChildren: boolean;

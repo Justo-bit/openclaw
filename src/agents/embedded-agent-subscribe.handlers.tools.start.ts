@@ -10,7 +10,7 @@ import {
   type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -283,6 +283,19 @@ export function emitAgentEventCallbackBestEffort(
     log: ctx.log,
     callback: () => ctx.params.onAgentEvent?.(event),
   });
+}
+
+type ActivityWithoutOwner<T = Parameters<typeof emitAgentActivityEvent>[0]> = T extends unknown
+  ? Omit<T, "runId" | "sessionKey">
+  : never;
+
+export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWithoutOwner): void {
+  emitAgentActivityEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...event,
+  });
+  emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {

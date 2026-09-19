@@ -251,8 +251,10 @@ const runtimeConsumers = [
   ...[
     "src/gateway/server.chat-cli-auth.test.ts",
     "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.chat.canonical-publication.test.ts",
     "src/gateway/server.cli-watchdog.test.ts",
     "src/gateway/server.codex-failure-recovery.test.ts",
+    "src/gateway/server.message-buffer-caption.test.ts",
     "src/gateway/server.xai-fallback.test.ts",
   ].map((file) => ({
     file,
@@ -277,14 +279,24 @@ const runtimeConsumers = [
   })),
   ...[
     "src/gateway/gateway-active-memory.test.ts",
-    "src/gateway/gateway-auth-recovery.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/gateway",
+  })),
+  ...[
+    "src/gateway/gateway-auth-recovery.test.ts",
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
     "src/gateway/gateway-route-model-reuse.test.ts",
     "src/gateway/gateway-ssh-upload-signal.test.ts",
   ].map((file) => ({
     file,
-    configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
     mode: "runtime" as const,
     dir: "src/gateway",
   })),

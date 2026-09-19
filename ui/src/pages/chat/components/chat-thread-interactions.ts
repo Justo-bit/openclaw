@@ -12,7 +12,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
@@ -62,6 +62,7 @@ registerChatMessageMetadataEnglish();
 
 export type ChatThreadState = {
   asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+  asyncQuestionRevision: number;
   asyncQuestionScope?: string;
   turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
@@ -199,6 +200,7 @@ type TranscriptInteractionProps = Pick<
 function createTranscriptState(): ChatThreadState {
   return {
     asyncQuestionDrafts: new Map(),
+    asyncQuestionRevision: 0,
     turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
@@ -281,7 +283,22 @@ export function renderTranscriptSearch(
     return nothing;
   }
   return html`
-    <div class="agent-chat__search-bar">
+    <div
+      class="agent-chat__search-bar"
+      @keydown=${(event: KeyboardEvent) => {
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          event.isComposing ||
+          event.keyCode === 229
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        closeTranscriptSearch(state, requestUpdate);
+      }}
+    >
       ${icons.search}
       <input
         type="text"

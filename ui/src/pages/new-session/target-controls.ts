@@ -59,6 +59,7 @@ export function renderNewSessionPlaceControls({
   submitting,
   pendingPlacement,
   onConnectMachine,
+  onFocusComposer,
   requestUpdate,
 }: {
   context: ApplicationContext | undefined;
@@ -68,6 +69,7 @@ export function renderNewSessionPlaceControls({
   submitting: boolean;
   pendingPlacement: boolean;
   onConnectMachine: () => void;
+  onFocusComposer: () => void;
   requestUpdate: () => void;
 }) {
   const browser = place.browser;
@@ -107,7 +109,7 @@ export function renderNewSessionPlaceControls({
     freshWorkspace: place.freshWorkspace,
   });
   const checkoutState = resolveCheckoutChip({
-    destination: place.remotePlacement ? "remote" : "local",
+    destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
     worktreeAvailable: place.worktreeAvailable(),
     headBranch: branches?.headBranch,
@@ -257,6 +259,7 @@ export function renderNewSessionPlaceControls({
           onSelectWorktree: (value) => place.selectWorktree(value),
           onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
           onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
+          onConfirm: onFocusComposer,
         })
       : nothing
   }`;

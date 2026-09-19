@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  closeAuthProfileReadPool,
-  resolveAuthProfileDatabasePath,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
@@ -342,7 +343,15 @@ export async function createOpenClawTestState(
       },
       writeAuthProfiles: async (store, agentId = "main") => {
         const targetAgentDir = agentDir(agentId);
-        const { saveAuthProfileStore } = await import("../agents/auth-profiles/store-runtime.js");
+        // Fixture persistence does not need native plugin discovery.
+        const [{ createAuthProfileStoreRuntime }, { createExternalAuthRuntime }] =
+          await Promise.all([
+            import("../agents/auth-profiles/store.js"),
+            import("../agents/auth-profiles/external-auth.js"),
+          ]);
+        const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
+          createExternalAuthRuntime(() => []),
+        );
         saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
           filterExternalAuthProfiles: false,
           syncExternalCli: false,
@@ -377,8 +386,7 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
-          await cleanupSessionStateForTest({ stateDir: paths.stateDir });
-          closeAuthProfileReadPool({ kind: "root", rootPath: paths.stateDir });
+          await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
       cleanup: () =>
@@ -424,11 +432,18 @@ export async function withOpenClawTestState<T>(
   fn: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const state = await createOpenClawTestState(options);
-  const work = new AsyncWorkScope();
-  try {
-    return await work.track(() => fn(state));
-  } finally {
-    await work.drain();
-    await state.cleanup();
-  }
+  // On Windows the coordinator directory lives beneath this temporary home.
+  // Keep its location, but never lend fixture handles to the process idle pool.
+  return await withStateDatabaseCoordinatorRuntimeDirectory(
+    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
+    async () => {
+      const work = new AsyncWorkScope();
+      try {
+        return await work.track(() => fn(state));
+      } finally {
+        await work.drain();
+        await state.cleanup();
+      }
+    },
+  );
 }

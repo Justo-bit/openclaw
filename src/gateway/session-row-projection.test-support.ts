@@ -10,7 +10,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { sort as sortSessionRows } from "./session-row-projection-record.js";
+import {
+  create as createSessionRow,
+  sort as sortSessionRows,
+} from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -95,7 +98,7 @@ export function createSessionRowProjectionFixture(params: {
       modelSource: { entry, readSourceEntry: (parentKey) => store[parentKey] },
     });
     rows.set(id(fields), {
-      ...fields,
+      ...createSessionRow(fields, entry),
       entry,
       storedEntry: entry,
       materialized: materializeSessionRow(inputs),
@@ -118,7 +121,7 @@ export function createSessionRowProjectionFixture(params: {
   for (const [key, entry] of Object.entries(store)) {
     setEntry(key, entry);
   }
-  const select = (options?: Parameters<SessionRowProjection["select"]>[0]) => {
+  const selectEntries = (options?: Parameters<SessionRowProjection["selectEntries"]>[0]) => {
     const query = options ?? {};
     const matchingKeys =
       query.sessionIdOrKey &&
@@ -152,6 +155,11 @@ export function createSessionRowProjectionFixture(params: {
           (!query.storePath || row.storeTarget.storePath === query.storePath),
       ),
     describe,
+    setArchivePageSize: () => {},
+    modelFacts: (row) => {
+      const source = describe(row)!.materialized.source;
+      return { ...source, catalogEntry: source.thinkingProjection.catalogEntry };
+    },
     withPreparedExactRows: async (_queries, consume) => ({
       kind: "complete",
       value: consume(projection),
@@ -191,8 +199,7 @@ export function createSessionRowProjectionFixture(params: {
       }),
     },
     isCurrent: (row) => rows.get(id(row))?.generation === row.generation,
-    select,
-    selectEntries: select,
+    selectEntries,
     snapshot: (query, options) => {
       const record = describe(query);
       return record

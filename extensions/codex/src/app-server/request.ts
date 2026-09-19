@@ -10,6 +10,7 @@ import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
+  CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
 import type {
@@ -185,6 +186,18 @@ export class CodexAppServerScopedRequestRejectedError extends Error {
   }
 }
 
+function createScopeCleanupError(message: string): CodexAppServerScopedRequestRejectedError {
+  // Every completed scope needs a fresh abort reason, even on success. Skip its
+  // unused stack, restoring capture before abort listeners can create diagnostics.
+  const stackTraceLimit = Error.stackTraceLimit;
+  try {
+    Error.stackTraceLimit = 0;
+    return new CodexAppServerScopedRequestRejectedError(message);
+  } finally {
+    Error.stackTraceLimit = stackTraceLimit;
+  }
+}
+
 // Preserve pre-write rejection identity so callers do not retire a healthy shared client.
 function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
   try {
@@ -240,19 +253,6 @@ export async function readCodexAppServerUsage(options: {
   );
 }
 
-function extractCodexAccountEmail(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
-  const account =
-    record.account && typeof record.account === "object"
-      ? (record.account as { email?: unknown; accountEmail?: unknown })
-      : record;
-  const email = account.email ?? account.accountEmail;
-  return typeof email === "string" && email.trim() ? email.trim() : undefined;
-}
-
 async function readCodexAccountEmailBestEffort(
   request: CodexAppServerScopedRequest,
   deadline: number,
@@ -264,8 +264,8 @@ async function readCodexAccountEmailBestEffort(
   if (boundMs <= 0) {
     return undefined;
   }
-  const read = request<unknown>({ method: "account/read", requestParams: {} }).then(
-    (account) => extractCodexAccountEmail(account),
+  const read = request<CodexGetAccountResponse>({ method: "account/read", requestParams: {} }).then(
+    ({ account }) => (account?.type === "chatgpt" ? account.email?.trim() || undefined : undefined),
     () => undefined,
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -405,7 +405,7 @@ export async function withCodexAppServerJsonClient<T>(
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
                 ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-                ...(params.catalogPreview && method === "thread/list"
+                ...(params.catalogPreview
                   ? {
                       catalogPreview: true as const,
                       catalogPreviewCache: params.catalogPreviewCache,
@@ -491,6 +491,6 @@ export async function withCodexAppServerJsonClient<T>(
   } finally {
     // `withTimeout` only stops awaiting. Abort the shared operation before its
     // timeout becomes observable so no delayed acquire can issue a request or retry.
-    timeoutController.abort(new CodexAppServerScopedRequestRejectedError(timeoutMessage));
+    timeoutController.abort(createScopeCleanupError(timeoutMessage));
   }
 }

@@ -38,7 +38,7 @@ import type {
   TaskProgressMember,
   TaskProgressPlan,
 } from "./task-registry.process-state.js";
-import type { TaskRegistryObserverEvent } from "./task-registry.store.js";
+import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { formatTaskStatusTitleText } from "./task-status.js";
 

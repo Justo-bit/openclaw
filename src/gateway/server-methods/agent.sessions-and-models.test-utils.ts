@@ -33,12 +33,15 @@ import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import { spyDetachedCreateRunningTaskRun } from "./agent-task-tracking.test-helpers.js";
 import { registerAgentTaskCancellationTests } from "./agent.task-cancellation.test-utils.js";
 import {
+  registerCompactionSessionSettlementCase,
+  registerSuccessfulAgentTaskSettlementCase,
+} from "./agent.task-settlement.test-utils.js";
+import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
-  type AgentCommandCall,
   waitForAssertion,
   requireValue,
   expectRecordFields,
@@ -185,33 +188,7 @@ describe("gateway agent handler", () => {
     expect(callArgs).not.toHaveProperty("bashElevated");
   });
 
-  it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
-    await withTestDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
-      useTestStateDir(root);
-      resetAgentTaskRegistryForTests();
-      primeMainAgentRun();
-      const commandCallCount = mocks.agentCommand.mock.calls.length;
-
-      await invokeAgent(
-        {
-          message: "background cli task",
-          sessionKey: "agent:main:main",
-          idempotencyKey: "task-registry-agent-run",
-        },
-        { reqId: "task-registry-agent-run" },
-      );
-      await waitForAgentCommandCallAfter(commandCallCount);
-
-      await waitForAssertion(() => {
-        expectRecordFields(findTaskByRunId("task-registry-agent-run"), {
-          runtime: "cli",
-          childSessionKey: "agent:main:main",
-          status: "succeeded",
-          terminalSummary: "completed",
-        });
-      });
-    });
-  });
+  registerSuccessfulAgentTaskSettlementCase();
 
   it.each([
     { identity: "ASCII", runId: "plugin-subagent-task-run" },
@@ -1298,6 +1275,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -1355,6 +1333,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "run a command that exceeds the provider deadline",
         sessionKey: "agent:main:main",
@@ -1407,6 +1386,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "run the agent",
         sessionKey: "agent:main:main",
@@ -1460,6 +1440,7 @@ describe("gateway agent handler", () => {
     const runId = "agent-run-recorded-dispatch-failure";
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "run on the unavailable device",
         sessionKey: "agent:main:main",
@@ -1616,6 +1597,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -1975,6 +1957,7 @@ describe("gateway agent handler", () => {
     const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "characterize terminal ownership",
         sessionKey: "agent:main:main",
@@ -2010,6 +1993,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
 
     await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
       ingressOpts: {
         message: "background cli task",
         sessionKey: "agent:main:main",
@@ -2057,6 +2041,7 @@ describe("gateway agent handler", () => {
       const runId = "agent-run-model-not-found";
 
       await dispatchAgentRunFromGateway({
+        admittedRunEntry: undefined,
         ingressOpts: {
           message: "hi",
           sessionKey: "agent:badmodel:main",
@@ -3003,38 +2988,7 @@ describe("gateway agent handler", () => {
     expect(registerToolEventRecipient).toHaveBeenCalledWith("run-existing", "conn-1");
   });
 
-  it("updates tracked agent session identity after compaction rotation", async () => {
-    primeMainAgentRun();
-    const context = makeContext();
-    let trackedSessionId: string | undefined;
-    mocks.agentCommand.mockImplementation(async (call: AgentCommandCall) => {
-      const onSessionIdChanged = call.onSessionIdChanged;
-      if (typeof onSessionIdChanged !== "function") {
-        throw new Error("expected session id change callback");
-      }
-      onSessionIdChanged("rotated-session-id");
-      trackedSessionId = context.chatAbortControllers.get("agent-session-rotation")?.sessionId;
-      return {
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      };
-    });
-
-    await invokeAgent(
-      {
-        message: "rotate session",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "agent-session-rotation",
-      },
-      {
-        reqId: "agent-session-rotation",
-        context,
-      },
-    );
-
-    expect(trackedSessionId).toBe("rotated-session-id");
-  });
+  registerCompactionSessionSettlementCase();
 
   it("honors selected-global agent id when the request uses the main alias", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);

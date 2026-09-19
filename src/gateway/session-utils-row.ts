@@ -3,7 +3,6 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
@@ -43,7 +42,6 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
@@ -52,7 +50,7 @@ import {
   projectSessionParticipants,
 } from "./session-identity-projection.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
@@ -76,10 +74,6 @@ import {
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
-import {
-  resolveGatewaySessionThinkingProjectionInternal,
-  resolveSessionDisplayModelIdentityRefCached,
-} from "./session-utils-model.js";
 import {
   buildSessionListRowMetadataContext,
   resolveTranscriptUsageFallbacks,
@@ -119,29 +113,18 @@ export function readSessionRowInputs(params: {
   const rowContext =
     params.rowContext ??
     buildSessionListRowMetadataContext({ now, sessionKeys: [key, ...Object.keys(store)] });
-  const owner = projectSessionOwner(
-    entry,
-    rowContext.userProfileIdentityById,
-    cfg,
-    params.configuredAgentIds,
-  );
-  const participants = projectSessionParticipants(entry, rowContext.userProfileIdentityById, cfg);
-  if (owner?.actor.identity) {
-    participants.delete(JSON.stringify(owner.actor.identity));
-  }
   const displayName = resolveGatewaySessionDisplayName(key, entry);
-  const preparedCatalog =
-    params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined;
-  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedCatalog);
-  const selectedModel = resolveSessionSelectedModelRef({
-    cfg,
-    sessionKey: key,
-    source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
-    agentId,
-    rowContext,
-    allowPluginNormalization: !lightweight,
-    manifestPlugins: metadataSnapshot,
-  });
+  const { selectedModel, rowModelIdentity, thinkingProjection, catalogEntry } =
+    readSessionRowModelFacts({
+      cfg,
+      key,
+      entry,
+      source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
+      agentId,
+      rowContext,
+      modelCatalog: params.modelCatalog,
+      lightweightListRow: lightweight,
+    });
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const usageByFallbackModel =
     params.skipTranscriptUsageFallback !== true
@@ -163,13 +146,6 @@ export function readSessionRowInputs(params: {
         })
       : undefined;
   const { provider, model } = selectedModel;
-  const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
-    cfg,
-    provider,
-    model,
-    rowContext,
-  });
-
   // Display aliases do not change the selected route's catalog or runtime policy.
   const activeModel = resolveGatewaySessionActiveModel({
     cfg,
@@ -202,33 +178,6 @@ export function readSessionRowInputs(params: {
     lastMessagePreview = (params.includeLastMessage && fields.lastMessagePreview) || undefined;
   }
 
-  // Entries and provider policy must stay bound to the same prepared agent owner;
-  // the Gateway startup registry can contain a different set of plugins.
-  const rowModelCatalog =
-    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
-
-  // Event/list rows must not rediscover plugin-backed configured catalog metadata.
-  // Lightweight projections may use an already-active provider policy, but must
-  // not fall through to public artifacts that reload the manifest registry.
-  const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
-    cfg,
-    agentId,
-    provider: provider ?? DEFAULT_PROVIDER,
-    model: model ?? DEFAULT_MODEL,
-    sessionKey: resolveStoredSessionKeyForAgentStore({
-      cfg,
-      agentId,
-      sessionKey: key,
-    }),
-    entry,
-    modelCatalog: rowModelCatalog ?? (lightweight ? [] : undefined),
-    modelCatalogRouteVariants: preparedCatalog?.routeVariants,
-    metadataSnapshot,
-    rowContext,
-    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
-  });
-  const catalogEntry =
-    rowModelCatalog && provider && model ? thinkingProjection.catalogEntry : undefined;
   const contextWindowProfile = resolveModelContextWindowProfile({
     catalogEntry,
     selected: entry?.contextWindow,
@@ -272,19 +221,13 @@ export function readSessionRowInputs(params: {
               branch: repositoryWorkspace.branch,
             }
           : undefined,
-      createdActor: projectSessionActor(
-        entry?.createdActor,
-        rowContext.userProfileIdentityById,
-        cfg,
-        Boolean(sessionCreatorProfileId(entry?.createdActor)),
-      ),
-      owner,
-      participants,
+      userProfileIdentityById: rowContext.userProfileIdentityById,
+      identityProjection: rowContext.identityProjection,
+      configuredAgentIds: params.configuredAgentIds,
       agentId,
       displayName,
       derivedTitle,
       lastMessagePreview,
-      archivedBy: projectSessionActor(entry?.archivedBy, rowContext.userProfileIdentityById, cfg),
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -430,6 +373,48 @@ function channelAvatarRevision(reference: string): string {
   return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
 }
 
+/** Profile publications invalidate display facts independently of stored session metadata. */
+function projectSessionRowProfiles(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
+  const owner = (identityProjection?.owner ?? projectSessionOwner)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+    configuredAgentIds,
+  );
+  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+  );
+  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
+  const participants = [...projected].flatMap(([key, participant]) =>
+    key === ownerKey ? [] : [participant],
+  );
+  return {
+    createdActor: projectSessionActor(
+      entry?.createdActor,
+      userProfileIdentityById,
+      cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    ),
+    owner,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.length
+      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.length
+      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
+    participantCount: participants.length || undefined,
+    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
+  };
+}
+
+export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
+  Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+}
+
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -450,7 +435,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       : undefined;
   const compactionSummary = resolveSessionCompactionSummary(entry);
 
-  const participants = input.participants.size ? [...input.participants.values()] : undefined;
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
@@ -480,12 +464,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: input.createdActor,
-    owner: input.owner,
-    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants?.slice(0, SESSION_PARTICIPANT_LIMIT),
-    expandedParticipants: participants?.slice(0, MAX_SESSION_PARTICIPANTS),
-    participantCount: participants?.length,
+    ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
@@ -515,7 +494,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
-    archivedBy: input.archivedBy,
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,

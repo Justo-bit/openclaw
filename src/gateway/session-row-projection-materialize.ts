@@ -1,12 +1,16 @@
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
-import type * as records from "./session-row-projection-record.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
+import * as records from "./session-row-projection-record.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
 import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
@@ -31,6 +35,8 @@ export function readResidentSessionRow(
     context: SessionListRowContext;
     subagentInputs: SessionListRowContext["subagentRuns"]["inputs"];
     gatewayContext: Parameters<typeof readSessionRowFacts>[0]["context"];
+    placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
+    placementRevision: () => number;
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
   },
@@ -89,16 +95,20 @@ export function readResidentSessionRow(
       activitySummaryEnabledByAgent.set(row.agentId, activitySummaryEnabled);
     }
   }
+  const facts = readSessionRowFacts({
+    cfg,
+    target: row,
+    entry: row.entry,
+    context: params.gatewayContext,
+    placementFactsReader: params.placementFactsReader,
+    placementRevision: params.placementRevision,
+    activitySummaryEnabled,
+  });
   return {
     materialized,
     fallbackModel: presentation.activeModel,
-    facts: readSessionRowFacts({
-      cfg,
-      target: row,
-      entry: row.entry,
-      context: params.gatewayContext,
-      activitySummaryEnabled,
-    }),
+    facts,
+    hasBoard: facts.hasBoard,
     membership: new Set(
       listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
         (member) => member.identityId,
@@ -121,4 +131,28 @@ export function readSessionRowEntry(row: records.Row) {
     { agentId: row.storeTarget.agentId, path: row.storeTarget.storePath },
   );
   return result.found ? result.value : undefined;
+}
+
+/** Exact incognito acquisition never admits an ephemeral store to the resident roster. */
+export function readIncognitoSessionRow(params: {
+  cfg: records.Inputs["cfg"];
+  key: string;
+  agentId: string;
+}) {
+  const { cfg, key, agentId } = params;
+  const ephemeralPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+  if (!listOpenIncognitoAgentDatabases().some((store) => store.storePath === ephemeralPath)) {
+    return undefined;
+  }
+  const row = records.create({ key, agentId, storeTarget: { agentId, storePath: ephemeralPath } });
+  const storedEntry = readSessionRowEntry(row);
+  if (!storedEntry) {
+    return undefined;
+  }
+  const entry = projectGatewaySessionEntry(cfg, storedEntry);
+  return Object.assign(row, {
+    storedEntry,
+    entry,
+    selection: readSessionListSelectionFacts(key, entry),
+  });
 }

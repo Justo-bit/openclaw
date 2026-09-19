@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,13 +13,17 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
+import {
+  isCronSessionDisplayKey,
+  isSystemCreatedSessionRow,
+} from "../shared/session-list-visibility.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
+  projectSessionProfileInvolvement,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
   projectSessionParticipants,
@@ -97,6 +102,9 @@ export function* filterSessionEntries(
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const identityProjection = getRowContext().identityProjection;
+  const projectOwner = identityProjection?.owner ?? projectSessionOwner;
+  const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
   const profileRelation = opts.profileRelation
     ? {
         ...opts.profileRelation,
@@ -123,8 +131,8 @@ export function* filterSessionEntries(
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
     for (const [, entry] of visibleEntries) {
-      const owner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
-      for (const person of projectSessionPeople(entry, identities, cfg, owner)) {
+      const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+      for (const person of projectSessionPeople(entry, identities, owner)) {
         allowedProfileIds.add(person.identity.id);
       }
       if (shouldYield?.()) {
@@ -147,23 +155,26 @@ export function* filterSessionEntries(
   const selectedProfileId = profileReference?.value;
 
   const keepCandidate = ([key, entry]: SessionEntryPair) => {
-    const target = params.getTarget(key);
-    const storeKey = target?.storeKey ?? key;
+    const target = expectDefined(params.getTarget(key), "selection row owner");
+    const { selection } = target;
+    const storeKey = target.storeKey ?? key;
     if (
-      isCronRunSessionKey(key) ||
-      (opts.excludeSubagents === true && (isSubagentSessionKey(key) || entry.spawnedBy)) ||
+      selection.isCronRun ||
+      (opts.excludeCron === true && isCronSessionDisplayKey(key)) ||
+      (opts.excludeSystem === true && isSystemCreatedSessionRow({ ...entry, key })) ||
+      (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")
     ) {
       return false;
     }
     if (agentId && storeKey !== "global") {
-      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
-      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
+      const ownerAgentId = target.storeKey ? normalizeAgentId(target.agentId) : selection.agentId;
+      if (ownerAgentId !== agentId) {
         return false;
       }
     }
-    if (isPhantomAgentStoreListEntry(key, entry)) {
+    if (selection.isPhantom) {
       return false;
     }
     if (spawnedBy) {
@@ -253,7 +264,7 @@ export function* filterSessionEntries(
     ) {
       continue;
     }
-    const effectiveOwner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+    const effectiveOwner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
     if (
       profileRelation?.relationship === "owned" &&
       (effectiveOwner?.identity?.type !== "profile" ||
@@ -271,17 +282,22 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    const participants =
-      involvingActorId || profileRelation?.relationship === "involving"
-        ? projectSessionParticipants(entry, identities, cfg)
-        : undefined;
+    let participants: ReturnType<typeof projectParticipants> | undefined;
+    const matchesInvolvement = (profileId: string, personal: boolean) => {
+      const state = projectSessionProfileInvolvement(entry, profileId, identities);
+      return (
+        !(personal && state?.hidden) &&
+        (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
+          (effectiveOwner?.identity?.type === "profile" &&
+            effectiveOwner.identity.id === profileId) ||
+          (participants ??= projectParticipants(entry, identities, cfg)).has(
+            JSON.stringify({ type: "profile", id: profileId }),
+          ))
+      );
+    };
     if (
       profileRelation?.relationship === "involving" &&
-      !(
-        (effectiveOwner?.identity?.type === "profile" &&
-          effectiveOwner.identity.id === profileRelation.profileId) ||
-        participants?.has(JSON.stringify({ type: "profile", id: profileRelation.profileId }))
-      )
+      !matchesInvolvement(profileRelation.profileId, false)
     ) {
       continue;
     }
@@ -295,18 +311,11 @@ export function* filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (
-      involvingActorId &&
-      !(
-        (effectiveOwner?.identity?.type === "profile" &&
-          effectiveOwner.identity.id === involvingActorId) ||
-        participants?.has(JSON.stringify({ type: "profile", id: involvingActorId }))
-      )
-    ) {
+    if (involvingActorId && !matchesInvolvement(involvingActorId, true)) {
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {
-      const associated = projectSessionPeople(entry, identities, cfg, effectiveOwner);
+      const associated = projectSessionPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
       peopleIncomplete ||=
         (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
@@ -351,12 +360,4 @@ export function* filterSessionEntries(
         }
       : {}),
   };
-}
-
-function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
-  return (
-    entry?.updatedAt == null &&
-    !normalizeOptionalString(entry?.sessionId) &&
-    parseAgentSessionKey(key)?.rest === "sessions"
-  );
 }
