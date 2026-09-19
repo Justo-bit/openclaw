@@ -111,16 +111,7 @@ function preserveDeliveredUserTurn(
       !state.currentSessionId ||
       submission.sessionId === state.currentSessionId
     ) {
-      // Custody may already own this source before its first delivery retention.
-      if (
-        getChatPendingInputs(state)?.page.items.some(
-          (input) => input.runId === submission.pendingRunId,
-        )
-      ) {
-        submission.pending = false;
-        return;
-      }
-      admitChatSubmission(state, submission);
+      admitChatSubmission(state, getChatPendingInputs(state)?.page.items, submission);
     }
     return;
   }

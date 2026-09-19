@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -18,6 +19,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import * as transcriptProviders from "../../transcripts/provider-registry.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
@@ -27,7 +29,10 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 const logGateway = { warn: vi.fn() };
 
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
@@ -169,7 +174,7 @@ describe("transcript Gateway read authorization and errors", () => {
         );
       } finally {
         provider.mockRestore();
-        activeSessions.clear();
+        await clearTranscriptCapturesForTest();
       }
     });
   });
@@ -267,6 +272,7 @@ describe("transcript Gateway read authorization and errors", () => {
       });
       const profile = ensureProfileForEmail("url-reader@example.test");
       const caller = client(profile.id);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const selector = transcriptSessionSelector(session);
       const publicOutputs: string[] = [];
@@ -464,8 +470,9 @@ describe("meeting transcript RPC", () => {
     await store.writeSession(session);
   });
   afterEach(async () => {
-    activeSessions.clear();
+    await clearTranscriptCapturesForTest();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });

@@ -53,6 +53,9 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
+// Prepare the public SDK graph through the test runner before the consumer test deadline.
+await import("openclaw/plugin-sdk/channel-outbound");
+
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.2.26", "202602260")}</channel></rss>`;
@@ -678,9 +681,10 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     }
   });
 
-  it("limits setupSurface omission to the recorded frozen target", async () => {
+  it("limits setupSurface omission to the recorded frozen targets", async () => {
     const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
     expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
     expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
     expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });

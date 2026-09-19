@@ -2439,11 +2439,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ...doctorRuntimeTargets,
       "src/commands/doctor-plugin-install-config.process.test.ts",
       "src/gateway/gateway-active-memory.test.ts",
+      "src/gateway/gateway-auth-recovery.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
       "src/gateway/gateway-route-model-reuse.test.ts",
+      "src/gateway/gateway-ssh-upload-signal.test.ts",
       "src/gateway/server.config-patch.test.ts",
     ];
+    const databaseWorkerFiles = new Set(
+      listMatchedTestFiles(createGatewayDatabaseWorkersVitestConfig({})),
+    );
+    const ownsRuntimeTarget = (
+      group: { configs: string[]; includePatterns?: string[] },
+      file: string,
+    ) =>
+      group.includePatterns
+        ? group.includePatterns.includes(file)
+        : group.configs.includes("test/vitest/vitest.gateway-database-workers.config.ts") &&
+          databaseWorkerFiles.has(file);
     const full = defaultShards;
     const compact = createNodeTestShardBundles({ compact: true, compactMode: "pull-request" });
     for (const shards of [full, compact]) {
@@ -2456,7 +2469,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const owner = expectDefined(
           shards.find((shard) =>
             ("configs" in shard ? [shard] : shard.groups).some((group) =>
-              group.includePatterns?.includes(runtimeTarget),
+              ownsRuntimeTarget(group, runtimeTarget),
             ),
           ),
           `runtime owner for ${runtimeTarget}`,
@@ -2469,7 +2482,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(owner.pretestBuildMode, runtimeTarget).toBe(
           containsPrivateQa ? "private-qa" : "runtime",
         );
-        const group = groups.find((entry) => entry.includePatterns?.includes(runtimeTarget));
+        const group = groups.find((entry) => ownsRuntimeTarget(entry, runtimeTarget));
         expect(group?.pretestBuildMode, runtimeTarget).toBe(
           group?.includePatterns?.includes(PRIVATE_QA_TOOLING_TEST) ? "private-qa" : "runtime",
         );
@@ -3722,11 +3735,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         configs: gatewayCoreConfigs,
         includePatterns: [
           "src/gateway/gateway-active-memory.test.ts",
-          "src/gateway/gateway-auth-recovery.test.ts",
           "src/gateway/gateway-concurrent-streams.test.ts",
-          "src/gateway/gateway-cron-process-identity.windows.test.ts",
-          "src/gateway/gateway-route-model-reuse.test.ts",
-          "src/gateway/gateway-ssh-upload-signal.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,
@@ -3933,15 +3942,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const before = getCommittedCompactPlan(options.compactMode, runnerBackend);
       const after = createNodeTestShardBundles(changedOptions);
       const groups = after.flatMap((shard) => shard.groups);
-      expect(groups.filter((group) => group.shard_name === "agentic-plugins")).toEqual([
-        {
-          shard_name: "agentic-plugins",
-          configs: ["test/vitest/vitest.plugins.config.ts"],
-          includePatterns: ["src/plugins/tools.optional.test.ts"],
-          requiresDist: false,
-          runner: expect.stringMatching(/^blacksmith-(?:4|8)vcpu-ubuntu-2404$/u),
-        },
-      ]);
       type Group = (typeof groups)[number];
       const isRepartitionableTooling = (group: Group) =>
         runnerBackend === "github" &&
@@ -4017,6 +4017,64 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }
         return group.env;
       };
+      const expectPluginPolicy = (plan: typeof after, originals: Map<string, Group>) => {
+        expect(
+          plan
+            .flatMap((job) => job.groups)
+            .filter((group) => group.shard_name === "agentic-plugins")
+            .map((group) =>
+              Object.assign({}, group, { env: declarationEnv(group, plan, originals) }),
+            ),
+        ).toEqual([
+          {
+            shard_name: "agentic-plugins",
+            configs: ["test/vitest/vitest.plugins.config.ts"],
+            includePatterns: ["src/plugins/tools.optional.test.ts"],
+            requiresDist: false,
+            runner: expect.stringMatching(/^blacksmith-(?:4|8)vcpu-ubuntu-2404$/u),
+          },
+        ]);
+      };
+      expectPluginPolicy(after, afterInherited);
+      // Keep the transition controls independent of current inventory placement.
+      const pluginDeclaration = expectDefined(
+        afterAdmission
+          .flatMap((job) => job.groups)
+          .find((group) => group.shard_name === "agentic-plugins"),
+        "declared plugin group",
+      );
+      const pluginAdmission: CompactNodeTestShard = {
+        checkName: "plugin-policy-control",
+        shardName: "plugin-policy-control",
+        groups: [pluginDeclaration],
+        requiresDist: false,
+        runner: pluginDeclaration.runner,
+        planConcurrency: 2,
+      };
+      const pinnedPlugin: Group = {
+        ...pluginDeclaration,
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      };
+      const promotedPlugin = [{ ...pluginAdmission, groups: [pinnedPlugin], planConcurrency: 1 }];
+      const pluginInherited = inheritedGroupsFor([pluginAdmission]);
+      expectPluginPolicy(promotedPlugin, pluginInherited);
+      const invalidPluginEnvs: Array<Group["env"]> = [
+        undefined,
+        { OPENCLAW_VITEST_MAX_WORKERS: "1" },
+        { OPENCLAW_VITEST_MAX_WORKERS: "3" },
+        { OPENCLAW_VITEST_MAX_WORKERS: "2", UNDECLARED_POLICY: "1" },
+      ];
+      for (const env of invalidPluginEnvs) {
+        pinnedPlugin.env = env;
+        expect(() => expectPluginPolicy(promotedPlugin, pluginInherited)).toThrow();
+      }
+      pinnedPlugin.env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+      expect(() =>
+        expectPluginPolicy(
+          promotedPlugin,
+          inheritedGroupsFor([{ ...pluginAdmission, planConcurrency: 1 }]),
+        ),
+      ).toThrow();
       const expectedTimingKeys = (
         parent: string,
         family: Array<{ group: Group; part: number }>,

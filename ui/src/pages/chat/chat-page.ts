@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
@@ -72,15 +73,6 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     );
   }
 
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.sessions,
-      (sessions, notify) => sessions.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.chatSubmissions,
-      (submissions, notify) => submissions.subscribeCreate(notify),
-    );
   private mediaQuery: MediaQueryList | null = null;
   private mobileNavMediaQuery: MediaQueryList | null = null;
   private dragDepth = 0;
@@ -118,6 +110,25 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
 
   constructor() {
     super();
+    new SubscriptionsController(this)
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+        undefined,
+        () => this.performUpdate(),
+      )
+      .watch(
+        () => this.context?.chatSubmissions,
+        (submissions, notify) => submissions.subscribeCreate(notify),
+      )
+      .watch(
+        () => this.context?.placementStartup,
+        (startup, notify) => startup.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+      );
     installSessionPrefetch(this, this.messageCache, this.snapshotStore, () => this.context);
   }
 
@@ -153,7 +164,6 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.snapshotStore.disconnect();
     this.retainedSessions.disconnect();
     this.viewerPresence.dispose();
-    this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
     this.mobileNavMediaQuery?.removeEventListener("change", this.handleMobileNavViewportChange);
@@ -378,17 +388,13 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
 
   private readonly clearDropIndicator = () => {
     this.dragDepth = 0;
-    this.clearDropPreview();
-  };
-
-  private clearDropPreview() {
     this.pendingDragOver = null;
     if (this.dragFrame) {
       window.cancelAnimationFrame(this.dragFrame);
       this.dragFrame = 0;
     }
     this.dropIndicator = null;
-  }
+  };
 
   private syncRouteToActivePane() {
     const layout = this.layout;
@@ -702,7 +708,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       for (const pane of column.panes) {
         const ownerKey = JSON.stringify([column.id, pane.id]);
         for (const sessionKey of retainedSessions.get(pane.id) ?? []) {
-          if (sessionKey !== undefined) {
+          if (
+            sessionKey !== undefined &&
+            (!this.context || !readDeletedSessionStartup(this.context, sessionKey))
+          ) {
             nextPaneKeys.add(JSON.stringify([ownerKey, sessionKey]));
           }
         }

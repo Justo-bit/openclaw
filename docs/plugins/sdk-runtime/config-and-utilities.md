@@ -89,6 +89,14 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
+unconsumed inputs when termination fails. Retry `close()` on that same pool;
+dispose dependent files only after closure is acknowledged. The optional
+`onRetirementFailure(error)` observer runs synchronously when termination fails.
+It may return `void` or `Promise<void>`; observer throws and rejections do not
+replace the termination error or release custody, and closure does not wait for
+the observer.
+
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
 This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent

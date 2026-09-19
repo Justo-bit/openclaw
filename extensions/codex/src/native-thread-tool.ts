@@ -266,6 +266,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const binding = readBinding();
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
+            options.context.assertInvocationCurrent?.();
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
@@ -430,10 +431,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             await requestOptions(admissionConfig),
           );
           if (archivedBinding?.threadId === threadId) {
-            await options.bindingStore.mutate(identity, {
-              kind: "clear",
-              threadId,
-            });
+            await options.bindingStore.mutate(
+              identity,
+              {
+                kind: "clear",
+                threadId,
+              },
+              options.context.assertInvocationCurrent,
+            );
           }
           return jsonResult({ action, threadId });
         }
