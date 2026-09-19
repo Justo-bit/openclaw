@@ -24,6 +24,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastReadAt",
   "agentStatus",
   "observerDigest",
+  "activitySummary",
   "markedUnreadAt",
   "lastActivityAt",
   "sessionFile",
@@ -142,6 +143,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoverySourceIngress",
   "restartRecoverySourceReplyDeliveryMode",
   "restartRecoveryTerminalDeliveryEvidence",
+  "restartRecoveryHarnessCompletion",
   "restartRecoveryTerminalRunIds",
   "totalTokensFresh",
   "totalTokensVersion",
@@ -189,6 +191,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingTranscriptRepair",
   "visibility",
   "publicShare",
+  "profileInvolvement",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;

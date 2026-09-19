@@ -24,9 +24,11 @@ import {
 import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
+  SessionTranscriptMaintenanceSizingInput,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchivePublishWorkerMessage,
+  TranscriptArchiveReadResult,
   TranscriptArchiveWorkerMessage,
   TranscriptArchiveWorkerPlan,
   TranscriptArchiveWorkerResult,
@@ -285,6 +287,23 @@ export async function materializeTranscriptArchiveInWorker(
   plan: TranscriptArchiveWorkerPlan,
   env?: NodeJS.ProcessEnv,
 ): Promise<TranscriptArchiveWorkerResult> {
+  if (plan.snapshot.lastSeq === null) {
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
+      { agentId: plan.agentId, path: plan.databasePath, env },
+    );
+    if (!opened.found) {
+      throw new Error(
+        `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
+      );
+    }
+    if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
+      throw new Error(
+        `SQLite session state changed before archive materialization for ${plan.sessionId}`,
+      );
+    }
+    return { archive: null, sessionId: plan.sessionId };
+  }
   fs.mkdirSync(plan.archiveDirectory, { recursive: true, mode: 0o700 });
   const stagedPath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: plan.archiveDirectory,
@@ -462,6 +481,14 @@ async function runArchiveSession(
         settled: true,
         results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
+    } else if (request.operation === "read-final") {
+      const { readTranscriptArchiveFinalInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: TranscriptArchiveReadResult[] = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchiveFinalInWorker(plan, env));
+      }
+      response = { type: "final-read", operationId, settled: true, results };
     } else {
       throw new Error("SQLite archive Worker received an unsupported operation");
     }
@@ -507,6 +534,22 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
     const data = workerData as SessionColdPreparationWorkerData;
     const result = await prepareSessionColdBatchInWorker(data.input);
     parentPort.postMessage({ type: "done", results: [result] }, []);
+    parentPort.close();
+  } else if (operation === "maintenance-size") {
+    const { readSessionTranscriptJsonlBytesInDatabase } =
+      await import("./session-accessor.sqlite-maintenance-store.js");
+    // SAFETY: the maintenance owner constructs this private worker payload.
+    const { input } = workerData as { input: SessionTranscriptMaintenanceSizingInput };
+    const opened = withFreshOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionTranscriptJsonlBytesInDatabase(database, input.sessionIds),
+      input,
+    );
+    if (!opened.found) {
+      throw new Error(
+        `Cannot size SQLite session transcripts: ${opened.reason.replaceAll("-", " ")}`,
+      );
+    }
+    parentPort.postMessage({ type: "sized", results: [opened.value] }, []);
     parentPort.close();
   } else if (operation === "cold-mutate" || operation === "reclaim") {
     const { runColdMutationWorkerPort, runReclamationWorkerPort } =

@@ -269,7 +269,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits and "hybrid" applies hot-safe changes then restarts when required.',
   "gateway.nodes.browser.mode":
-    'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
+    'Node browser routing ("auto" = prefer the host browser, use a single connected browser node when local capability is unavailable; "manual" = require an explicit node selection or configured pin; "off" = disable node routing).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
     "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
@@ -286,6 +286,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.autoUpdate":
+    "Controls automatic updates of the separate runtime for packaged headless node hosts. Checks hourly and waits for all node work to finish before restarting; automatic restarts are at least 12 hours apart.",
+  "nodeHost.autoUpdate.enabled":
+    "Enable automatic stable or beta updates for long-running packaged headless nodes (default: true). Set false to opt out. Also disabled by update.checkOnStart=false or OPENCLAW_NO_AUTO_UPDATE=1; source checkouts, native apps, private workers, dev, and extended-stable do not auto-apply.",
   "nodeHost.agentRuns":
     "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
   "nodeHost.agentRuns.claude":
@@ -452,9 +456,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.entries.*.tools.message.crossContext.allowWithinProvider":
-    "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
+    "Per-agent message guard for sending to other conversations on the same provider. Set both this and allowAcrossProviders to false for current-conversation-only public agents.",
   "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
-    "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
+    "Per-agent override for sending across providers. Inherits the global setting (default: true). Set false to block cross-provider messaging for this agent.",
   "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
   "tools.exec.approvalRunningNoticeMs":
@@ -563,7 +567,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
-    "Allow sends across different providers (default: false).",
+    "Allow sends across different providers (default: true). Set false to block cross-provider messaging.",
   "tools.message.crossContext.marker.enabled":
     "Add a visible origin marker when sending cross-context (default: true).",
   "tools.message.crossContext.marker.prefix":

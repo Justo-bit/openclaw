@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
@@ -131,10 +132,13 @@ export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
+  /** Admission can prepare migration facts before their checkpoint is writable. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;
@@ -152,7 +156,13 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -161,6 +171,7 @@ export type ReadConfigFileSnapshotInternalResult = {
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };

@@ -28,7 +28,7 @@ import {
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -37,6 +37,7 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./se
 import { createGatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+import { resolveQaDiagnosticHeartbeatTimings } from "./server-qa-diagnostic-timings.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { resolveGatewayShutdownNotice, runGatewayCloseSteps } from "./server-shutdown.js";
@@ -113,6 +114,7 @@ export async function prepareGatewayLifecycle(params: {
     nodeRegistry,
     nodeWorkerSupervisorTransport,
     nodePresenceTimers,
+    nodeHasSessionSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,
@@ -461,6 +463,7 @@ export async function prepareGatewayLifecycle(params: {
         getRuntimeSnapshot,
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
+        getSessionRowProjection: runtime.getSessionRowProjection,
       }),
     );
   };
@@ -534,7 +537,7 @@ export async function prepareGatewayLifecycle(params: {
                 beginClose: params.pluginMetadata.beginClose,
                 close: async (...args) => {
                   try {
-                    await params.pluginMetadata.close(...args);
+                    return await params.pluginMetadata.close(...args);
                   } finally {
                     contextLifetime.abort(new Error("Gateway closed; plugin runtime unavailable."));
                   }
@@ -620,6 +623,7 @@ export async function prepareGatewayLifecycle(params: {
     startDiagnosticHeartbeat(undefined, {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,
+      testTimings: resolveQaDiagnosticHeartbeatTimings(process.env),
       sampleLiveness: () => {
         const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
         if (!sample || sample.degradedSinceMs == null) {
@@ -651,6 +655,7 @@ export async function prepareGatewayLifecycle(params: {
     nodeRegistry,
     nodeDesktopService,
     nodePresenceTimers,
+    nodeHasSessionSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,

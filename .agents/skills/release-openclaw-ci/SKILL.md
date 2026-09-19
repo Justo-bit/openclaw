@@ -380,8 +380,12 @@ recovering historical separate evidence. Regular final qualification records
 SDK reports for both `beta` and `latest`; review the acknowledgement for the
 actual publication channel. Prepared descriptors live in `publicationArtifacts` in
 the exact final manifest. Product evidence reuse never substitutes Code-SHA
-package or image bytes for the final Release SHA. A parent that produced these
-artifacts needs a fresh all-group FRV instead of same-parent continuation.
+package or image bytes for the final Release SHA. For failed independent npm qualification, use `pnpm frv continue --failed`:
+failed npm jobs retry on their original run, successful preparation jobs
+and diagnostic children carry forward, and the parent verifies the resulting
+receipts. Failure alone is not a continuation rejection. Frozen workflows
+execute their original receipt logic; a local controller upgrade does not
+retrofit that logic, and final verification still owns the recovery result.
 
 The SHA-pinned helper infers `beta` for matching beta release candidates and
 exact alpha tags, and `stable` for stable/correction versions, then passes the
@@ -396,6 +400,9 @@ focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
+Stable publication requires soak unless the operator supplies `stable_soak_waiver`
+with a reason; the publisher forwards and records that reason in release evidence
+without changing validation coverage or other publication gates.
 
 ### Extended-stable validation
 

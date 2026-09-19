@@ -12,11 +12,7 @@ import type { ApplicationContext, ApplicationNavigationOptions } from "../app/co
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
-import {
-  restartHoverMarqueeIfHovered,
-  startHoverMarqueeFromEvent,
-  stopHoverMarqueeFromEvent,
-} from "../lib/hover-marquee.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -205,8 +201,20 @@ function renderSidebarSessionIndicators(
   // only for live presence; pinned and archive-attribution rows have no matching header.
   const ownerRepeatedBySection =
     host.sessionsGrouping === "person" && !session.pinned && ownerAttribution !== "archived";
+  // A self filter already identifies solo ownership. Keep shared rows and
+  // archive attribution visible; the participant count includes unshown faces.
+  const selfUser = host.sessionDataContext?.gateway.snapshot.selfUser;
+  const selfProfileId = selfUser?.identity?.id ?? selfUser?.id;
+  const ownerRepeatedByFilter =
+    ownerAttribution !== "archived" &&
+    ownerActor?.identity?.type === "profile" &&
+    ownerActor.identity.id === selfProfileId &&
+    (host.sessionInvolvingMeFilterActive || host.sessionOwnerFilterId === ownerActor.id) &&
+    (session.participantCount ?? session.participants?.length ?? 0) === 0;
   const leadingOwner =
-    !team && ownerRepeatedBySection && ownerViewing !== true ? undefined : ownerActor;
+    ownerRepeatedByFilter || (!team && ownerRepeatedBySection && ownerViewing !== true)
+      ? undefined
+      : ownerActor;
   const gateway = host.sessionDataContext?.gateway;
   const channelAvatarAuth = {
     authTokens: gateway
@@ -286,10 +294,11 @@ function renderSidebarSessionIndicators(
         variant="session"
       ></openclaw-viewer-facepile>
       ${team ? originIndicators : nothing} ${team ? persistentIndicator : nothing}
-      ${team && (session.workSession || session.acpSession) && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
+      ${team && (session.workSession || session.acpSession) && !session.workspaceKind && !pullRequest ? html`<span class="session-row-badge" role="img" aria-label=${t("chat.sidebar.coding")} title=${session.subtitle ?? t("chat.sidebar.coding")}>${icons.terminal}</span>` : nothing}
       ${team && session.hasAutomation ? html`<span class="session-row-badge" role="img" aria-label=${t("tabs.cron")} title=${t("tabs.cron")}>${icons.clock}</span>` : nothing}
       ${renderSessionRowBadges({
         isChild: session.isChild,
+        workspaceKind: session.workspaceKind,
         incognito: session.incognito,
         placementState: session.placementState,
         placementProviderId: session.placementProviderId,
@@ -380,7 +389,8 @@ export function renderRecentSession(params: {
       : "",
     (team ? ownAttention : session.attention).kind === "error"
       ? "sidebar-recent-session--attention-danger"
-      : (team ? ownAttention : session.attention).kind !== "none"
+      : (team ? ownAttention : session.attention).kind !== "none" &&
+          (team ? ownAttention : session.attention).kind !== "question"
         ? "sidebar-recent-session--attention-amber"
         : "",
     host.sessionOrganizer.draggingSessionKey === session.key
@@ -394,11 +404,10 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
-  const marqueeLabelTemplate = html`<span
-    ${display ? ref(restartHoverMarqueeIfHovered) : nothing}
-    class="sidebar-recent-session__name hover-marquee"
-    >${team ? nothing : indicators.originIndicators}${label}</span
-  >`;
+  const marqueeLabelTemplate = renderHoverMarquee(
+    html`${team ? nothing : indicators.originIndicators}${label}`,
+    "sidebar-recent-session__name",
+  );
   const marqueeLabel = display
     ? keyed(
         JSON.stringify([
@@ -439,8 +448,6 @@ export function renderRecentSession(params: {
       }
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
-      @mouseenter=${startHoverMarqueeFromEvent}
-      @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
         href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
@@ -613,7 +620,7 @@ export function renderSessionTree(params: {
                   </button>`
                 : nothing
             }
-            ${renderChildSessionLoadError(host, session.key)}
+            ${(session.childLoadParentKeys ?? [session.key]).map((key) => renderChildSessionLoadError(host, key))}
             ${
               session.loadingChildren && session.children.length === 0
                 ? html`<span

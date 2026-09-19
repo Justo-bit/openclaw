@@ -4,8 +4,10 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import {
   emitAgentEventIfCurrent,
   emitAgentEventForOwner,
@@ -41,6 +43,7 @@ import {
   type PendingLiveEvent,
   type WorkerLiveCredentialRotation,
 } from "./live-event-window.js";
+import { captureWorkerTurnFinishing } from "./placement-turn-claim-events.js";
 import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -491,6 +494,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       emissionMode,
       lifecycleGeneration,
       trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
+      toolArgsByCallId: new Map<string, unknown>(),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -500,7 +504,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
-    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    recordApplied: PendingLiveEvent["recordApplied"],
   ): WorkerLiveEventFailure | undefined => {
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
@@ -517,22 +521,57 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       stream: request.event.kind,
       data: prepareWorkerLiveEventData(request.event),
     };
-    if (owned.emissionMode === "shared") {
-      if (!emitAgentEventIfCurrent(event)) {
-        if (definitiveTerminal) {
-          window.terminalRuns.delete(request.runId);
-        }
+    let activity;
+    if (request.event.kind === "tool") {
+      const tool = request.event.payload;
+      if (tool.phase === "start") {
+        owned.toolArgsByCallId.set(tool.toolCallId, tool.args);
+      }
+      activity = projectAgentToolActivity({
+        ...tool,
+        name: normalizeToolPolicyName(tool.name),
+        args: owned.toolArgsByCallId.get(tool.toolCallId),
+      });
+      if (tool.phase === "result") {
+        owned.toolArgsByCallId.delete(tool.toolCallId);
+      }
+    }
+    const itemEvent = activity
+      ? { runId: request.runId, stream: "item", data: activity }
+      : undefined;
+    const emissions = itemEvent
+      ? activity?.phase === "start"
+        ? [itemEvent, event]
+        : [event, itemEvent]
+      : [event];
+    const ownsPublication = () =>
+      window.activeRuns.get(request.runId) === owned &&
+      getAgentRunContextOwnerStatus(request.runId, owned.claimId, owned.lifecycleGeneration) ===
+        "active";
+    for (const emission of emissions) {
+      if (!ownsPublication()) {
         return invalidEvent();
       }
-    } else {
-      emitAgentEventForOwner(event, owned.claimId);
+      if (owned.emissionMode === "shared") {
+        if (!emitAgentEventIfCurrent(emission)) {
+          if (definitiveTerminal) {
+            window.terminalRuns.delete(request.runId);
+          }
+          return invalidEvent();
+        }
+      } else {
+        emitAgentEventForOwner(emission, owned.claimId);
+      }
+    }
+    if (activity && !ownsPublication()) {
+      return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     if (write) {
       window.trajectoryWrites.add(write);
       void write.then(() => window.trajectoryWrites.delete(write));
     }
-    recordDiagnostic?.(request.event);
+    recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -540,15 +579,15 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
-    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    firstApplied: PendingLiveEvent["recordApplied"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
-    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
+    let recordApplied = firstPending ? firstPending.recordApplied : firstApplied;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
+      const failed = publish(window, request, buffered !== undefined, recordApplied);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -588,7 +627,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       request = next.request;
       buffered = next;
-      recordDiagnostic = next.recordDiagnostic;
+      recordApplied = next.recordApplied;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -604,6 +643,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return resyncWindow(window);
     }
     const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
+    const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
+    const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
+      recordDiagnostic?.(event);
+      recordFinishing?.();
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -611,7 +655,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
+      return drain(window, pending?.request ?? params.request, recordApplied, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -620,7 +664,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

@@ -7,11 +7,12 @@ import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";
 
-export { SessionsCreateParamsSchema };
+export * from "./sessions-create.js";
+export * from "./sessions-involvement.js";
+export * from "./sessions-activity-summary.js";
 export {
   SessionsStorageParamsSchema,
   SessionsStorageStatusResultSchema,
@@ -408,32 +409,14 @@ export const SessionsDiffResultSchema = closedObject({
   ),
 });
 
-/** Searches one agent's indexed session transcripts, optionally within selected sessions. */
-export const SessionsSearchParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
-  query: Type.String({ minLength: 1, maxLength: 4096 }),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })),
-});
-
-/** One full-text session transcript match with follow-up provenance. */
-export const SessionsSearchHitSchema = closedObject({
-  sessionKey: NonEmptyString,
-  sessionId: NonEmptyString,
-  messageId: NonEmptyString,
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
-  timestamp: Type.Integer({ minimum: 0 }),
-  snippet: Type.String(),
-  score: Type.Number(),
-});
-
-/** Full-text search response; indexing marks a still-running first-use reconcile. */
-export const SessionsSearchResultSchema = closedObject({
-  results: Type.Array(SessionsSearchHitSchema),
-  indexing: Type.Optional(Type.Boolean()),
-  archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
-  truncated: Type.Optional(Type.Boolean()),
-});
+export {
+  SessionsSearchParamsSchema,
+  SessionsSearchHitSchema,
+  SessionsSearchResultSchema,
+  type SessionsSearchParams,
+  type SessionsSearchHit,
+  type SessionsSearchResult,
+} from "./sessions-search.js";
 
 /** Repairs or removes invalid session records from the selected agent scope. */
 export const SessionsCleanupParamsSchema = closedObject({
@@ -804,9 +787,6 @@ export const SessionsUsageParamsSchema = closedObject({
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
-export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
-export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
 export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
@@ -841,7 +821,6 @@ export type SessionsBranchesListResult = Static<typeof SessionsBranchesListResul
 export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchParamsSchema>;
 export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
-export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
 export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
 export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;

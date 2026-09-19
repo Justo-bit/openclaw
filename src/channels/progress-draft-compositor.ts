@@ -7,7 +7,10 @@ import {
   createProgressDraftDiffStatTracker,
   formatChannelProgressDraftDiffStat,
 } from "./progress-draft-diffstat.js";
-import { createChannelProgressDraftEventHandlers } from "./progress-draft-events.js";
+import {
+  createChannelProgressDraftEventHandlers,
+  routePreparedProgressItem,
+} from "./progress-draft-events.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   formatReasoningProgressDisplayLine,
@@ -455,13 +458,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
 
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
+    preparedItems: params.preparedItems,
     pushLine: noteProgress,
     onTool: diffStatTracker.stageToolEvent,
     onItem: diffStatTracker.commitItemEvent,
     ...(params.buildProgressEventLine ? { buildLine: params.buildProgressEventLine } : {}),
   });
 
-  return {
+  const compositor = {
     get previewToolProgressEnabled() {
       return previewToolProgressEnabled;
     },
@@ -557,6 +561,16 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
+    pushItemEvent: (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) =>
+      routePreparedProgressItem({
+        payload,
+        progressMode: params.mode === "progress",
+        commentary: commentaryProgressEnabled,
+        handlers: progressEventHandlers,
+        clearLine,
+        pushCommentary: (text, options) => compositor.pushCommentaryProgress(text, options),
+        pushHeadline: (text, options) => compositor.pushPreambleHeadline(text, options),
+      }),
     async pushApprovalEvent(
       payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
     ) {
@@ -713,7 +727,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       }
       return false;
     },
-    async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
+    async pushCommentaryProgress(text?: string, options?: { itemId?: string; complete?: boolean }) {
       if (!params.active || params.mode !== "progress" || !commentaryProgressEnabled) {
         return false;
       }
@@ -745,6 +759,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         kind: "item",
         label: "Commentary",
         prefix: false,
+        ...(options?.complete !== undefined ? { complete: options.complete } : {}),
       };
       lines = mergeChannelProgressDraftLineForStreaming(lines, line, {
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
@@ -756,4 +771,5 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return await startAndRender();
     },
   };
+  return compositor;
 }

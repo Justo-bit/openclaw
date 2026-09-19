@@ -4,6 +4,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, createConfigIO, replaceConfigFile } from "../../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  registerRuntimeConfigWriteListener,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHandler,
+} from "../../config/runtime-snapshot.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -11,6 +18,49 @@ import { persistRequestedUpdateChannel } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([true, false])(
+  "rolls back an include channel when config selection changes during refresh (handled=%s)",
+  async (handled) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({
+        plugins: { enabled: false },
+        update: { $include: "./channel.json" },
+      });
+      const include = state.statePath("channel.json");
+      const original = '{"channel":"stable"}\n';
+      await fs.writeFile(include, original);
+      const originalRoot = await fs.readFile(state.configPath, "utf8");
+      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      expect(snapshot.valid).toBe(true);
+      setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+      const previousRuntime = getRuntimeConfigSnapshot();
+      const notified = vi.fn();
+      const unsubscribe = registerRuntimeConfigWriteListener(notified);
+      const refresh = vi.fn(async () => {
+        await Promise.resolve();
+        process.env.OPENCLAW_CONFIG_PATH = state.statePath("reselected.json");
+        return handled;
+      });
+      setRuntimeConfigSnapshotRefreshHandler({ preflight: () => true, refresh });
+      try {
+        await expect(
+          persistRequestedUpdateChannel({ configSnapshot: snapshot, requestedChannel: "beta" }),
+        ).rejects.toMatchObject({ name: "ConfigWritePostCommitError", rollbackStatus: "restored" });
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(notified).not.toHaveBeenCalled();
+        expect(getRuntimeConfigSnapshot()).toBe(previousRuntime);
+        expect(await fs.readFile(include, "utf8")).toBe(original);
+        expect(await fs.readFile(`${include}.bak`, "utf8")).toBe(original);
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
+      } finally {
+        process.env.OPENCLAW_CONFIG_PATH = state.configPath;
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+    });
+  },
+);
 
 it("changes an include-owned requested update channel under a live executor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

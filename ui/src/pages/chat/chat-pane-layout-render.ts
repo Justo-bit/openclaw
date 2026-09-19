@@ -147,6 +147,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const companionPresented =
+      this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "companion");
+    // Capture the opening before the lazy rail can yield to newer input intent.
+    this.syncSessionCompanionPresentation(companionPresented);
     const browserPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
     const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
@@ -155,7 +159,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
-    const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
+    const desktopSource =
+      sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "desktop")?.environmentId ??
+      resolveChatPaneDesktopTarget(selectedSession);
     const desktopFocusKey = JSON.stringify([
       state.sessionKey,
       this.connectionGeneration,
@@ -187,6 +195,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource,
+      portalPresented:
+        this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
@@ -213,16 +223,13 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionPresented:
-        this.presented &&
-        this.visuallyPresented &&
-        isSidebarSlotVisible(sidebarLayout, "companion"),
+      companionFocusRequest: this.sessionCompanionFocusRequest,
+      companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
       onCompanionVisibilityChange: this.setSessionObserverVisibility,
       connected: state.connected,
-      pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
       onRefreshTasks: backgroundTasks.onRefresh,
       tasksLoading: backgroundTasks.loading,

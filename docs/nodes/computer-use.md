@@ -12,6 +12,10 @@ Computer use lets an agent see and control the Gateway's own desktop or a paired
 
 For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the tool is bound to the session's own desktop instead of searching paired nodes. Desktop-enabled Crabbox workers provision CUA in the same desktop session shown by the web Desktop panel. Their private computer endpoint is not exposed as an ordinary paired computer, and tool arguments cannot change its node or Gateway.
 
+A conversation can also attach a temporary Crabbox while its agent stays on the Gateway. Select the `environmentId` returned by the environment tool on the first `computer` call; later calls retain that desktop. The agent sees and controls the same desktop shown in the chat sidebar. The environment must belong to the current conversation, and its lease, connection, and admitted agent run must remain current. A missing or stopped attachment never redirects input to the Gateway or another computer. See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for the complete “open in Crabbox and show me” workflow.
+
+Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. Release control to allow new agent input; interrupted actions are not automatically replayed. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions.
+
 The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Dashboard → Settings → This Mac → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
 
 Provider selection never falls back per action. Switching providers closes the active execution surface, rotates the provider generation, and re-advertises the node commands. A CUA failure therefore becomes an unavailable result instead of silently running the same action through Peekaboo.
@@ -25,7 +29,7 @@ Provider selection never falls back per action. Switching providers closes the a
 - **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled on Windows x64/ARM64 or glibc-based Linux x64/ARM64. Its package includes the pinned CUA Driver SDK runtime; no `cua-driver` executable, daemon, or MCP server is configured.
 - For a node, the pairing update that includes `computer.act` approved on the Gateway. The Gateway's own computer does not require a paired node.
 - A vision-capable agent model.
-- Tool policy that exposes `computer`. The default `coding` profile does not. Add `computer` to `tools.alsoAllow`; ordinary sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`. A cloud session's bound desktop is included in its default sandbox policy, while explicit allowlists and denies still apply.
+- Tool policy that exposes `computer`. Local onboarding selects Full when no profile is configured, but preserves an explicit `coding` profile, which excludes it. For Coding, add `computer` to `tools.alsoAllow`; ordinary sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`. A cloud session's bound desktop is included in its default sandbox policy, while explicit allowlists and denies still apply. Full tool selection does not grant computer-control permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 
 ## Gateway desktop
 
@@ -254,7 +258,7 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
 1. Enable the platform fulfiller: on macOS, **Dashboard → Settings → This Mac → Capabilities → Allow Computer Control** starts enabled, then choose Peekaboo or CUA and grant **Accessibility** and **Screen Recording** under **This Mac → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
 2. For a node target, approve the pairing update on the Gateway (a new command forces re-pairing). A Gateway target uses its locally enabled provider without node pairing.
-3. Expose the tool to the vision-capable agent. For the default `coding` profile:
+3. Expose the tool to the vision-capable agent. For an explicit `coding` profile:
 
    ```json5
    {

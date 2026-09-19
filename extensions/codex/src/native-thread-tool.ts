@@ -1,6 +1,7 @@
 /**
  * Owner-only access to native Codex threads stored in the user's Codex home.
  */
+import { isDeepStrictEqual } from "node:util";
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -250,37 +251,62 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
         const { isModelSelectionLocked, ModelSelectionLockedError } =
           await import("openclaw/plugin-sdk/model-session-runtime");
-        const { resolveCodexBindingAppServerConnection } =
+        const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =
           await import("./app-server/binding-connection.js");
         const { resolveCodexSupervisionAppServerRuntimeOptions } =
           await import("./app-server/config-runtime.js");
-        const requestOptions = (pluginConfig: unknown): CodexControlRequestOptions => {
+        const requestOptions = async (
+          pluginConfig: unknown,
+        ): Promise<CodexControlRequestOptions> => {
           const plugin = readCodexPluginConfig(pluginConfig);
+          const base = baseRequestOptions();
           const session = currentSession();
-          const binding = currentBinding(session);
-          if (binding?.connectionScope === "supervision") {
-            const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
+          const identity = session ? currentIdentity(session.sessionId) : undefined;
+          const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
+          const binding = readBinding();
+          const selection = codexBindingConnectionSelection(binding);
+          const assertCurrent = () => {
+            options.context.assertInvocationCurrent?.();
+            const current = currentSession();
+            if (
+              runtimeConfig() !== base.config ||
+              !isDeepStrictEqual(options.getPluginConfig(), pluginConfig) ||
+              current?.sessionId !== session?.sessionId ||
+              current?.entry?.sessionId !== session?.entry?.sessionId ||
+              isModelSelectionLocked(current?.entry) !== isModelSelectionLocked(session?.entry) ||
+              !isDeepStrictEqual(codexBindingConnectionSelection(readBinding()), selection)
+            ) {
+              throw new Error("Codex native thread ownership changed; retry the request.");
+            }
+          };
+          if (
+            binding?.connectionScope === "supervision" ||
+            plugin.appServer?.homeScope === "user"
+          ) {
+            const connection = await resolveCodexBindingAppServerConnection({
+              binding,
+              pluginConfig,
+              config: base.config,
+              agentDir: base.agentDir,
+              assertCurrent,
+            });
             return {
-              ...baseRequestOptions(),
+              ...base,
               startOptions: connection.appServer.start,
-              authProfileId: connection.clientAuthProfileId,
-            };
-          }
-          if (plugin.appServer?.homeScope === "user") {
-            const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
-            return {
-              ...baseRequestOptions(),
-              startOptions: connection.appServer.start,
-              authProfileId: null,
+              authProfileId: connection.usesSupervisionConnection
+                ? connection.clientAuthProfileId
+                : null,
+              assertCurrent,
             };
           }
           if (plugin.supervision?.enabled !== true) {
             throw new Error("Codex native thread access is disabled for this run.");
           }
           return {
-            ...baseRequestOptions(),
+            ...base,
             startOptions: resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }).start,
             authProfileId: null,
+            assertCurrent,
           };
         };
         if (action === "list") {
@@ -304,7 +330,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               ...(cursor ? { cursor } : {}),
               ...(searchTerm ? { searchTerm } : {}),
             },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
@@ -323,7 +349,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
@@ -335,7 +361,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.renameThread,
             { threadId, name },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           return jsonResult({ action, threadId, name });
         }
@@ -344,7 +370,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.unarchiveThread,
             { threadId },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           return jsonResult(
             mayReadRawTranscripts ? response : redactNativeThreadResponse(response),
@@ -370,7 +396,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           assertThreadMayBeArchived(current, threadId);
           if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
@@ -386,14 +412,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 admissionConfig,
                 CODEX_CONTROL_METHODS.listThreads,
                 listParams,
-                requestOptions(admissionConfig),
+                await requestOptions(admissionConfig),
               ),
             assertDescendantIdle: async (descendantThreadId) => {
               const descendant = await request(
                 admissionConfig,
                 CODEX_CONTROL_METHODS.readThread,
                 { threadId: descendantThreadId, includeTurns: false },
-                requestOptions(admissionConfig),
+                await requestOptions(admissionConfig),
               );
               assertThreadMayBeArchived(descendant, descendantThreadId);
             },
@@ -402,13 +428,17 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.archiveThread,
             { threadId },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           if (archivedBinding?.threadId === threadId) {
-            await options.bindingStore.mutate(identity, {
-              kind: "clear",
-              threadId,
-            });
+            await options.bindingStore.mutate(
+              identity,
+              {
+                kind: "clear",
+                threadId,
+              },
+              options.context.assertInvocationCurrent,
+            );
           }
           return jsonResult({ action, threadId });
         }
@@ -437,7 +467,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
-            requestOptions(admissionConfig),
+            await requestOptions(admissionConfig),
           );
           assertThreadMayBeForked(current, threadId);
         }
@@ -445,7 +475,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           admissionConfig,
           CODEX_CONTROL_METHODS.forkThread,
           { threadId, threadSource: "user", excludeTurns: true },
-          requestOptions(admissionConfig),
+          await requestOptions(admissionConfig),
         );
         if (!isJsonObject(response) || !isJsonObject(response.thread)) {
           throw new Error("Codex app-server returned an invalid thread/fork response");
@@ -458,20 +488,24 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           throw new Error("Codex app-server thread/fork response did not include a thread id");
         }
         if (attach && session) {
-          const attached = await options.bindingStore.mutate(currentIdentity(session.sessionId), {
-            kind: "set",
-            binding: {
-              threadId: forkThreadId,
-              cwd:
-                typeof response.thread.cwd === "string"
-                  ? response.thread.cwd
-                  : (options.context.workspaceDir ?? ""),
-              model: typeof response.model === "string" ? response.model : undefined,
-              modelProvider:
-                typeof response.modelProvider === "string" ? response.modelProvider : undefined,
-              historyCoveredThrough: new Date().toISOString(),
+          const attached = await options.bindingStore.mutate(
+            currentIdentity(session.sessionId),
+            {
+              kind: "set",
+              binding: {
+                threadId: forkThreadId,
+                cwd:
+                  typeof response.thread.cwd === "string"
+                    ? response.thread.cwd
+                    : (options.context.workspaceDir ?? ""),
+                model: typeof response.model === "string" ? response.model : undefined,
+                modelProvider:
+                  typeof response.modelProvider === "string" ? response.modelProvider : undefined,
+                historyCoveredThrough: new Date().toISOString(),
+              },
             },
-          });
+            options.context.assertInvocationCurrent,
+          );
           if (!attached) {
             throw new Error("Codex session binding changed before the fork could be attached");
           }

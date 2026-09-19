@@ -12,7 +12,10 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import {
+  resolveUpdatedInstallCommandEnv,
+  stripGatewayServiceMarkerEnv,
+} from "./update-command-service-env.js";
 import {
   runGatewayInstallWithLoadBoundary,
   type UpdateServiceLoadBoundary,
@@ -56,33 +59,31 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   if (!entrypoint) {
     return false;
   }
+  const argv = [
+    params.nodeRunner ?? resolveNodeRunner(),
+    entrypoint,
+    "gateway",
+    "install",
+    "--update-executor",
+    "check",
+    "--json",
+  ];
   const check = await withUpdateCommandExecutorChild(
     params.executor,
     params.root,
-    (_grant, beforeInput) =>
-      runCommandWithTimeout(
-        [
-          params.nodeRunner ?? resolveNodeRunner(),
-          entrypoint,
-          "gateway",
-          "install",
-          "--update-executor",
-          "check",
-          "--json",
-        ],
-        {
-          input: "",
-          beforeInput,
-          baseEnv: {},
-          cwd: params.root,
-          env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
-          timeoutMs: params.timeoutMs,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          ...(params.signal ? { signal: params.signal } : {}),
-          maxOutputBytes: 64 * 1024,
-        },
-      ),
+    (_grant, bindChild) =>
+      runCommandWithTimeout(argv, {
+        input: "",
+        beforeInput: bindChild,
+        baseEnv: {},
+        cwd: params.root,
+        env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
+        timeoutMs: params.timeoutMs,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        ...(params.signal ? { signal: params.signal } : {}),
+        maxOutputBytes: 64 * 1024,
+      }),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -150,13 +151,17 @@ export async function runUpdatedInstallGatewayCommand(
   // Capture one structured child result in both outer output modes.
   args.push("--json");
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
-  const commandEnv = resolveUpdatedInstallCommandEnv({
-    processEnv: installing
-      ? (params.serviceInstallEnv ?? params.invocationEnv)
-      : params.invocationEnv,
-    serviceEnv: installing ? undefined : params.serviceEnv,
-    invocationCwd: params.invocationCwd,
-  });
+  // The child manages this service from outside it. Captured Gateway markers
+  // would misclassify recovery as an in-service restart and refuse native activation.
+  const commandEnv = stripGatewayServiceMarkerEnv(
+    resolveUpdatedInstallCommandEnv({
+      processEnv: installing
+        ? (params.serviceInstallEnv ?? params.invocationEnv)
+        : params.invocationEnv,
+      serviceEnv: installing ? undefined : params.serviceEnv,
+      invocationCwd: params.invocationCwd,
+    }),
+  );
   if (executor) {
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
@@ -205,30 +210,32 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent();
   }
 
-  const runChild = (grant?: UpdateCommandChildGrant, beforeInput?: (pid: number) => void) =>
-    runCommandWithTimeout(
-      [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])],
-      {
-        // The complete owned env must not regain selectors removed during capture.
-        baseEnv: {},
-        ...(grant
-          ? {
-              input: JSON.stringify({
-                executor: grant,
-                action,
-                targetRoot: resolveUpdateInstallRoot(params.result.root!),
-              }),
-              beforeInput,
-            }
-          : {}),
-        cwd: params.result.root,
-        env: commandEnv,
-        timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
-        ...(params.signal ? { signal: params.signal } : {}),
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-      },
-    );
+  const runChild = (
+    grant?: UpdateCommandChildGrant,
+    bindChild?: (pid: number, argv?: readonly string[]) => void,
+  ) => {
+    const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
+    return runCommandWithTimeout(argv, {
+      // The complete owned env must not regain selectors removed during capture.
+      baseEnv: {},
+      ...(grant
+        ? {
+            input: JSON.stringify({
+              executor: grant,
+              action,
+              targetRoot: resolveUpdateInstallRoot(params.result.root!),
+            }),
+            beforeInput: bindChild,
+          }
+        : {}),
+      cwd: params.result.root,
+      env: commandEnv,
+      timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    });
+  };
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();

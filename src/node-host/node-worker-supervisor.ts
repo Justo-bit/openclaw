@@ -36,13 +36,14 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "./node-worker-supervisor-contract.js";
 import {
+  createNodeWorkerObservedTerminal,
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
   nodeWorkerReceiptMatchesOwner,
   type NodeWorkerActiveOwnership,
-  type NodeWorkerEnvironmentBinding,
   type NodeWorkerObservedTerminal,
+  type NodeWorkerPendingAdmission,
   type NodeWorkerRunningChild,
   type NodeWorkerStopState,
   type NodeWorkerSupervisorOptions,
@@ -54,6 +55,7 @@ import {
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
 import {
+  reconcileNodeWorkerTurnCancellation,
   settleNodeWorkerTurn,
   startNodeWorkerTurn,
   waitForNodeWorkerRetirement,
@@ -71,16 +73,7 @@ class NodeWorkerSupervisor {
   private readonly bundleRoot: string;
   private readonly store: NodeWorkerLaunchStore;
   private readonly turns: NodeWorkerTurnStore;
-  private readonly admissions = new Map<
-    string,
-    {
-      binding: NodeWorkerEnvironmentBinding;
-      launchId: string;
-      planHash: string;
-      abort: AbortController;
-      done: Promise<NodeWorkerLaunchReceipt>;
-    }
-  >();
+  private readonly admissions = new Map<string, NodeWorkerPendingAdmission>();
   private readonly stoppingEnvironments = new Map<string, number>();
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly engineEnv: NodeJS.ProcessEnv;
@@ -91,6 +84,7 @@ class NodeWorkerSupervisor {
   private readonly containerImage?: string;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
   private initializationPromise?: Promise<void>;
+  private initialized = false;
   private closed = false;
   private closePromise?: Promise<void>;
 
@@ -125,6 +119,7 @@ class NodeWorkerSupervisor {
       await this.capacity.initialize(async (receipt) => {
         await this.recoverRunning(receipt, false);
       });
+      this.initialized = true;
     })().catch((error: unknown) => {
       if (this.initializationPromise === initialization) {
         this.initializationPromise = undefined;
@@ -132,6 +127,20 @@ class NodeWorkerSupervisor {
       throw error;
     });
     return (this.initializationPromise = initialization);
+  }
+
+  hasActiveWork(): boolean {
+    // Retained workers can own background commands after their turn completes;
+    // durable claims also cover work owned by another live supervisor.
+    return (
+      !this.initialized ||
+      this.admissions.size > 0 ||
+      this.starting.size > 0 ||
+      this.active.size > 0 ||
+      this.stoppingEnvironments.size > 0 ||
+      this.workspace.processes.hasActiveWork() ||
+      this.store.nonterminalCount() > 0
+    );
   }
 
   private requireContainerLifecycle(): NodeWorkerContainerLifecycle {
@@ -437,11 +446,8 @@ class NodeWorkerSupervisor {
     }
     await this.initialize();
     const receipt = this.turns.getMatching(expected);
-    if (!receipt) {
-      return undefined;
-    }
-    if (receipt.state !== "pending" && receipt.state !== "running") {
-      return await this.status(receipt.launchId);
+    if (!receipt || (receipt.state !== "pending" && receipt.state !== "running")) {
+      return receipt ? await this.status(receipt.launchId) : undefined;
     }
     const active = this.active.get(receipt.ownerLaunchId);
     if (active?.state !== "running" || active.turn?.claim.launchId !== expected.launchId) {
@@ -474,6 +480,7 @@ class NodeWorkerSupervisor {
     const key = nodeWorkerEnvironmentKey(expected);
     this.stoppingEnvironments.set(key, (this.stoppingEnvironments.get(key) ?? 0) + 1);
     try {
+      await this.workspace.processes.stopEnvironment(expected);
       const admission = this.admissions.get(key);
       if (admission && nodeWorkerEnvironmentMatches(admission.binding, expected)) {
         admission.abort.abort(new Error("node worker environment stopped"));
@@ -579,6 +586,7 @@ class NodeWorkerSupervisor {
     }
     const operation = (async () => {
       const errors: unknown[] = [];
+      await this.workspace.processes.close().catch((error: unknown) => errors.push(error));
       await this.initializationPromise?.catch((error: unknown) => errors.push(error));
       await Promise.allSettled([...this.admissions.values()].map((admission) => admission.done));
       await Promise.allSettled(this.starting.values());
@@ -613,6 +621,7 @@ class NodeWorkerSupervisor {
   }
 
   private reconcileActiveTerminal(active: NodeWorkerObservedTerminal): NodeWorkerLaunchReceipt {
+    reconcileNodeWorkerTurnCancellation(active, this.turns);
     const receipt = this.capacity.finish({
       launchId: active.launchId,
       planHash: active.planHash,
@@ -665,17 +674,7 @@ class NodeWorkerSupervisor {
     active: NodeWorkerRunningChild,
     outcome: NodeWorkerTerminalOutcome,
   ): void {
-    const observed: NodeWorkerObservedTerminal = {
-      state: "observed",
-      binding: active.binding,
-      gatewayNamespace: active.gatewayNamespace,
-      launchId: active.launchId,
-      planHash: active.planHash,
-      supervisor: active.supervisor,
-      worker: active.worker,
-      ...(active.container ? { container: active.container } : {}),
-      outcome,
-    };
+    const observed = createNodeWorkerObservedTerminal(active, outcome);
     if (this.active.get(active.launchId) !== active) {
       return;
     }
@@ -705,7 +704,7 @@ class NodeWorkerSupervisor {
 
   private async stopChild(
     active: NodeWorkerRunningChild,
-    state: NodeWorkerStopState,
+    state?: NodeWorkerStopState,
   ): Promise<void> {
     active.stopState ??= state;
     if (active.container) {

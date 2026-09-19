@@ -7,7 +7,7 @@ import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { createConfigWriteAuthorityGuard } from "./io.write-safety.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 
-const CONFIG_BACKUP_COUNT = 5;
+export const CONFIG_BACKUP_COUNT = 5;
 
 /** Prepare backup bytes without blocking unrelated Gateway requests. */
 export async function prepareConfigFileWrite(params: {

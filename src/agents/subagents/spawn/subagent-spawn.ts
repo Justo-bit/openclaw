@@ -3,7 +3,6 @@
  *
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
-import { promises as fs } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
@@ -14,11 +13,9 @@ import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
-import {
-  recordSessionCreated,
-  recordSubagentSpawned,
-} from "../../../sessions/session-state-events.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
@@ -32,6 +29,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
+import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
@@ -71,13 +69,11 @@ export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-s
 
 function sanitizeMountPathHint(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (hasPromptUnsafeControlCharacter(trimmed)) {
-    return undefined;
-  }
-  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
+  if (
+    !trimmed ||
+    hasPromptUnsafeControlCharacter(trimmed) ||
+    !/^[A-Za-z0-9._\-/:]+$/.test(trimmed)
+  ) {
     return undefined;
   }
   return trimmed;
@@ -100,7 +96,13 @@ export async function spawnSubagentDirect(
     return requestResolution.result;
   }
   const {
-    request: { taskName, spawnMode, cleanup, expectsCompletionMessage },
+    request: {
+      taskName,
+      spawnMode,
+      cleanup,
+      expectsCompletionMessage,
+      completionRequesterSessionId,
+    },
     runtime: {
       hookRunner,
       cfg,
@@ -271,6 +273,7 @@ export async function spawnSubagentDirect(
           : "quiet";
     const envelope = buildSubagentSpawnEnvelope({
       completionMode,
+      completionTarget: params.completionTarget,
       soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
@@ -295,14 +298,14 @@ export async function spawnSubagentDirect(
 
     let retainOnSessionKeep = false;
     let attachmentsReceipt: SpawnSubagentResult["attachments"];
-    let attachmentAbsDir: string | undefined;
-    let attachmentRootDir: string | undefined;
+    let attachmentId: string | undefined;
 
     const materializedAttachments = await materializeSubagentAttachments({
       assertActive,
       config: cfg,
+      childSessionKey,
       targetAgentId,
-      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+      sandboxed: childRuntimeSandboxed,
       attachments: params.attachments,
       mountPathHint,
     });
@@ -316,8 +319,7 @@ export async function spawnSubagentDirect(
     if (materializedAttachments?.status === "ok") {
       retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
       attachmentsReceipt = materializedAttachments.receipt;
-      attachmentAbsDir = materializedAttachments.absDir;
-      attachmentRootDir = materializedAttachments.rootDir;
+      attachmentId = materializedAttachments.attachmentId;
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
@@ -346,7 +348,7 @@ export async function spawnSubagentDirect(
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
     if (childEntry) {
-      recordSessionCreated({
+      recordSessionCreated(cfg, {
         sessionKey: childSessionKey,
         agentId: targetAgentId,
         entry: childEntry,
@@ -358,6 +360,14 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
+    const recordRequesterParticipation = () =>
+      recordSessionParticipantBestEffort({
+        promptedAt,
+        identity: { type: "agent", id: requesterAgentId },
+        agentId: targetAgentId,
+        sessionKey: childSessionKey,
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+      });
     const launchChildRun = async (assertDispatchCurrent?: () => void) =>
       await callNativeSubagentGateway(
         withSubagentGatewayExecutionIdentity(
@@ -403,7 +413,7 @@ export async function spawnSubagentDirect(
     const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
       cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
-        attachmentAbsDir,
+        attachmentId,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -440,13 +450,7 @@ export async function spawnSubagentDirect(
         const launch = await launchChildRun(assertActive);
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
-        recordSessionParticipantBestEffort({
-          promptedAt,
-          identity: { type: "agent", id: requesterAgentId },
-          agentId: targetAgentId,
-          sessionKey: childSessionKey,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
-        });
+        recordRequesterParticipation();
         return { runId: acceptedChildRunId };
       },
       async cleanupOnFailure({ phase, state }) {
@@ -466,9 +470,12 @@ export async function spawnSubagentDirect(
           });
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentAbsDir) {
+        if (attachmentId) {
           try {
-            await fs.rm(attachmentAbsDir, { recursive: true, force: true });
+            await cleanupMaterializedSubagentAttachments({
+              childSessionKey,
+              attachmentId,
+            });
           } catch {
             // Best-effort cleanup only.
           }
@@ -540,6 +547,8 @@ export async function spawnSubagentDirect(
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
           expectsCompletionMessage: completionMode === "announce",
+          completionTarget: params.completionTarget,
+          completionRequesterSessionId,
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
@@ -554,8 +563,7 @@ export async function spawnSubagentDirect(
           queued: params.collect === true,
           taskRowOwnership,
           ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-          attachmentsDir: attachmentAbsDir,
-          attachmentsRootDir: attachmentRootDir,
+          attachmentId,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },
@@ -592,15 +600,7 @@ export async function spawnSubagentDirect(
             // Queued registration already owns the task row before either dispatch route starts.
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
-            recordSessionParticipantBestEffort({
-              promptedAt,
-              identity: { type: "agent", id: requesterAgentId },
-              agentId: targetAgentId,
-              sessionKey: childSessionKey,
-              storePath: resolveSessionStorePathCore(cfg.session?.store, {
-                agentId: targetAgentId,
-              }),
-            });
+            recordRequesterParticipation();
             try {
               const started = gatewayContextResolver
                 ? startQueuedSubagentRun(
@@ -692,6 +692,7 @@ export async function spawnSubagentDirect(
       runId: childRunId,
       mode: spawnMode,
       expectsCompletionMessage: completionMode === "announce",
+      completionTarget: params.completionTarget,
       context: preparedSpawnContext.mode,
       taskName,
       note:

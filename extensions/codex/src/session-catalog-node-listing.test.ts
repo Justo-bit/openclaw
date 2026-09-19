@@ -90,10 +90,12 @@ describe("Codex supervision catalog", () => {
     });
     const command = createCodexSessionCatalogNodeHostCommands(
       {
+        hasActiveWork: () => false,
+        disconnect: async () => {},
         forRequest: () => control,
-        forNode: () => ({ control, sourceHomeId: "home-main", codexHome: "/node/.codex" }),
-        homesForAgent: () => [],
-        forUpstream: () => undefined,
+        forNode: async () => ({ control, sourceHomeId: "home-main", codexHome: "/node/.codex" }),
+        homesForAgent: async () => [],
+        forUpstream: async () => undefined,
       },
       bindingStore,
     ).find((candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND);

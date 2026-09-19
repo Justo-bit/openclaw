@@ -93,19 +93,19 @@ describe("parseControlUiGitHubPreviewTarget", () => {
   });
 
   it.each([
-    { field: "kind", value: "comment" },
-    { field: "owner", value: "openclaw/evil" },
-    { field: "repo", value: "." },
-    { field: "repo", value: ".." },
-    { field: "repo", value: "repo.git" },
-    { field: "repo", value: "repo.atom" },
-    { field: "number", value: 0 },
-    { field: "number", value: 1.5 },
-    { field: "number", value: 10_000_000_000 },
-    { field: "number", value: "1" },
-    { field: "agentId", value: " " },
-    { field: "agentId", value: 1 },
-  ])("rejects invalid $field: $value", ({ field, value }) => {
+    ["kind", "comment"],
+    ["owner", "openclaw/evil"],
+    ["repo", "."],
+    ["repo", ".."],
+    ["repo", "repo.git"],
+    ["repo", "repo.atom"],
+    ["number", 0],
+    ["number", 1.5],
+    ["number", 10_000_000_000],
+    ["number", "1"],
+    ["agentId", " "],
+    ["agentId", 1],
+  ])("rejects invalid %s: %s", (field, value) => {
     expect(parseControlUiGitHubPreviewTarget({ ...target, [field]: value })).toBeNull();
   });
 });
@@ -158,15 +158,15 @@ describe("loadControlUiGitHubPreview", () => {
   });
 
   it.each([
-    { stage: "repository", stopAfter: 1, redirect: false },
-    { stage: "item", stopAfter: 2, redirect: false },
-    { stage: "final visibility check", stopAfter: 3, redirect: false },
-    { stage: "repository redirect", stopAfter: 1, redirect: true },
-    { stage: "item redirect", stopAfter: 2, redirect: true },
-    { stage: "commits redirect", stopAfter: 4, redirect: true },
+    ["repository", 1, false],
+    ["item", 2, false],
+    ["final visibility check", 3, false],
+    ["repository redirect", 1, true],
+    ["item redirect", 2, true],
+    ["commits redirect", 4, true],
   ])(
-    "blocks later GitHub dispatches after identity changes during $stage",
-    async ({ stopAfter, redirect, stage }) => {
+    "blocks later GitHub dispatches after identity changes during %s",
+    async (stage, stopAfter, redirect) => {
       let changed = false;
       const assertSelected = () => {
         if (changed) {
@@ -302,35 +302,22 @@ describe("loadControlUiGitHubPreview", () => {
 
   it("resolves co-authors from noreply trailers without a lookup per person", async () => {
     const commits = [
-      {
-        commit: {
-          // A commits page can exceed the shared 256 KiB JSON default.
-          message: `${"x".repeat(300 * 1024)}\n\nCo-authored-by: Ada King <20+ada@users.noreply.github.com>`,
-        },
-      },
+      // A commits page can exceed the shared 256 KiB JSON default.
+      `${"x".repeat(300 * 1024)}\n\nCo-authored-by:\t Ada King \t<20+ada@users.noreply.github.com>\t`,
+      ...["\n", "\r", "\u2028", "\u2029"].map(
+        (separator, index) =>
+          `Co-authored-by: Invalid${separator}continued <${80 + index}+invalid-${index}@users.noreply.github.com>`,
+      ),
       // Repeat plus a different case: the same person must fold into one face.
-      { commit: { message: "fix: two\n\nCo-authored-by: ada <20+ADA@users.noreply.github.com>" } },
-      {
-        commit: { message: "fix: three\n\nCo-authored-by: Mira <7+mira@users.noreply.github.com>" },
-      },
+      "fix: two\n\nCo-authored-by: ada <20+ADA@users.noreply.github.com>",
+      "fix: three\n\nCo-authored-by: Mira <7+mira@users.noreply.github.com>",
       // The PR author is not their own co-author.
-      {
-        commit: {
-          message:
-            "fix: four\n\nCo-authored-by: steipete <58493+steipete@users.noreply.github.com>",
-        },
-      },
+      "fix: four\n\nCo-authored-by: steipete <58493+steipete@users.noreply.github.com>",
       // A plain address carries no account id, so it cannot resolve to a face.
-      { commit: { message: "fix: five\n\nCo-authored-by: Someone <someone@example.com>" } },
-      {
-        commit: { message: "fix: six\n\nCo-authored-by: Alan <31+alan@users.noreply.github.com>" },
-      },
-      {
-        commit: {
-          message: "fix: seven\n\nCo-authored-by: Grace <99+grace@users.noreply.github.com>",
-        },
-      },
-    ];
+      "fix: five\n\nCo-authored-by: Someone <someone@example.com>",
+      "fix: six\n\nCo-authored-by: Alan <31+alan@users.noreply.github.com>",
+      "fix: seven\n\nCo-authored-by: Grace <99+grace@users.noreply.github.com>",
+    ].map((message) => ({ commit: { message } }));
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const url = requestUrl(input);
       if (url.includes("/commits")) {
@@ -478,23 +465,11 @@ describe("loadControlUiGitHubPreview", () => {
   });
 
   it.each([
-    { avatarUrl: "https://example.com/avatar.png", number: 70001, repo: "avatar-host" },
-    {
-      avatarUrl: "https://avatars.githubusercontent.com/u/58493?v=4#fragment",
-      number: 70002,
-      repo: "avatar-fragment",
-    },
-    {
-      avatarUrl: "https://avatars.githubusercontent.com/u/../58493?v=4",
-      number: 70003,
-      repo: "avatar-dot-segment",
-    },
-    {
-      avatarUrl: "https://avatars.githubusercontent.com/u\\58493?v=4",
-      number: 70004,
-      repo: "avatar-backslash",
-    },
-  ])("does not fetch unsafe avatar URL $avatarUrl", async ({ avatarUrl, number, repo }) => {
+    ["https://example.com/avatar.png", 70001, "avatar-host"],
+    ["https://avatars.githubusercontent.com/u/58493?v=4#fragment", 70002, "avatar-fragment"],
+    ["https://avatars.githubusercontent.com/u/../58493?v=4", 70003, "avatar-dot-segment"],
+    ["https://avatars.githubusercontent.com/u\\58493?v=4", 70004, "avatar-backslash"],
+  ])("does not fetch unsafe avatar URL %s", async (avatarUrl, number, repo) => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       githubJson(
         previewPayload({

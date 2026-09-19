@@ -1,6 +1,7 @@
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
   createDeliveryState,
@@ -88,7 +89,7 @@ function includeStickerDescription(params: {
 }
 
 function resolveTelegramQuoteContext(params: {
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   replyToMode: DispatchTelegramMessageParams["replyToMode"];
 }) {
   const { context, replyToMode } = params;
@@ -163,7 +164,7 @@ function resolveTelegramQuoteContext(params: {
 
 async function prepareTelegramSticker(params: {
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
@@ -225,7 +226,7 @@ async function prepareTelegramSticker(params: {
 function scheduleDmTopicLabel(params: {
   bot: DispatchTelegramMessageParams["bot"];
   cfg: DispatchTelegramMessageParams["cfg"];
-  context: ReturnType<typeof resolveDispatchTelegramContext>;
+  context: TelegramMessageContext;
   isFirstTurnInSession: boolean;
   telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
 }) {
@@ -292,7 +293,7 @@ export const dispatchTelegramMessage = async (
     turnAdoptionLifecycle,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ context });
+  const dispatchContext = await resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
@@ -429,6 +430,7 @@ export const dispatchTelegramMessage = async (
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
+    turn.finalReplyOutcome !== "suppressed" &&
     !turn.sendPolicyDenied &&
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
@@ -450,6 +452,7 @@ export const dispatchTelegramMessage = async (
 
   if (
     !sentFallback &&
+    turn.finalReplyOutcome !== "suppressed" &&
     !turn.sendPolicyDenied &&
     !turn.dispatchError &&
     !deliverySummary.delivered &&
@@ -468,16 +471,19 @@ export const dispatchTelegramMessage = async (
   }
 
   const hasFinalResponse =
+    turn.finalReplyOutcome === "suppressed" ||
     turn.finalAnswerDelivered ||
     sentFallback ||
     turn.suppressSilentReplyFallback ||
     turn.queuedFinal;
   const hasVisibleResponse =
+    turn.finalReplyOutcome === "suppressed" ||
     deliverySummary.delivered ||
     sentFallback ||
     turn.suppressSilentReplyFallback ||
     turn.queuedFinal;
   const deliveryFailureWithoutFinalResponse =
+    turn.finalReplyOutcome !== "suppressed" &&
     !turn.finalAnswerDelivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =

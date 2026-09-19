@@ -31,6 +31,8 @@ import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import "./chat-pane.ts";
 import {
   createTestGatewayClient,
@@ -50,6 +52,10 @@ import { createBackgroundTasksProps } from "./components/chat-background-tasks.t
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import type {
+  ChatTaskSuggestionTrayProps,
+  TaskSuggestionStartMode,
+} from "./components/chat-task-suggestions.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
@@ -88,7 +94,11 @@ export type TestChatPane = HTMLElement & {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
+  acceptTaskSuggestion: (
+    suggestion: TaskSuggestion,
+    mode?: TaskSuggestionStartMode,
+  ) => Promise<void>;
+  dismissTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
@@ -98,6 +108,11 @@ export type TestChatPane = HTMLElement & {
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   githubRepo: MarkdownRenderOptions["githubRepo"];
   taskSuggestions: TaskSuggestion[];
+  suggestionChatProps: (
+    connected: boolean,
+    archived: boolean,
+    multiIdentity: boolean,
+  ) => ChatTaskSuggestionTrayProps;
   presencePayload?: { presence: unknown[] };
   sessionSuggestionAddOperation: symbol | undefined;
   sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
@@ -142,6 +157,9 @@ export type TestChatPane = HTMLElement & {
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;
+  resetOlderMessagesViewport: () => void;
+  requestReplyMessage: (messageId: string) => void;
+  readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
   catalogCursor: string | undefined;
@@ -167,9 +185,8 @@ export type TestChatPane = HTMLElement & {
   headerPlacementMovingKey: string | null;
   headerPlacementReclaimingKey: string | null;
   headerPlacementRestartingKey: string | null;
-  moveHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
+  changeHeaderPlacement: (row: GatewaySessionRow, mode: "move" | "recover") => Promise<void>;
   reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
-  restartHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
@@ -325,7 +342,17 @@ type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch
 export function createSessionCapabilityFixture(
   overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
-  return { deletionState: () => undefined, ...overrides } as typeof overrides & SessionCapability;
+  const archiveState = createSessionArchiveState(
+    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
+    () => {},
+    createSessionRowProvenance(),
+  );
+  return {
+    deletionState: () => undefined,
+    archiveVisibility: archiveState.visibility,
+    beginArchive: archiveState.beginPending,
+    ...overrides,
+  } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(

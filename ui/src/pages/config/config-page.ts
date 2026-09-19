@@ -12,7 +12,7 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -34,7 +34,6 @@ import type { TypefaceId } from "../../app/typography.ts";
 import {
   confirmAndStartUpdate,
   createUpdateProgressWatcher,
-  type UpdateProgress,
 } from "../../app/update-confirmation.ts";
 import { canReportUpdateFailure } from "../../app/update-failure-report-controller.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
@@ -52,7 +51,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -67,10 +65,11 @@ import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkCameraDevice,
   type RealtimeTalkInputDevice,
-} from "../chat/realtime-talk-input.ts";
-import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
+} from "../chat/talk/input.ts";
+import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
+import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -123,29 +122,6 @@ type ConfigPageSetting =
   | "catalogOpenTarget"
   | "composerHoldToRecord"
   | "openLinksInControlUiBrowser";
-
-// Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
-// Kept so pre-restructure bookmarks and generated links still land somewhere
-// sensible instead of silently opening the old page's default section.
-const MOVED_SECTION_ROUTES: Record<
-  string,
-  { routeId: RouteId; keepSection: boolean; search?: string; advanced?: boolean }
-> = {
-  "communications:__notifications__": { routeId: "notifications", keepSection: false },
-  "communications:channels": { routeId: "channels", keepSection: false },
-  "communications:broadcast": { routeId: "advanced", keepSection: true },
-  "communications:talk": { routeId: "talk", keepSection: true },
-  "appearance:wizard": { routeId: "advanced", keepSection: true },
-  "advanced:transcripts": { routeId: "communications", keepSection: true, advanced: true },
-  "automation:approvals": { routeId: "security", keepSection: true },
-  "automation:plugins": {
-    routeId: "plugin-settings",
-    keepSection: false,
-    search: "?tab=advanced",
-  },
-  "ai-agents:memory": { routeId: "memory", keepSection: true },
-  "ai-agents:models": { routeId: "model-providers", keepSection: false },
-};
 
 const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
@@ -217,7 +193,7 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
       execPolicy: "unknown",
       browserEnabled: true,
       browserEnabledOverridden: false,
-      toolProfile: "full",
+      toolProfile: "",
       toolProfileOverridden: false,
     };
   }
@@ -246,7 +222,7 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
     browserEnabled: browser?.enabled !== false,
     browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
-    toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",
+    toolProfile: typeof profile === "string" ? profile.trim() : "",
     toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
   };
 }
@@ -371,7 +347,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       [
         this.gateway.gateway,
         this.systemInfo ? this.systemInfoRequestClient() : null,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
       ] as const,
     task: async ([gateway, client, agentId], { signal }) => {
       if (!gateway || !client || !agentId) {
@@ -430,7 +406,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           : null;
       return [
         client,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
         hiddenCatalogIds.join("\0"),
       ] as const;
     },
@@ -443,7 +419,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           "sessions.catalog.list",
           {
             ...(agentId ? { agentId } : {}),
-            limitPerHost: 1,
+            metadataOnly: true,
           },
           { signal },
         );
@@ -454,7 +430,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       }
     },
   });
-  private pendingRouteTargetId: string | null = null;
+  private readonly routeTargetScroll = new ConfigRouteScrollController(this);
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.invalidateSystemInfoRequest(),
@@ -475,7 +451,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       (config, notify) => config.subscribe(notify),
     )
     .watch(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection, notify) => selection.subscribe(notify),
     )
     .watch(
@@ -568,7 +544,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncSystemInfoPolling();
     this.syncUpdateStatusRefresh();
     this.syncUpdateCountdownPolling();
-    this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants media permission; each
     // picker requests its permission explicitly when opened.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
@@ -632,47 +607,13 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private syncRouteData() {
-    // Pre-restructure deep links: sections that moved to their own page must
-    // redirect before normalization discards them from the old page's list.
-    const rawSection = this.routeData
-      ? this.routeData.section
-      : new URLSearchParams(globalThis.location?.search ?? "").get("section");
-    if (rawSection) {
-      const movedRoute = MOVED_SECTION_ROUTES[`${this.pageId}:${rawSection}`];
-      if (movedRoute) {
-        this.context?.navigate(movedRoute.routeId, {
-          search:
-            movedRoute.search ??
-            (movedRoute.keepSection
-              ? `?section=${encodeURIComponent(rawSection)}${movedRoute.advanced ? "&advanced=1" : ""}`
-              : ""),
-          hash: this.routeData?.hash ?? globalThis.location?.hash ?? "",
-        });
-        return;
-      }
-    }
     const selection = this.routeData
       ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
     this.selections = { ...this.selections, [this.pageId]: selection };
     const targetBlockId =
       this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
-    this.pendingRouteTargetId = targetBlockId;
-  }
-
-  private scrollToPendingRouteTarget() {
-    const targetId = this.pendingRouteTargetId;
-    if (!targetId) {
-      return;
-    }
-    const target = [...this.renderRoot.querySelectorAll<HTMLElement>("[id]")].find(
-      (element) => element.id === targetId,
-    );
-    if (!target) {
-      return;
-    }
-    target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
-    this.pendingRouteTargetId = null;
+    this.routeTargetScroll.setTarget(targetBlockId);
   }
 
   private isSystemInfoVisible(): boolean {
@@ -856,17 +797,16 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
+    const appearance = isAppearancePref(key);
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
       key,
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      isAppearancePref(key)
-        ? {
-            canSync: this.serverUiPrefsCanSync(key),
-            profileId: this.context.gateway.snapshot?.selfUser?.id,
-          }
-        : { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync(appearance ? key : undefined),
+        profileId: appearance ? this.context.gateway.snapshot?.selfUser?.id : undefined,
+      },
     );
   }
 
@@ -913,6 +853,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       key,
       this.currentSyncedPref(key),
       this.context.gateway.connection.gatewayUrl,
+      this.context.gateway.snapshot?.selfUser?.id,
     );
     this.context.theme.refresh();
   }
@@ -1017,15 +958,8 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private isUpdateBusy(): boolean {
     const update = this.context.overlays.snapshot;
-    return (
-      update.updateRunning || update.updateStatusRefreshing || update.updateReconciliationPending
-    );
+    return update.updateRunning || update.updateReconciliationPending;
   }
-
-  // The update dialog outlives this page and the connection, so it reads live
-  // snapshots rather than the values captured during a render.
-  private readonly watchUpdateProgress = (listener: (progress: UpdateProgress) => void) =>
-    createUpdateProgressWatcher(this.context)(listener);
 
   private isCuratedConfigMutationDisabled(): boolean {
     const runtimeState = this.context.runtimeConfig.state;
@@ -1035,6 +969,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       runtimeState.configSaving ||
       runtimeState.configApplying ||
       this.isUpdateBusy() ||
+      this.context.overlays.snapshot.updateStatusRefreshing ||
       !this.context.runtimeConfig.canSet ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null)
     );
@@ -1048,6 +983,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       const overlaySnapshot = this.context.overlays.snapshot;
       const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
       return renderUpdates({
+        update: overlaySnapshot,
         nativeDeviceSettings: this.context.nativeDeviceSettings,
         configObject,
         gatewayVersion:
@@ -1057,14 +993,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         controlUiCommit: CONTROL_UI_BUILD_INFO.commit,
         controlUiCommitAt: CONTROL_UI_BUILD_INFO.commitAt,
         controlUiBuiltAt: CONTROL_UI_BUILD_INFO.builtAt,
-        schedule: overlaySnapshot.updateSchedule,
-        heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-        updateAvailable: overlaySnapshot.updateAvailable,
-        statusBanner: overlaySnapshot.updateStatusBanner,
-        reportableUpdateFailureId: overlaySnapshot.reportableUpdateFailureId,
-        updateFailureReportBusy: overlaySnapshot.updateFailureReportBusy,
-        updateFailureReportNotice: overlaySnapshot.updateFailureReportNotice,
-        run: overlaySnapshot.updateRun,
         connected: gatewaySnapshot.phase === "connected",
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
@@ -1081,7 +1009,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         onUpdateNow: () =>
           void confirmAndStartUpdate({
             startGatewayUpdate: () => void this.context.overlays.runUpdate(),
-            watchUpdateProgress: this.watchUpdateProgress,
+            // The dialog outlives this page, so read live snapshots after each change.
+            watchUpdateProgress: createUpdateProgressWatcher(this.context),
             onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
             onAcknowledge: () => this.context.overlays.acknowledgeUpdateRun(),
             updateAvailable: overlaySnapshot.updateAvailable,
@@ -1121,6 +1050,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       configState.configSaving ||
       configState.configApplying ||
       this.isUpdateBusy() ||
+      this.context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
     const props: ConfigProps = {
       raw: configState.configRaw,
@@ -1130,7 +1060,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       loading: configState.configLoading,
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: this.isUpdateBusy(),
+      updating: this.isUpdateBusy() || this.context.overlays.snapshot.updateStatusRefreshing,
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
@@ -1433,10 +1363,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           runtimeConfig.patchForm(["browser", "enabled"], false);
         },
         onToolProfileChange: (profile) => {
-          if (profile === "full") {
-            runtimeConfig.removeFormValue(["tools", "profile"]);
-            return;
-          }
           runtimeConfig.patchForm(["tools", "profile"], profile);
         },
         editor: renderConfig({ ...props, embeddedEditor: true }),

@@ -79,7 +79,7 @@ describe("ModelProvidersPage usage convergence", () => {
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await vi.waitFor(() => expect(page.textContent).toContain("10% left"));
   });
 
@@ -101,6 +101,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       client: harness.context.gateway.snapshot.client,
       agentId: "main",
       data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: Date.now() },
@@ -161,7 +162,7 @@ describe("ModelProvidersPage usage convergence", () => {
     const callsBeforeManual = harness.request.mock.calls.filter(
       ([method]) => method === "usage.status",
     ).length;
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await page.updateComplete;
     await advanceUsageRetries();
     expect(
@@ -184,7 +185,7 @@ describe("ModelProvidersPage usage convergence", () => {
     // Treating it as complete would reset the budget and erase the notice,
     // leaving broken usage looking exactly like absent usage.
     harness.failUsageStatus();
-    page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await page.updateComplete;
     await advanceUsageRetries();
     await page.updateComplete;
@@ -234,6 +235,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       data: EMPTY_MODEL_PROVIDERS_DATA,
       client: null,
       agentId: "main",

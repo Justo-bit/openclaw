@@ -80,6 +80,18 @@ describe("registerNodeCli", () => {
     expect(action.mock.calls[0]?.[0]?.json).toBe(true);
   });
 
+  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
+    "forwards an exact node runtime pin: %s",
+    async (pin) => {
+      await createProgram().parseAsync(["node", "install", "--runtime-path", pin, "--force"], {
+        from: "user",
+      });
+      expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimePath: pin, force: true }),
+      );
+    },
+  );
+
   it("forwards node install options to the daemon adapter", async () => {
     const program = createProgram();
 
@@ -201,6 +213,20 @@ describe("registerNodeCli", () => {
     const nodeCommand = program.commands.find((command) => command.name() === "node");
     const runCommand = nodeCommand?.commands.find((command) => command.name() === "run");
     expect(runCommand?.helpInformation()).not.toContain("--ephemeral");
+
+    daemonMocks.runNodeHost.mockClear();
+    await createProgram().parseAsync(["node", "run"], { from: "user" });
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+  });
+
+  it("hosts worker sessions for this foreground process with --session-host", async () => {
+    await createProgram().parseAsync(["node", "run", "--session-host"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true }),
+    );
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("ephemeral");
+    expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
 
     daemonMocks.runNodeHost.mockClear();
     await createProgram().parseAsync(["node", "run"], { from: "user" });

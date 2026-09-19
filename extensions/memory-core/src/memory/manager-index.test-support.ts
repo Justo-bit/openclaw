@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -52,6 +53,7 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  beforeEmbedBatch: (() => Promise<void>) | null;
   beforeEmbedQuery: ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null;
   embedQueryCalls: number;
   embeddedQueryTexts: string[];
@@ -115,6 +117,7 @@ export type ManagerIndexFixture = {
 };
 
 const providerState = vi.hoisted(() => ({
+  beforeEmbedBatch: null as ProviderControls["beforeEmbedBatch"],
   beforeEmbedQuery: null as ProviderControls["beforeEmbedQuery"],
   embedQueryCalls: 0,
   embeddedQueryTexts: [] as string[],
@@ -270,6 +273,7 @@ vi.mock("./embeddings.js", async (importOriginal) => {
             return embedText(text);
           },
           embedBatch: async (inputs: EmbeddingInput[]) => {
+            await providerState.beforeEmbedBatch?.();
             if (providerId === "gemini" || providerId === "fallback-provider") {
               const structuredInputs = inputs.filter(
                 (input): input is Exclude<EmbeddingInput, string> =>
@@ -530,6 +534,7 @@ export function createManagerIndexFixture(deps: {
     vi.useRealTimers();
     clearRegistry();
     providerState.beforeEmbedQuery = null;
+    providerState.beforeEmbedBatch = null;
     providerState.embedQueryCalls = 0;
     providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
@@ -592,5 +597,29 @@ export function createManagerIndexFixture(deps: {
     getFreshManager,
     getFtsSessionManager,
     seedSessionTranscript,
+  };
+}
+
+export function readPublishedSessionIndex(
+  database: DatabaseSync,
+  sessionPath: string,
+  query: string,
+) {
+  return {
+    source: database
+      .prepare(
+        "SELECT path, hash, mtime, size FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
+      )
+      .get(sessionPath),
+    chunks: database
+      .prepare(
+        "SELECT id, hash, text, embedding, updated_at FROM memory_index_chunks WHERE path = ? AND source = 'sessions' ORDER BY id",
+      )
+      .all(sessionPath),
+    search: database
+      .prepare(
+        "SELECT text, id, path, model, start_line, end_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ? ORDER BY id",
+      )
+      .all(query, sessionPath),
   };
 }

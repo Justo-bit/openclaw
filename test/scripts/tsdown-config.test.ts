@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -50,6 +51,11 @@ const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
   hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
 const isWorkerBuildConfig = (config: TsdownConfig) =>
   isWorkerDeployConfig(config) ||
+  hasWorkerEntry(
+    config,
+    "worker/image-processor.worker",
+    "src/worker/worker-deploy-image-processor.ts",
+  ) ||
   isWorkerRsyncReceiverConfig(config) ||
   isWorkerGitHubExecLauncherConfig(config);
 
@@ -95,6 +101,25 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("emits every private Telegram QA harness entry only in private QA builds", async () => {
+    const expectedEntries = {
+      "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
+      "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+      "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+    };
+    const defaultUnified = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(defaultUnified?.entry).not.toMatchObject(expectedEntries);
+
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    const { default: privateQaBuildConfigs } = await importFreshModule<
+      typeof import("../../tsdown.config.ts")
+    >(import.meta.url, "../../tsdown.config.ts?private-qa-entries");
+    const privateQaUnified = privateQaBuildConfigs.find(
+      (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+    );
+    expect(privateQaUnified?.entry).toMatchObject(expectedEntries);
+  });
+
   it.each([
     "extensions/openai/setup-api",
     "extensions/openai/capability-catalog",
@@ -300,6 +325,54 @@ describe("tsdown config", () => {
       }
     },
   );
+
+  it("routes HTML-only mail and advances the cursor through packaged imap-watch", async () => {
+    const entryName = "extensions/imap/index";
+    const selected = configs.find((config) =>
+      hasWorkerEntry(config, entryName, "extensions/imap/index.ts"),
+    );
+    if (!selected) {
+      throw new Error("Missing IMAP build config");
+    }
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-imap-"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: {
+        [entryName]: "extensions/imap/index.ts",
+        "plugin-sdk/plugin-state-store-runtime": "src/plugin-sdk/plugin-state-store-runtime.ts",
+      },
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)),
+              root,
+            ],
+            {
+              cwd: root,
+              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+              timeout: 30_000,
+            },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr || result.stdout).toBeNull();
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
 
   it("keeps writable database and session lifecycle outside the archive worker bootstrap", async () => {
     const workerEntry = "config/sessions/session-accessor.sqlite-archive.worker";
@@ -618,8 +691,8 @@ describe("tsdown config", () => {
             ...["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"].map((key) =>
               probe(key, "require", "native", { [key]: "require" }),
             ),
-            probe("shared-config", "configured", "native"),
-            probe("default", "off", "fallback"),
+            probe("shared-config", "configured", "native", { FS_SAFE_NATIVE_MODE: "off" }),
+            probe("default", "auto", "native"),
           ]);
           for (const nativePackage of nativePackages) {
             fs.rmSync(path.join(relocatedRoot, path.relative(sourceRoot, nativePackage.root)), {
@@ -806,16 +879,15 @@ describe("tsdown config", () => {
       )
       .flatMap((entry) => Object.entries(entry.entry ?? {}));
     const runtimeEntryNames = runtimeEntries.map(([name]) => name);
-    expect(runtimeEntryNames).toContain("native-hook-relay/entry");
-    const declarationEntryNames = runtimeEntryNames.filter(
-      (name) => name !== "native-hook-relay/entry",
+    const runtimeOnlyEntryNames = ["native-hook-relay/entry", "node-host-launcher-bootstrap"];
+    expect(runtimeEntryNames).toEqual(expect.arrayContaining(runtimeOnlyEntryNames));
+    const declarationEntries = runtimeEntries.filter(
+      ([name]) => !runtimeOnlyEntryNames.includes(name),
     );
+    const declarationEntryNames = declarationEntries.map(([name]) => name);
     const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
     const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
-    const declarationInputs = Object.fromEntries([
-      ...runtimeEntries.filter(([name]) => name !== "native-hook-relay/entry"),
-      ...standaloneEntries,
-    ]);
+    const declarationInputs = Object.fromEntries([...declarationEntries, ...standaloneEntries]);
     for (const declarationConfig of unifiedDeclarationConfigs) {
       expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
       // Runtime and inventory graphs retain every alias in the declaration input map.

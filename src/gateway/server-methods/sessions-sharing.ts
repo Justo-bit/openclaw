@@ -26,6 +26,7 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { listSessionMembersInWorker } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -192,6 +193,7 @@ function requireCurrentManagedTarget(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   client: GatewayClient | null;
   authorized: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
+  operation?: "read" | "mutation";
 }): NonNullable<ReturnType<typeof resolveSessionSharingTarget>> {
   const current = resolveSessionSharingTarget({
     cfg: params.cfg,
@@ -206,7 +208,7 @@ function requireCurrentManagedTarget(params: {
     current.storePath !== params.authorized.storePath ||
     current.entry.sessionId !== params.authorized.entry.sessionId
   ) {
-    throw new Error("session changed before sharing mutation");
+    throw new Error(`session changed before sharing ${params.operation ?? "mutation"}`);
   }
   const role = resolveSessionSharingRole({
     client: params.client,
@@ -214,7 +216,7 @@ function requireCurrentManagedTarget(params: {
     target: current,
   });
   if (!canManageSessionSharing(role)) {
-    throw new Error("session ownership changed before sharing mutation");
+    throw new Error(`session ownership changed before sharing ${params.operation ?? "mutation"}`);
   }
   return current;
 }
@@ -222,6 +224,7 @@ function requireCurrentManagedTarget(params: {
 function knownSessionIdentities(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   actor: SharingActorFacts;
+  profiles: Awaited<ReturnType<typeof listProfiles>>;
 }): SessionSharingIdentity[] {
   const identities = new Map<string, SessionSharingIdentity>();
   const remember = (identity: SessionCreatedActor | null) => {
@@ -242,7 +245,7 @@ function knownSessionIdentities(params: {
   for (const entry of Object.values(store)) {
     remember(entry.createdActor ?? null);
   }
-  for (const profile of listProfiles()) {
+  for (const profile of params.profiles) {
     remember({
       type: "human",
       id: profile.id,
@@ -302,13 +305,22 @@ function createSessionMembersListHandler(
     if (!managed) {
       return;
     }
-    const target = managed.target;
+    const profiles = await listProfiles();
+    const evidenceMembers = (
+      await listSessionMembersInWorker({
+        agentId: managed.target.agentId,
+        sessionKey: managed.target.storeKey,
+        storePath: managed.target.storePath,
+      })
+    ).map(projectSessionMemberEvidence);
+    const currentCfg = context.getRuntimeConfig();
+    const target = requireCurrentManagedTarget({
+      cfg: currentCfg,
+      client,
+      authorized: managed.target,
+      operation: "read",
+    });
     const actor = actorIdentity(client);
-    const evidenceMembers = listSessionMembers({
-      agentId: target.agentId,
-      sessionKey: target.storeKey,
-      storePath: target.storePath,
-    }).map(projectSessionMemberEvidence);
     const members = evidenceAware
       ? evidenceMembers
       : evidenceMembers.map(projectLegacySessionMember);
@@ -330,7 +342,7 @@ function createSessionMembersListHandler(
       return;
     }
     const projectedMembers = members.filter((member) => member !== null);
-    const identities = knownSessionIdentities({ cfg, actor });
+    const identities = knownSessionIdentities({ cfg: currentCfg, actor, profiles });
     for (const member of projectedMembers) {
       if (!identities.some((identity) => identity.id === member.identityId)) {
         identities.push({ type: "human", id: member.identityId });
@@ -365,8 +377,8 @@ function createSessionMembersListHandler(
         ...(owner ? { owner: { ...owner } } : {}),
         members: projectedMembers,
         identities,
-        role: managed.role,
-        allowedVisibilities: allowedSessionVisibilities(cfg),
+        role: resolveSessionSharingRole({ cfg: currentCfg, client, target }),
+        allowedVisibilities: allowedSessionVisibilities(currentCfg),
       },
       undefined,
     );
@@ -606,17 +618,25 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     if (!managed) {
       return;
     }
+    const profiles = await listProfiles();
+    const currentCfg = context.getRuntimeConfig();
+    requireCurrentManagedTarget({ cfg: currentCfg, client, authorized: managed.target });
     const actor = actorIdentity(client);
     const known = knownSessionIdentities({
-      cfg,
+      cfg: currentCfg,
       actor,
+      profiles,
     });
     if (!known.some((identity) => identity.id === params.identityId)) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
       return;
     }
     await runExclusiveSharingMutation(managed.target, async () => {
-      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
+      const current = requireCurrentManagedTarget({
+        cfg: context.getRuntimeConfig(),
+        client,
+        authorized: managed.target,
+      });
       const scope = {
         agentId: current.agentId,
         sessionKey: current.storeKey,

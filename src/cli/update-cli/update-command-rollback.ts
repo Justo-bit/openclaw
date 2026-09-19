@@ -26,7 +26,6 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   readUpdateConfigSnapshot,
@@ -182,7 +181,7 @@ export async function rollbackFailedUpdate(params: {
       const supported = params.previousSchemaVersions?.[kind];
       if (supported === undefined || version > supported) {
         throw new Error(
-          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
+          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the update installed.`,
         );
       }
     }
@@ -263,32 +262,19 @@ export async function rollbackFailedUpdate(params: {
       stopped.serviceMutationAllowed === false ||
       (stopped.running && !stopped.stopped)
     ) {
-      throw new Error(stopped.blockMessage ?? "Candidate service could not be stopped safely.");
+      throw new Error(stopped.blockMessage ?? "Update service could not be stopped safely.");
     }
     return stopped;
-  };
-  const stopIfUnreachable = async () => {
-    assertCurrent();
-    if (port !== undefined) {
-      const { reachable } = await confirmGatewayReachable({ port, env });
-      assertCurrent();
-      if (!reachable) {
-        await stop();
-      }
-    }
   };
   try {
     assertCurrent();
     if (params.rollbackBlockedReason) {
-      await stopIfUnreachable();
       return failed(params.rollbackBlockedReason);
     }
     if (!params.schemaVersions) {
-      await stopIfUnreachable();
       return failed("rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
-      await stopIfUnreachable();
       return failed("state-migrated-no-rollback");
     }
     await packageTransaction?.assertRollbackSafe?.();
@@ -435,6 +421,7 @@ export async function rollbackFailedUpdate(params: {
       serviceRestartSafe: true,
       packageRollbackVerified: true,
       version: result.before.version,
+      reason: "gateway-verification-incomplete",
       ...(result.before.buildId ? { buildId: result.before.buildId } : {}),
     };
     assertCurrent();
@@ -450,6 +437,7 @@ export async function rollbackFailedUpdate(params: {
       );
     }
     failureReason = "restart-unhealthy";
+    let verificationFailure: string | undefined;
     let verifiedAtMs: number | undefined;
     const restartOutcome = await maybeRestartService({
       shouldRestart: true,
@@ -470,20 +458,40 @@ export async function rollbackFailedUpdate(params: {
       onVerified: (at) => {
         verifiedAtMs = at;
       },
+      onVerificationFailure: (reason) => {
+        verificationFailure = reason;
+      },
     });
     assertCurrent();
     const healthy = restartOutcome === "ok";
     return {
       result: {
         ...result,
-        recovery: healthy ? { ...result.recovery, service: "healthy" } : result.recovery,
+        recovery: {
+          ...result.recovery,
+          service: healthy
+            ? "healthy"
+            : restartOutcome === "readiness-pending" || verificationFailure === "timeout"
+              ? undefined
+              : verificationFailure || restartOutcome === "restart-health-failed"
+                ? "failed"
+                : undefined,
+          reason: healthy
+            ? undefined
+            : (verificationFailure ??
+              (restartOutcome === "readiness-pending"
+                ? "gateway-readiness-pending"
+                : restartOutcome === "failed"
+                  ? "restart-failed"
+                  : "restart-unhealthy")),
+        },
       },
       rolledBack: healthy,
       stoppedForRollback,
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
     };
   } catch (error) {
-    let detail = formatErrorMessage(error);
+    const detail = formatErrorMessage(error);
     try {
       assertCurrent();
     } catch (cause) {
@@ -500,19 +508,6 @@ export async function rollbackFailedUpdate(params: {
     }
     if (error instanceof NativePackageRollbackError) {
       failureReason = error.reason;
-    }
-    if (
-      failureReason === "rollback-state-unverified" ||
-      failureReason === "state-migrated-no-rollback" ||
-      error instanceof NativePackageRollbackError
-    ) {
-      const reason = failureReason;
-      try {
-        await stopIfUnreachable();
-        failureReason = reason;
-      } catch (stopError) {
-        detail += `; ${formatErrorMessage(stopError)}`;
-      }
     }
     assertCurrent();
     if (opts.run) {

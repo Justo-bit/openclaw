@@ -272,7 +272,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           pinned: session.pinned,
           pinnable: session.pinnable,
           unread: batchRows ? allUnread : session.unread,
+          hiddenFromInvolvingMe: session.hiddenFromInvolvingMe,
           archived: allArchived,
+          archiving: rows.some((row) => context?.sessions.archiveVisibility(row.key) === "pending"),
           category: batchRows ? sharedCategory : (session.category ?? null),
           icon: batchRows ? null : (session.icon ?? null),
           color: batchRows ? null : (session.color ?? null),
@@ -342,6 +344,12 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+              break;
+            case "toggle-involving-me":
+              void host.sessionOrganizer.setSessionInvolvement(
+                session,
+                !session.hiddenFromInvolvingMe,
+              );
               break;
             case "toggle-unread":
               void host.sessionOrganizer.patchSession(session, { unread: !session.unread });
@@ -505,7 +513,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     showPreview: host.sessionsShowPreview,
     showSystem: host.sessionsShowSystem,
-    hideEmptyGroups: host.sessionsHideEmptyGroups,
+    emptyGroupsMode: host.sessionsEmptyGroupsMode,
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
@@ -541,8 +549,11 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
-    onHideEmptyGroupsChange: (hide) => {
-      host.sessionOrganizer.setSessionsHideEmptyGroups(hide);
+    onEmptyGroupsModeChange: (mode) => {
+      if (controller.sessionSortMenuPosition !== position) {
+        return;
+      }
+      host.setSessionsEmptyGroupsMode(mode);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOpenSessionSources: () => {

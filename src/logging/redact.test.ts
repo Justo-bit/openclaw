@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 import {
@@ -87,6 +87,13 @@ describe("bounded replacement output", () => {
   });
 });
 
+describe("large benign text", () => {
+  it("preserves ordinary assignments at a replacement chunk boundary", () => {
+    const text = `${" ".repeat(16_381)}compass=visible${" ".repeat(16_384)}`;
+    expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
+  });
+});
+
 describe("default redact pattern ownership", () => {
   it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
     expect(defaults).toEqual(DEFAULT_REDACT_STRING_PATTERNS);
@@ -94,6 +101,45 @@ describe("default redact pattern ownership", () => {
 });
 
 describe("registered exact secret values", () => {
+  it("shares registrations and matcher invalidation across module instances", async () => {
+    const first = await import("./secret-redaction-registry.js");
+    const firstSecret = "alpha-module-secret";
+    const secondSecret = "zulu-module-secret";
+    const text = `${firstSecret} ${secondSecret}`;
+    const mask = () => "[redacted]";
+    first.registerSecretValueForRedaction(firstSecret);
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe(`[redacted] ${secondSecret}`);
+
+    // Re-evaluation models a second registry copy imported by bundled code.
+    vi.resetModules();
+    const second = await import("./secret-redaction-registry.js");
+    expect(second.redactRegisteredSecretValues(text, mask)).toBe(`[redacted] ${secondSecret}`);
+    expect(second.captureSecretRedactionRegistrySnapshot()).toEqual(
+      first.captureSecretRedactionRegistrySnapshot(),
+    );
+
+    const revision = first.getSecretRedactionRegistryRevision();
+    second.registerSecretValueForRedaction(secondSecret);
+    expect(first.redactRegisteredSecretValues(secondSecret, mask)).toBe("[redacted]");
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe("[redacted] [redacted]");
+    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(revision);
+    expect(second.getSecretRedactionRegistryRevision()).toBe(
+      first.getSecretRedactionRegistryRevision(),
+    );
+    const captured = createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot());
+    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
+    const updatedRevision = first.getSecretRedactionRegistryRevision();
+    second.registerSecretValueForRedaction(secondSecret);
+    expect(first.getSecretRedactionRegistryRevision()).toBe(updatedRevision);
+
+    resetSecretRedactionRegistryForTest();
+    expect(first.redactRegisteredSecretValues(text, mask)).toBe(text);
+    expect(second.redactRegisteredSecretValues(text, mask)).toBe(text);
+    expect(first.getSecretRedactionRegistryRevision()).toBeGreaterThan(updatedRevision);
+    expect(captured(text)).toBe("alpha-…cret zulu-m…cret");
+    expect(createSensitiveTextRedactor(captureSensitiveTextRedactionSnapshot())(text)).toBe(text);
+  });
+
   it("masks registered values in text and nested structured data", () => {
     const secret = "registered-exact-secret";
     registerSecretValueForRedaction(secret);
@@ -1604,20 +1650,17 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
-  it("redactSensitiveText keeps single-capture custom patterns focused on the captured occurrence", () => {
+  it.each([
+    ["a backreference", String.raw`project_value=([^&]+)&confirm=\1`],
+    ["repeated text", String.raw`project_value=([^&]+)&confirm=[^&]+`],
+    ["an unmatched group", String.raw`(unused)?project_value=([^&]+)&confirm=\2`],
+    ["an empty last group", String.raw`project_value=([^&]+)()&confirm=\1`],
+    ["a named backreference", String.raw`project_value=(?<secret>[^&]+)&confirm=\k<secret>`],
+  ])("redactSensitiveText locates the custom capture with %s", (_name, pattern) => {
     const input = "project_value=abc123456789012345&confirm=abc123456789012345";
     const output = redactSensitiveText(input, {
       mode: "tools",
-      patterns: [String.raw`project_value=([^&]+)&confirm=\1`],
-    });
-    expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
-  });
-
-  it("redactSensitiveText masks captured custom-pattern values even when the value repeats later", () => {
-    const input = "project_value=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [String.raw`project_value=([^&]+)&confirm=[^&]+`],
+      patterns: [pattern],
     });
     expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });

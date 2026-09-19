@@ -8,6 +8,7 @@ import {
   createCodeModeTools,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
@@ -21,7 +22,6 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../tool-search.js";
 import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
@@ -36,23 +36,9 @@ const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 ];
 const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME];
 
-export type AgentHarnessToolSurfaceRuntime = {
-  codeModeControlsEnabled: boolean;
-  compactTools: (
-    tools: AnyAgentTool[],
-    options?: { hookContext?: HookContext; localModelLeanApplied?: boolean },
-  ) => {
-    tools: AnyAgentTool[];
-    promptToolPolicy: ReturnType<typeof createAgentHarnessPromptToolPolicy<AnyAgentTool>>;
-  };
-  config: OpenClawConfig | undefined;
-  includeToolSearchControls: boolean;
-  runtimeToolAllowlist: string[] | undefined;
-  toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
-  toolSearchControlsEnabled: boolean;
-  cleanup: () => void;
-  toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-};
+export type AgentHarnessToolSurfaceRuntime = ReturnType<
+  typeof createAgentHarnessToolSurfaceRuntimeCore
+>;
 
 export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   abortSignal?: AbortSignal;
@@ -68,6 +54,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   modelId?: string;
   modelProvider?: string;
   codeModeOverride?: boolean | "auto";
+  disableToolSearch?: true;
   modelToolsEnabled: boolean;
   prompt?: string;
   runId?: string;
@@ -77,7 +64,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
-}): AgentHarnessToolSurfaceRuntime {
+}) {
   const forceDirectMessageTool = messageToolOwnsVisibleReply(params);
   const {
     codeModeControlsEnabled,
@@ -93,6 +80,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     codeModeOverride: params.codeModeOverride,
+    disableToolSearch: params.disableToolSearch,
     toolsEnabled: params.modelToolsEnabled,
     disableTools: params.disableTools,
     isRawModelRun: params.isRawModelRun === true,
@@ -100,18 +88,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   });
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
-  const runtimeToolAllowlist =
-    (toolSearchControlsEnabled || codeModeControlsEnabled) && params.runtimeToolAllowlist
-      ? [
-          ...new Set([
-            ...params.runtimeToolAllowlist,
-            ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES : []),
-            ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
-          ]),
-        ]
-      : params.runtimeToolAllowlist
-        ? [...params.runtimeToolAllowlist]
-        : undefined;
+  const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
+    forceToolNames: [
+      ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES : []),
+      ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
+    ],
+  });
   const toolSearchCatalogExecutor =
     toolSearchControlsEnabled || codeModeControlsEnabled ? params.executeTool : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

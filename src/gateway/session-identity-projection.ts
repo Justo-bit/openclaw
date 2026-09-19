@@ -9,11 +9,15 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { SessionEntry } from "../config/sessions.js";
 import {
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionProfileInvolvement } from "../config/sessions/session-involvement.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionProfileInvolvement,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
@@ -64,6 +68,21 @@ export function projectSessionParticipant(
     ...(profile?.label ? { label: profile.label } : {}),
     ...(profile?.hasUploadedAvatar ? { avatarUrl: profile.avatarUrl } : {}),
   };
+}
+
+/** Resolve merged profiles without rewriting personal choices in other agent stores. */
+export function projectSessionProfileInvolvement(
+  entry: SessionEntry,
+  profileId: string,
+  profiles: Map<string, SessionActorProfileIdentity | undefined>,
+): SessionProfileInvolvement | undefined {
+  return mergeSessionProfileInvolvement(
+    Object.entries(entry.profileInvolvement?.profiles ?? {}).flatMap(([id, state]) =>
+      projectSessionParticipant({ type: "profile", id }, profiles).identity.id === profileId
+        ? [state]
+        : [],
+    ),
+  );
 }
 
 export function projectSessionActor(
@@ -162,21 +181,10 @@ export function projectSessionParticipants(
 export function projectSessionPeople(
   entry: SessionEntry,
   identities: Map<string, SessionActorProfileIdentity | undefined>,
-  cfg: OpenClawConfig,
   owner?: SessionOwnerFacetIdentity,
 ): SessionPerson[] {
-  const participants = projectSessionParticipants(entry, identities, cfg);
-  const actors = [
-    owner,
-    projectSessionActor(
-      entry.createdActor,
-      identities,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry.createdActor)),
-    ),
-  ];
   const people = new Map<string, SessionPerson>();
-  for (const participant of [...participants.values(), ...actors]) {
+  const addPerson = (participant: SessionParticipant | SessionOwnerFacetIdentity | undefined) => {
     const identity = participant?.identity;
     if (identity?.type === "profile") {
       people.set(identity.id, {
@@ -186,6 +194,16 @@ export function projectSessionPeople(
         sessionCount: 1,
       });
     }
+  };
+  for (const { identity } of entry.participants ?? []) {
+    if (identity.type === "profile") {
+      addPerson(projectSessionParticipant(identity, identities));
+    }
+  }
+  addPerson(owner);
+  const creatorId = normalizeOptionalString(sessionCreatorProfileId(entry.createdActor));
+  if (creatorId) {
+    addPerson(projectSessionParticipant({ type: "profile", id: creatorId }, identities));
   }
   return [...people.values()];
 }

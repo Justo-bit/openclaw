@@ -11,27 +11,6 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-// The test runner relocates worker declarations; the production factory needs source metadata.
-vi.mock(
-  "../../src/infra/update-managed-service-handoff-runtime-assets.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
-      >();
-    return {
-      ...actual,
-      managedHandoffRuntimeEntrypoint: {
-        ...actual.managedHandoffRuntimeEntrypoint,
-        currentModuleUrl: new URL(
-          "../../src/infra/update-managed-service-handoff-runtime-assets.ts",
-          import.meta.url,
-        ).href,
-      },
-    };
-  },
-);
-
 vi.mock("../../src/infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: vi.fn(),
 }));
@@ -51,6 +30,13 @@ it("loads the staged production handoff runtime without neighboring SQL or JSON 
   // Use the production graph unchanged, not the invocation compiler's extra plugins.
   const { bundles } = await build({ ...config, config: false, outDir, logLevel: "silent" });
   try {
+    const modules = bundles.flatMap(({ chunks }) =>
+      chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.moduleIds : [])),
+    );
+    expect(modules).toContain(
+      path.resolve("src/infra/update-managed-service-handoff-native-loader.ts"),
+    );
+    expect(modules).not.toContain(path.resolve("src/shared/freebsd-process-identity-native.ts"));
     vi.mocked(resolveRuntimeWorkerUrl).mockReturnValue(
       pathToFileURL(path.join(outDir, MANAGED_HANDOFF_RUNTIME_ENTRY)),
     );

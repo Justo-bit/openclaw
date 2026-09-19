@@ -8,7 +8,7 @@ import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
+import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
@@ -412,6 +412,18 @@ describe("DraftPlaceBrowser", () => {
 });
 
 describe("DraftGatewayState", () => {
+  it("does not start preference reads after the draft disconnects during module loading", async () => {
+    const request = vi.fn(async () => ({ status: "ok", entries: {} }));
+    const fixture = createBrowser(request);
+    fixture.context.gateway.snapshot.selfUser = { id: "profile-one" };
+    fixture.hello.features.methods.push("users.prefs.get", "users.prefs.set");
+    fixture.gateway.synchronize(fixture.context.gateway);
+    expect(fixture.gateway.preferenceLoading).toBe(true);
+    fixture.gateway.disconnect();
+    await vi.dynamicImportSettled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it.each(["disconnect", "credential", "gateway"])(
     "rejects late place catalogs synchronously after %s invalidation",
     async (change) => {
@@ -583,8 +595,8 @@ describe("DraftGatewayState", () => {
     },
   );
 
-  it("keeps group route defaults isolated from ordinary New Session preferences", () => {
-    patchNewSessionPreference("ws://gateway.example", "main", {
+  it("keeps group route defaults isolated from ordinary New Session preferences", async () => {
+    replaceBrowserPreference("ws://gateway.example", "main", {
       folder: "/workspace/ordinary",
       worktree: true,
     });
@@ -604,13 +616,14 @@ describe("DraftGatewayState", () => {
     });
 
     expect(gateway.readPreference("main")).toBeNull();
-    gateway.persistPreference("main", "/workspace", {
+    await gateway.persistPreference("main", "/workspace", {
       folder: "/workspace/client",
       worktree: false,
     });
     expect(loadNewSessionPreference("ws://gateway.example", "main")).toEqual({
       folder: "/workspace/ordinary",
       worktree: true,
+      freshWorkspace: false,
     });
   });
 });

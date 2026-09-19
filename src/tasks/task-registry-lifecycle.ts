@@ -1,6 +1,6 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
@@ -13,11 +13,12 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
+import { scheduleYieldedSubagentTaskProgress } from "./task-registry-progress.js";
 import {
   withTaskRegistryMutation,
   claimTaskRegistryListenerStart,
   getTasksByRunScope,
-  restoreTaskRegistryOnce,
+  ensureTaskRegistryReady,
   setTaskRegistryListenerStarter,
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
@@ -27,35 +28,41 @@ import { getTaskRunOwner } from "./task-run-owner.js";
 // Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
 const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
 
+function selectEventTasks(evt: AgentEventPayload): TaskRecord[] {
+  const scopedTasks = getTasksByRunScope({
+    runId: evt.runId,
+    sessionKey: evt.sessionKey,
+  });
+  const subagent = subagentRuns.get(evt.runId);
+  const canonicalRunId = subagent?.taskRunId;
+  // Replacement runs retain the original task identity. Follow the live
+  // registry owner without changing event routing for other task runtimes.
+  if (canonicalRunId && canonicalRunId !== evt.runId) {
+    scopedTasks.push(
+      ...getTasksByRunScope({
+        runId: canonicalRunId,
+        runtime: "subagent",
+        sessionKey: evt.sessionKey,
+      }).filter((task) => readTaskBackingInstance(task.detail)?.runtime === "subagent"),
+    );
+  }
+  return scopedTasks;
+}
+
 function ensureListener() {
   if (!claimTaskRegistryListenerStart()) {
     return;
   }
-  const stop = onAgentEvent((evt) =>
-    withTaskRegistryMutation(() => {
-      restoreTaskRegistryOnce();
-      const scopedTasks = getTasksByRunScope({
-        runId: evt.runId,
-        sessionKey: evt.sessionKey,
-      });
+  const stop = onAgentEvent((evt) => {
+    ensureTaskRegistryReady();
+    const scopedTasks = selectEventTasks(evt);
+    if (scopedTasks.length === 0) {
+      return;
+    }
+    const now = evt.ts || Date.now();
+    const observe = (currentTasks: TaskRecord[]) => {
       const subagent = subagentRuns.get(evt.runId);
-      const canonicalRunId = subagent?.taskRunId;
-      // Replacement runs retain the original task identity. Follow the live
-      // registry owner without changing event routing for other task runtimes.
-      if (canonicalRunId && canonicalRunId !== evt.runId) {
-        scopedTasks.push(
-          ...getTasksByRunScope({
-            runId: canonicalRunId,
-            runtime: "subagent",
-            sessionKey: evt.sessionKey,
-          }).filter((task) => readTaskBackingInstance(task.detail)?.runtime === "subagent"),
-        );
-      }
-      if (scopedTasks.length === 0) {
-        return;
-      }
-      const now = evt.ts || Date.now();
-      for (const current of scopedTasks) {
+      for (const current of currentTasks) {
         const backing = readTaskBackingInstance(current.detail);
         const registryBackedSubagent =
           current.runtime === "subagent" && backing?.runtime === "subagent";
@@ -69,11 +76,12 @@ function ensureListener() {
           continue;
         }
         const phase = evt.stream === "lifecycle" ? evt.data?.phase : undefined;
+        recordTaskActivityEvent(current, evt);
+        scheduleYieldedSubagentTaskProgress(current, evt);
         // An abort event starts cancellation; only the live producer knows when work has settled.
         if ((phase === "end" || phase === "error") && getTaskRunOwner(current)) {
           continue;
         }
-        recordTaskActivityEvent(current, evt);
         const patch: Partial<TaskRecord> = {};
         if (evt.stream === "lifecycle") {
           const eventStartedAt = evt.data?.startedAt;
@@ -146,8 +154,24 @@ function ensureListener() {
           void maybeDeliverTaskTerminalUpdate(current.taskId);
         }
       }
-    }),
-  );
+    };
+    const needsPersistence =
+      evt.stream === "lifecycle" ||
+      evt.stream === "error" ||
+      (evt.stream === "tool" && evt.data?.phase === "start") ||
+      scopedTasks.some(
+        (task) =>
+          now - (task.lastEventAt ?? task.startedAt ?? task.createdAt) >=
+          ACTIVITY_LIVENESS_WRITE_MS,
+      );
+    if (needsPersistence) {
+      // Refresh and reselect under custody before any durable change or delivery.
+      withTaskRegistryMutation(() => observe(selectEventTasks(evt)));
+    } else {
+      // Streaming overlays and progress batching already coalesce in memory.
+      observe(scopedTasks);
+    }
+  });
   setTaskRegistryListenerStop(stop);
 }
 

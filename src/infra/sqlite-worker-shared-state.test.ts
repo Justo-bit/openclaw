@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -20,10 +20,12 @@ import {
   bindTaskFlowRecord,
   upsertTaskFlowRowInDatabase,
 } from "../tasks/task-flow-registry.store.kernel.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
+import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
@@ -152,11 +154,7 @@ describe("canonical shared-state worker admission", () => {
         env: captured.environment,
       });
       const gateway = acquireGatewayLifecycleCoordinator({ databasePath });
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      );
+      const mainSql = observeMainThreadSql();
       try {
         expect(
           await executeOpenClawStateWorker(admission, {
@@ -164,18 +162,10 @@ describe("canonical shared-state worker admission", () => {
             input: { ownerKey: "agent:main:main" },
           }),
         ).toEqual([]);
-        expect(prepare).not.toHaveBeenCalled();
-        expect(exec).not.toHaveBeenCalled();
-        for (const statement of statements) {
-          expect(statement).not.toHaveBeenCalled();
-        }
+        mainSql.expectIdle();
         expect(admission.admission.identity.key).toMatch(/^file:/);
       } finally {
-        prepare.mockRestore();
-        exec.mockRestore();
-        for (const statement of statements) {
-          statement.mockRestore();
-        }
+        mainSql.restore();
         await closeOpenClawStateDatabaseAsync();
         gateway.release();
       }
@@ -366,3 +356,5 @@ describe("canonical shared-state worker admission", () => {
     }
   });
 });
+
+registerSharedStateWorkerAdmissionTests(context);

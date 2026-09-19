@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -8,16 +9,24 @@ import {
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
-  client: StoreClient,
+  client: StoreClient | undefined,
   operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
   stateContext: SqliteWorkerStateContext | undefined,
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
+  createAdmission?: SqliteWorkerAdmissionFactory,
+  requireStateLifecycle = false,
 ): Promise<T> {
+  if (!client || client.sealed) {
+    return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
+  }
   const scope: OperationScope = {
+    requireStateLifecycle,
+    createAdmission,
     assertCurrent,
     active: true,
     pending: new Set(),
@@ -26,6 +35,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
           stateContext: {
             environment: { ...stateContext.environment },
             coordinatorRuntime: { ...stateContext.coordinatorRuntime },
+            existingSchemaPath: stateContext.existingSchemaPath,
           },
         }
       : {}),
@@ -62,6 +72,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     signal: AbortSignal | undefined,
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
+    createAdmission: SqliteWorkerAdmissionFactory | undefined,
   ) => Promise<unknown>;
   release: () => Promise<void>;
 }) {
@@ -94,7 +105,17 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(error, "SQLite worker command could not be serialized"),
         );
       }
-      const operation = owner.dispatch(payload, options.signal, scope, assertCurrent);
+      const createAdmission = scope?.createAdmission;
+      const inCaller = createAdmission ? AsyncLocalStorage.snapshot() : undefined;
+      const operation = owner.dispatch(
+        payload,
+        options.signal,
+        scope,
+        assertCurrent,
+        createAdmission && inCaller
+          ? (admissionOperation) => inCaller(createAdmission, admissionOperation)
+          : undefined,
+      );
       pending.add(operation);
       scope?.pending.add(operation);
       void operation.then(

@@ -1,11 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db.js";
@@ -169,10 +170,12 @@ function captureWork(envelope: ExecutionIdentityAdmissionEnvelope) {
   return { kind: "capture" as const, envelope };
 }
 
-afterEach(() => {
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit event writer", () => {
   it("preserves external supervision for claimed state writes", async () => {
@@ -200,16 +203,17 @@ describe("audit event writer", () => {
     const supervisedErrors = await write("supervised-run", "external");
     expect(supervisedErrors).toEqual([]);
     expect(
-      listAuditEvents({ database: supervisedDatabase, limit: 10 }).events.map(
+      (await listAuditEvents({ database: supervisedDatabase, limit: 10 })).events.map(
         (event) => event.runId,
       ),
     ).toEqual(["supervised-run"]);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const unmarkedErrors = await write("unmarked-run", undefined);
     expect(unmarkedErrors.some((error) => error.includes("gateway-test-supervisor"))).toBe(true);
     expect(
-      listAuditEvents({ database: supervisedDatabase, limit: 10 }).events.map(
+      (await listAuditEvents({ database: supervisedDatabase, limit: 10 })).events.map(
         (event) => event.runId,
       ),
     ).toEqual(["supervised-run"]);
@@ -309,7 +313,7 @@ describe("audit event writer", () => {
     expect(JSON.stringify(errors)).not.toContain(token.contextId);
     expect(JSON.stringify(errors)).not.toContain(token.executionId);
     expect(JSON.stringify(errors)).not.toContain(token.runId);
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
     expect(
       openOpenClawStateDatabase(database)
         .db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -368,9 +372,9 @@ describe("audit event writer", () => {
     }
 
     expect(errors).toEqual([]);
-    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
-      "cold-owner",
-    );
+    expect(
+      (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.runId),
+    ).toContain("cold-owner");
   });
 
   it("persists a generic decision through the bounded queue", async () => {
@@ -512,7 +516,7 @@ describe("audit event writer", () => {
     }
 
     expect(errors).toEqual(["audit event queue is full (2); dropping metadata"]);
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
     expect(
       inspectExecutionIdentityRun({ runId: "held-lock-run" }, { ...database, now: admittedAt }),
     ).toMatchObject({
@@ -594,9 +598,9 @@ describe("audit event writer", () => {
     }
 
     expect(errors).toEqual([]);
-    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
-      "sustained-contention",
-    );
+    expect(
+      (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.runId),
+    ).toContain("sustained-contention");
   });
 
   it("persists owned unknown and omits inherited evidence through the queue clone boundary", async () => {
