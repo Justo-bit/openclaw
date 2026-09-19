@@ -298,4 +298,60 @@ describe("shared/usage-aggregates", () => {
       { date: "2026-03-12", count: 0, avgMs: 0, minMs: 0, maxMs: 0, p95Ms: 0 },
     ]);
   });
+
+  it("retains creator daily amounts and counts each multi-day session once", () => {
+    const dates = ["2026-03-11", "2026-03-12", "2026-03-13"] as const;
+    const summary = usage({
+      firstActivity: 0,
+      totalTokens: 30,
+      totalCost: 3,
+      activityDates: [dates[1], dates[0], dates[1]],
+      dailyBreakdown: dates.slice(0, 2).map((date, index) => ({
+        ...usage({ input: (index + 1) * 10, totalTokens: (index + 1) * 10, totalCost: index + 1 }),
+        date,
+        tokens: (index + 1) * 10,
+        cost: index + 1,
+      })),
+      dailyMessageCounts: [
+        {
+          date: dates[2],
+          total: 1,
+          user: 1,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        },
+      ],
+    });
+    const original = structuredClone(summary);
+    const accumulator = createUsageAggregateAccumulator();
+    accumulator.add({ creatorKey: "person", usage: summary });
+    accumulator.add({
+      creatorKey: "person",
+      usage: { ...summary, activityDates: dates.toReversed() },
+    });
+    accumulator.add({ creatorKey: "person", usage: usage({ firstActivity: 0, totalTokens: 5 }) });
+    accumulator.add({ creatorKey: "person", usage: usage({ activityDates: [dates[0]] }) });
+    const group = accumulator.finish().byCreator?.[0];
+    expect(group).toMatchObject({
+      sessionCount: 3,
+      totals: { totalTokens: 65, totalCost: 6 },
+      daily: [
+        { date: dates[0], input: 20, totalTokens: 20, totalCost: 2 },
+        { date: dates[1], input: 40, totalTokens: 40, totalCost: 4 },
+      ],
+      sessionActivity: [
+        { dates: [], sessionCount: 1 },
+        { dates, sessionCount: 2 },
+      ],
+    });
+    const selectedDays = new Set<string>(dates.slice(0, 2));
+    expect(
+      group?.sessionActivity
+        .filter((entry) => entry.dates.some((date) => selectedDays.has(date)))
+        .reduce((sum, entry) => sum + entry.sessionCount, 0),
+    ).toBe(2);
+    expect(summary).toEqual(original);
+  });
 });

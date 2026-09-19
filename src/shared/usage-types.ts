@@ -76,7 +76,13 @@ export type SessionsUsageAggregates = {
   byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
   byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
   byCreator?: Array<
-    SessionUsageCreator & { totals: CostUsageSummary["totals"]; sessionCount: number }
+    SessionUsageCreator & {
+      totals: CostUsageSummary["totals"];
+      sessionCount: number;
+      daily: CostUsageSummary["daily"];
+      /** Date-set cohorts count each session once across any selected days, without exposing IDs. */
+      sessionActivity: Array<{ dates: string[]; sessionCount: number }>;
+    }
   >;
   /** Full token/cost categories for every matched session, before the row limit. */
   costDaily?: CostUsageSummary["daily"];

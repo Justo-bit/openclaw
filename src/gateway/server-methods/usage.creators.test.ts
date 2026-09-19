@@ -133,7 +133,12 @@ describe("usage creator attribution", () => {
         all.aggregates.byCreator?.find((creator) => creator.actor?.label === "Ada"),
         "Ada creator",
       );
-      expect(adaGroup).toMatchObject({ sessionCount: 2, totals: { totalTokens: 30 } });
+      expect(adaGroup).toMatchObject({
+        sessionCount: 2,
+        totals: { totalTokens: 30 },
+        daily: [{ date: "2026-08-01", input: 30, totalTokens: 30 }],
+        sessionActivity: [{ dates: ["2026-08-01"], sessionCount: 2 }],
+      });
       expect(all.aggregates.costDaily).toMatchObject([
         { date: "2026-08-01", input: 100, totalTokens: 100, inputCost: 1, totalCost: 1 },
       ]);

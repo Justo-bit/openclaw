@@ -1,3 +1,6 @@
+import type { CostUsageSummary } from "../src/infra/session-cost-usage.types.js";
+import { UNKNOWN_USAGE_CREATOR_KEY } from "../src/shared/usage-aggregates.js";
+
 function usageCostTotals(totalTokens: number, totalCost = 0) {
   return {
     input: Math.round(totalTokens * 0.2),
@@ -17,7 +20,8 @@ function usageCostTotals(totalTokens: number, totalCost = 0) {
 // Deterministic year of daily activity so the settings profile heatmap,
 // streaks, and stat strip render with a lively fixture in the mock harness.
 export function buildProfileUsageMocks(baseTime: number) {
-  const daily: Array<Record<string, unknown>> = [];
+  const daily: CostUsageSummary["daily"] = [];
+  const sessionCount = 48_212;
   let lifetimeTokens = 0;
   for (let daysAgo = 364; daysAgo >= 0; daysAgo -= 1) {
     const date = new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000);
@@ -54,8 +58,24 @@ export function buildProfileUsageMocks(baseTime: number) {
         },
       ],
       totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+      creatorOptions: [{ key: UNKNOWN_USAGE_CREATOR_KEY }],
       aggregates: {
-        sessionCount: 48_212,
+        sessionCount,
+        byCreator: [
+          {
+            key: UNKNOWN_USAGE_CREATOR_KEY,
+            totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+            sessionCount,
+            daily,
+            // The synthetic history uses one shared activity pattern for its unassigned sessions.
+            sessionActivity: [
+              {
+                dates: daily.filter((day) => day.totalTokens > 0).map((day) => day.date),
+                sessionCount,
+              },
+            ],
+          },
+        ],
         costDaily: daily,
         longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
         messages: {

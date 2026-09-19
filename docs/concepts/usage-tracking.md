@@ -50,6 +50,11 @@ a recorded creator appear as **Unattributed**. This attributes the whole session
 to its creator, not individual turns to participants or charges to provider API
 accounts. Current account settings are not used to guess historical attribution.
 
+Selecting chart days narrows creator totals and session counts across the full
+report, including sessions beyond the visible list limit. A session active on
+several selected days counts once. Session, text, and hour filters use the loaded
+session rows instead.
+
 ## Usage date ranges
 
 The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in

@@ -201,27 +201,38 @@ export function renderUsage(props: UsageProps) {
       : hasSessionFilters
         ? computeTotals(aggregateSessions.map((session) => session.usage))
         : data.totals;
-  const displaySessionCount = hasAggregateFilters
-    ? aggregateSessions.length
-    : (data.aggregates?.sessionCount ?? aggregateSessions.length);
   const totalSessions = data.aggregates?.sessionCount ?? sortedSessions.length;
   const activeAggregates = hasAggregateFilters
     ? buildAggregatesFromSessions(aggregateSessions)
     : buildAggregatesFromSessions([], data.aggregates);
+  const serverCreators = !hasSessionFilters ? data.aggregates?.byCreator : undefined;
   if (selectedDaySet.size > 0) {
-    activeAggregates.byCreator = buildAggregatesFromSessions(
-      aggregateSessions.map((session) => ({
-        ...session,
-        usage: session.usage
-          ? {
-              ...session.usage,
-              ...computeTotals(
-                session.usage.dailyBreakdown?.filter((day) => selectedDaySet.has(day.date)) ?? [],
-              ),
-            }
-          : session.usage,
-      })),
-    ).byCreator;
+    activeAggregates.byCreator = (serverCreators ?? activeAggregates.byCreator ?? []).flatMap(
+      (creator) => {
+        const daily = creator.daily.filter((day) => selectedDaySet.has(day.date));
+        const sessionActivity = creator.sessionActivity.flatMap((activity) => {
+          const dates = activity.dates.filter((date) => selectedDaySet.has(date));
+          return dates.length ? [{ dates, sessionCount: activity.sessionCount }] : [];
+        });
+        const sessionCount = sessionActivity.reduce(
+          (sum, activity) => sum + activity.sessionCount,
+          0,
+        );
+        const totals = computeTotals(daily);
+        return sessionCount || totals.totalTokens || totals.totalCost
+          ? [{ ...creator, totals, sessionCount, daily, sessionActivity }]
+          : [];
+      },
+    );
+  }
+  const displaySessionCount =
+    selectedDaySet.size > 0 && serverCreators
+      ? (activeAggregates.byCreator ?? []).reduce((sum, creator) => sum + creator.sessionCount, 0)
+      : hasAggregateFilters
+        ? aggregateSessions.length
+        : (data.aggregates?.sessionCount ?? aggregateSessions.length);
+  if (selectedDaySet.size > 0 && serverCreators) {
+    activeAggregates.sessionCount = displaySessionCount;
   }
   const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
   const insightTotals = insightsUseVisiblePage
