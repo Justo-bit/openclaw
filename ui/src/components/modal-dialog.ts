@@ -2,7 +2,7 @@
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html, type PropertyValues } from "lit";
-import { property, query } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
@@ -28,7 +28,9 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   @property() label = "";
   @property() description = "";
 
-  @query("wa-dialog") private webAwesomeDialog?: WaDialog;
+  get #webAwesomeDialog() {
+    return this.renderRoot?.querySelector<WaDialog>("wa-dialog");
+  }
 
   #returnFocus: HTMLElement | null = null;
   #returnFocusOverride: HTMLElement | null | undefined;
@@ -224,7 +226,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#clearNativeOcclusion();
     this.#syncGeneration += 1;
     this.#initialFocusPending = false;
-    const webAwesomeDialog = this.webAwesomeDialog;
+    const webAwesomeDialog = this.#webAwesomeDialog;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
     if (dialog?.open) {
       dialog.close();
@@ -271,7 +273,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
   async #syncDialogOpen() {
     const generation = ++this.#syncGeneration;
-    const webAwesomeDialog = this.webAwesomeDialog;
+    const webAwesomeDialog = this.#webAwesomeDialog;
     if (!webAwesomeDialog) {
       return;
     }
