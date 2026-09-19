@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -31,26 +31,32 @@ async function activate(control: Locator, touch: boolean) {
   }
 }
 
-async function scrollDown(page: Page, point: { x: number; y: number }, touch: boolean) {
-  if (!touch) {
+async function scrollDown(page: Page, point: { x: number; y: number }, client?: CDPSession) {
+  if (!client) {
     await page.mouse.move(point.x, point.y);
     await page.mouse.wheel(0, 160);
     return;
   }
-  const client = await page.context().newCDPSession(page);
   const distance = Math.min(160, point.y - 12);
-  try {
-    await client.send("Input.synthesizeScrollGesture", {
-      x: point.x,
-      y: point.y,
-      yDistance: -distance,
-      speed: 600,
-      gestureSourceType: "touch",
-      preventFling: true,
+  const contact = { ...point, id: 1 };
+  const timestamp = Date.now() / 1000;
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [contact],
+    timestamp,
+  });
+  for (let step = 1; step <= 7; step++) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ ...contact, y: point.y - (step * distance) / 7 }],
+      timestamp: timestamp + step * 0.008,
     });
-  } finally {
-    await client.detach();
   }
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+    timestamp: timestamp + 0.057,
+  });
 }
 
 async function expectInputReachable(page: Page) {
@@ -99,6 +105,7 @@ suite.define(() => {
           isMobile: touch,
         },
         async ({ page }) => {
+          const touchClient = touch ? await page.context().newCDPSession(page) : undefined;
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(error.message));
           const capture = async (stage: string) => {
@@ -220,7 +227,7 @@ suite.define(() => {
 
           if (!touch) {
             const row = (await pullRequest.boundingBox())!;
-            await scrollDown(page, { x: row.x + 8, y: row.y + 8 }, false);
+            await scrollDown(page, { x: row.x + 8, y: row.y + 8 });
             await expect
               .poll(() => thread.evaluate((element) => element.scrollTop))
               .toBeGreaterThan(beforeNotice.scrollTop);
@@ -318,8 +325,8 @@ suite.define(() => {
               2,
           };
           // Reach the inner boundary through native input before checking scroll chaining.
-          await scrollDown(page, scrollPoint, touch);
-          await scrollDown(page, scrollPoint, touch);
+          await scrollDown(page, scrollPoint, touchClient);
+          await scrollDown(page, scrollPoint, touchClient);
           await expect
             .poll(() =>
               body.evaluate(
@@ -328,7 +335,7 @@ suite.define(() => {
             )
             .toBeLessThanOrEqual(1);
           const beforeHandoff = await persistentContext.evaluate((element) => element.scrollTop);
-          await scrollDown(page, scrollPoint, touch);
+          await scrollDown(page, scrollPoint, touchClient);
           await expect
             .poll(() => persistentContext.evaluate((element) => element.scrollTop))
             .toBeGreaterThan(beforeHandoff);
