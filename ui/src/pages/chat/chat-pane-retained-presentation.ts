@@ -186,7 +186,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const state = this.state;
     if (
       !state?.connected ||
-      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       document.visibilityState === "hidden" ||
       this.isCurrentSessionArchived(state) ||
@@ -196,7 +195,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return undefined;
     }
     // Unlike secondary metadata, the progress card determines transcript geometry.
-    return this.resolveChatReadTarget();
+    // Consult preferences only after the pane and its history owner are ready.
+    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {

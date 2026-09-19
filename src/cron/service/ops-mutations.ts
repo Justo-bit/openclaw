@@ -221,7 +221,7 @@ export async function add(
     }
     if (normalizedId) {
       normalizeCronTaskRunJobId(normalizedId);
-      pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
+      pendingSessionCleanup = getPendingCronSessionCleanup(state.deps.storePath, normalizedId);
       if (pendingSessionCleanup) {
         throw RETRY_ADD_AFTER_SESSION_CLEANUP;
       }

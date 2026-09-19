@@ -9,10 +9,10 @@ const pendingSessionCleanups = new Map<string, Map<string, PendingCronSessionCle
 
 /** Returns cleanup that must finish before the same durable job identity can be reused. */
 export function getPendingCronSessionCleanup(
-  state: CronServiceState,
+  storePath: string,
   jobId: string,
 ): Promise<void> | undefined {
-  return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId)?.done;
+  return pendingSessionCleanups.get(cronStoreKey(storePath))?.get(jobId)?.done;
 }
 
 /** Deferred session cleanup remains a filesystem owner after its cron row disappears. */

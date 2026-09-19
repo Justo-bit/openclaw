@@ -16,6 +16,7 @@ import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.te
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { getPendingCronSessionCleanup } from "./service/locked.js";
 
 const gatewayTestState = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -333,11 +334,14 @@ describe("CronService.remove session cleanup", () => {
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "late-session", updatedAt: Date.now() },
     );
+    const cleanup = getPendingCronSessionCleanup(storePath, job.id);
     clearCronJobActive(job.id, marker);
 
-    await vi.waitFor(() => {
-      expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
-    });
+    // The row can disappear before cleanup releases its filesystem ownership.
+    // Join the recorded operation before the fixture closes databases and removes its directory.
+    expect(cleanup).toBeDefined();
+    await cleanup;
+    expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
   });
 
   it("preserves the session of a replacement job with the same id", async () => {
