@@ -20,9 +20,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([false, true])(
-  "retains foreground leaf ownership during the input handoff (attachment: %s)",
-  async (attachment) => {
+it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ attachment, peer }))))(
+  "retains foreground leaf ownership during input handoff (attachment: $attachment, peer: $peer)",
+  async ({ attachment, peer }) => {
     let releaseInput: (() => void) | undefined;
     vi.stubGlobal(
       "MessageChannel",
@@ -72,10 +72,12 @@ it.each([false, true])(
     const loading = loadChatHistory(host, { deferBranches: true });
     const sending = handleSendChat(host, undefined, undefined, new Event("submit"));
     await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+    expect(releaseInput).toBeTypeOf("function");
     try {
       history.resolve(snapshot);
       await loading;
-      await resumeStoredChatOutboxes(host);
+      await resumeStoredChatOutboxes(peer ? { ...host, chatQueue: [] } : host);
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     } finally {
       releaseInput?.();
       await sending;

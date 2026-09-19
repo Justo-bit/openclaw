@@ -55,18 +55,19 @@ export async function withChatSubmitHandoff(
           queued.id));
   // Admission is durable, but delivery has not made a transport attempt yet.
   // Present that handoff inline without flashing the waiting-message tray.
-  const submission = startsImmediately
-    ? chatOutboxOwner(host).beginSubmission(host, queued.id)
-    : undefined;
+  const submission =
+    yieldsToInput && host.connected && options.isCurrent()
+      ? chatOutboxOwner(host).beginSubmission(host, queued.id, {
+          inline: Boolean(startsImmediately),
+          isCurrent: () => host.connected && options.isCurrent(),
+        })
+      : undefined;
   try {
     let current = queued;
     if (yieldsToInput) {
-      // History, picker, and busy-run waits already yield. Register those sends
-      // with the drain before yielding so a background wake cannot claim them
-      // as restored rows and discard their foreground branch fence.
-      if (startsImmediately) {
-        await yieldChatSubmitToInput();
-      }
+      // The shared outbox retains foreground custody while the browser accepts
+      // input, including when terminal history settles before this task resumes.
+      await yieldChatSubmitToInput();
       const pending =
         options.isCurrent() && visibleSessionMatches(host, queued.sessionKey!, queued.agentId)
           ? readQueuedMessageById(host, queued.id)
