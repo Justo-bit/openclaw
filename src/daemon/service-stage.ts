@@ -129,7 +129,7 @@ export async function readServiceFileState(file: string): Promise<GatewayService
     }
     return {
       sha256: createHash("sha256").update(contents).digest("hex"),
-      mode: after.mode & 0o777,
+      mode: after.mode & 0o7777,
       dev: after.dev,
       ino: after.ino,
       size: after.size,

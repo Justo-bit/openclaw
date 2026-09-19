@@ -66,6 +66,7 @@ const enNewSessionSetup = {
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    created: "Session created",
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
       "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
@@ -92,6 +93,8 @@ const enNewSessionSetup = {
     checkoutWorktree: "New worktree",
     checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
+    checkoutCloud: "Starting branch",
+    checkoutCloudFrom: "From {branch}",
     checkoutRepository: "Remote checkout",
     checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",

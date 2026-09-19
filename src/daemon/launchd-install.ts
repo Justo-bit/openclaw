@@ -16,6 +16,7 @@ import {
 import {
   LAUNCH_AGENT_ENV_FILE_MODE,
   LAUNCH_AGENT_ENV_WRAPPER_MODE,
+  type LaunchAgentFileSnapshot,
   publishLaunchAgentPlist,
   readExistingLaunchAgentPlist,
   resolveLaunchAgentEnvFilePath,
@@ -135,7 +136,7 @@ export async function stageLaunchAgent({
 }
 
 type LaunchAgentInstallSnapshot = {
-  plistContents: Buffer | null;
+  plist: LaunchAgentFileSnapshot | null;
   envFileContents: Buffer | null;
   wrapperContents: Buffer | null;
   loaded: boolean;
@@ -218,15 +219,16 @@ async function restoreLaunchAgentInstallArtifacts(params: {
     }
   };
   await restoreAncillary(true);
-  if (params.snapshot.plistContents !== null) {
+  if (params.snapshot.plist !== null) {
     await publishLaunchAgentPlist({
       label: params.label,
       plistPath: params.plistPath,
-      contents: params.snapshot.plistContents,
+      contents: params.snapshot.plist.contents,
+      mode: params.snapshot.plist.mode,
       definitionTransaction: params.snapshot.definitionTransaction,
     });
   }
-  if (params.snapshot.plistContents === null) {
+  if (params.snapshot.plist === null) {
     assertGatewayServiceUpdateCurrent();
     await fs.unlink(params.plistPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -265,7 +267,7 @@ async function restoreLaunchAgentInstall(params: {
     plistPath: params.plistPath,
     snapshot: params.snapshot,
   });
-  if (params.snapshot.loaded && params.snapshot.plistContents !== null) {
+  if (params.snapshot.loaded && params.snapshot.plist !== null) {
     await bootstrapLaunchAgentOrThrow({
       domain: params.domain,
       serviceTarget,
@@ -341,21 +343,21 @@ export async function installLaunchAgent(
   }
   await assertExternalLaunchAgentMutation(args.env, "install");
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
-  const previousContents = await readExistingLaunchAgentPlist(targetPlistPath);
+  const previous = await readExistingLaunchAgentPlist(targetPlistPath);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
   // Plist, generated environment files, and launchd registration form one cutover.
   // Capture every prior owner before publication so any later failure can restore it.
   const snapshot: LaunchAgentInstallSnapshot = {
     definitionTransaction: args.definitionTransaction,
-    plistContents: previousContents,
-    envFileContents: await readExistingLaunchAgentPlist(
-      resolveLaunchAgentEnvFilePath(args.env, label),
-    ),
-    wrapperContents: await readExistingLaunchAgentPlist(
-      resolveLaunchAgentEnvWrapperPath(args.env, label),
-    ),
-    loaded: await snapshotLaunchAgentLoadedState(previousContents, `${domain}/${label}`),
+    plist: previous,
+    envFileContents:
+      (await readExistingLaunchAgentPlist(resolveLaunchAgentEnvFilePath(args.env, label)))
+        ?.contents ?? null,
+    wrapperContents:
+      (await readExistingLaunchAgentPlist(resolveLaunchAgentEnvWrapperPath(args.env, label)))
+        ?.contents ?? null,
+    loaded: await snapshotLaunchAgentLoadedState(previous?.contents ?? null, `${domain}/${label}`),
   };
   let plistPath: string;
   let stdoutPath: string;

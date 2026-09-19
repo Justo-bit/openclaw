@@ -23,7 +23,7 @@ export async function auditLaunchdDefinition(
   inspectRewrite = false,
 ): Promise<void> {
   const sourcePath = resolveLaunchAgentPlistPath(env);
-  const content = await readExistingLaunchAgentPlist(sourcePath);
+  const content = (await readExistingLaunchAgentPlist(sourcePath))?.contents ?? null;
   if (content === null) {
     return;
   }
@@ -57,7 +57,7 @@ export async function auditLaunchdDefinition(
       );
     }
     const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
-    const wrapper = await readExistingLaunchAgentPlist(wrapperPath);
+    const wrapper = (await readExistingLaunchAgentPlist(wrapperPath))?.contents ?? null;
     if (wrapper !== null && wrapper.toString("utf8") !== buildLaunchAgentEnvironmentWrapper()) {
       findings.push(
         serviceDefinitionUnknown(

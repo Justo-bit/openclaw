@@ -29,7 +29,14 @@ it.each(["git", "unknown"] as const)(
   },
 );
 
-it.each(["installed", "load-failed", "operator-edit", "invalid-receipt", "compensation-failed"])(
+it.each([
+  "installed",
+  "load-failed",
+  "operator-edit",
+  "compensated",
+  "invalid-receipt",
+  "compensation-failed",
+])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -40,14 +47,20 @@ it.each(["installed", "load-failed", "operator-edit", "invalid-receipt", "compen
         guards: [],
       };
       const warning =
-        outcome === "operator-edit" ? "Service.Nice preserved" : "Service.KillMode repaired";
-      const preserved = outcome === "operator-edit";
+        outcome === "compensated"
+          ? "previous definition was restored"
+          : outcome === "operator-edit"
+            ? "Service.Nice preserved"
+            : "Service.KillMode repaired";
+      const preserved = outcome === "operator-edit" || outcome === "compensated";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
         : preserved
-          ? "SERVICE_DEFINITION_UNKNOWN: Service.Nice"
+          ? outcome === "compensated"
+            ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
+            : "SERVICE_DEFINITION_UNKNOWN: Service.Nice"
           : "load failed";
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),

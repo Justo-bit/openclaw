@@ -15,10 +15,14 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../plugins/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { activeSessions } from "../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
@@ -31,7 +35,10 @@ import {
   verifyPreparedSidecarRecovery,
   verifyServiceCleanupRecovery,
 } from "./server-plugin-reload.activation.test-support.js";
-import { verifyActiveCallDrainLease } from "./server-plugin-reload.active-call.test-support.js";
+import {
+  verifyActiveCallDrainLease,
+  verifyLateActiveCallDrainObservation,
+} from "./server-plugin-reload.active-call.test-support.js";
 import {
   verifyGatewayCacheOwnership,
   verifySharedGatewayCacheOwnership,
@@ -116,7 +123,8 @@ afterEach(async () => {
     }
     await clearActivePluginRegistry();
   } finally {
-    activeSessions.clear();
+    await clearTranscriptCapturesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
     resetGatewayWorkAdmission();
@@ -277,7 +285,7 @@ it.each(["lookup", "replacement"] as const)(
 );
 
 it.each([5_000, 15_000, 70_000])(
-  "recovers channels after an admitted write outlives the drain deadline (%i ms)",
+  "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
       createRecoveryFixture,
@@ -285,6 +293,9 @@ it.each([5_000, 15_000, 70_000])(
       holdMs,
     ),
 );
+
+it("keeps restored plugins serving when an expired drain observation settles late", () =>
+  verifyLateActiveCallDrainObservation(createRecoveryFixture));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));
@@ -544,10 +555,6 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               },
             });
           },
-          // Settle the timed-out advertiser after quiescence, while service cleanup owns the drain.
-          initialStop: async () => {
-            releaseStartup.resolve();
-          },
           beforePublish: async () => {
             if (outcome === "rollback") {
               throw publicationFailure;
@@ -580,6 +587,21 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               details: { committed: outcome === "after-commit error" },
               cause: publicationFailure,
             });
+          } else if (outcome === "late startup") {
+            const reloading = fixture.reload();
+            void reloading.catch(() => {});
+            try {
+              await vi.waitFor(() =>
+                expect(fixture.owner.getReloadStatus()).toMatchObject({
+                  phase: "reloading",
+                  deadlineAtMs: expect.any(Number),
+                }),
+              );
+              expect(fixture.firstStop).not.toHaveBeenCalled();
+            } finally {
+              releaseStartup.resolve();
+              await reloading;
+            }
           } else {
             await fixture.reload();
           }
@@ -608,7 +630,7 @@ it.for([
   "manual stop",
 ] as const)(
   "keeps startup transcript capture owned across plugin replacement: %s",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     const stateDir = makeTrackedTempDir("gateway-transcript-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const entry = (owner: string, channelId = "original-room") => ({
@@ -650,19 +672,6 @@ it.for([
       );
       const first = providers.first[0]!;
       const sibling = providers.sibling[0]!;
-      const captured = async (
-        provider: ReturnType<typeof registerTranscriptFixture>,
-        count: number,
-      ) => {
-        // Gateway readiness precedes deferred capture startup and its session write.
-        await vi.waitFor(() => {
-          expect(provider.captures).toHaveLength(count);
-          expect(activeSessions.get(provider.captures[count - 1]!.session.sessionId)?.phase).toBe(
-            "active",
-          );
-        });
-        return provider.captures[count - 1]!;
-      };
       const acceptedConfig = {
         ...config,
         transcripts: { autoStart: [entry("first", "replacement-room"), entry("sibling")] },
@@ -679,8 +688,8 @@ it.for([
           expect(receipt).toMatchObject({ runtime: { pluginIds: ["first"] } });
           startupReady!.resolve();
           const current = providers.first[1]!;
-          await captured(current, 1);
-          await captured(sibling, 1);
+          await current.waitForActiveCapture(1, signal);
+          await sibling.waitForActiveCapture(1, signal);
           expect(first.watches).toHaveLength(0);
           expect(first.captures).toHaveLength(0);
           expect(current.watches[0]?.cfg).toEqual(acceptedConfig);
@@ -691,8 +700,8 @@ it.for([
           expect(sibling.unwatch).toHaveBeenCalledOnce();
           return;
         }
-        const oldCapture = await captured(first, 1);
-        const siblingCapture = await captured(sibling, 1);
+        const oldCapture = await first.waitForActiveCapture(1, signal);
+        const siblingCapture = await sibling.waitForActiveCapture(1, signal);
         const oldOwner = activeSessions.get(oldCapture.session.sessionId);
         const siblingOwner = activeSessions.get(siblingCapture.session.sessionId);
         if (outcome === "stop refused") {
@@ -806,7 +815,7 @@ it.for([
         );
         expect(first.stop).toHaveBeenCalledTimes(outcome === "stop refused" ? 2 : 1);
         const current = providers.first.at(-1)!;
-        const currentCapture = await captured(current, 1);
+        const currentCapture = await current.waitForActiveCapture(1, signal);
         expect(current.watches.at(-1)?.source.channelId).toBe(
           outcome === "rollback" ? "original-room" : "replacement-room",
         );
@@ -844,7 +853,7 @@ it.for([
           expect(sibling.watches).toHaveLength(1);
           await fixture.reload(acceptedConfig);
           const enabled = providers.first[2]!;
-          await captured(enabled, 1);
+          await enabled.waitForActiveCapture(1, signal);
           expect(enabled.watches[0]?.source.channelId).toBe("replacement-room");
           expect(sibling.watches).toHaveLength(1);
           expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);

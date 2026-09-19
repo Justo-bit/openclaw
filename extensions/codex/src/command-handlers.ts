@@ -200,7 +200,6 @@ export async function handleCodexSubcommand(
             appServerVersion: client.getServerVersion(),
             runtimeIdentity: client.getRuntimeIdentity(),
           });
-          defaultCodexPluginMetadataCache.invalidate(appCacheKey);
           return await refreshCodexPluginRuntimeState({
             configCwd: workspaceDir,
             appCache: defaultCodexAppInventoryCache,
@@ -401,11 +400,7 @@ export async function handleCodexSubcommand(
 function resolvePluginRuntimeRefreshMethod(method: string) {
   const supported = [
     CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.listSkills,
-    CODEX_CONTROL_METHODS.listHooks,
-    CODEX_CONTROL_METHODS.reloadMcpServers,
     CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.listApps,
     CODEX_CONTROL_METHODS.readApps,
   ] as const;
   const recognized = supported.find((candidate) => candidate === method);

@@ -6,6 +6,7 @@ import "./test-helpers/service-audit-mocks.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import {
+  buildLaunchAgentEnvironmentWrapper,
   resolveLaunchAgentPlistPath,
   resolveLaunchAgentEnvWrapperPath,
 } from "./launchd-service-files.js";
@@ -402,8 +403,8 @@ it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
   },
 );
 
-it.each(["wrapper", "metadata"])(
-  "finds launchd %s edits before the installer can replace them",
+it.each(["canonical-wrapper", "wrapper", "metadata"])(
+  "audits launchd %s before the installer can replace it",
   async (kind) => {
     const home = dirs.make("rewrite-launchd-preservation-");
     const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
@@ -424,10 +425,15 @@ it.each(["wrapper", "metadata"])(
         stderrPath: stdoutPath,
       }),
     );
-    if (kind === "wrapper") {
+    if (kind !== "metadata") {
       const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway");
       await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
-      await fs.writeFile(wrapperPath, '#!/bin/sh\necho operator-private\nexec "$@"\n');
+      await fs.writeFile(
+        wrapperPath,
+        kind === "canonical-wrapper"
+          ? buildLaunchAgentEnvironmentWrapper()
+          : '#!/bin/sh\necho operator-private\nexec "$@"\n',
+      );
     }
     const result = await auditGatewayServiceConfig({
       env,
@@ -435,6 +441,10 @@ it.each(["wrapper", "metadata"])(
       platform: "darwin",
       expectedCommand: command,
     });
+    if (kind === "canonical-wrapper") {
+      expect(result.definitionDrift ?? []).toEqual([]);
+      return;
+    }
     expect(result.definitionDrift).toContainEqual(
       expect.objectContaining({
         kind: "unknown-edit",

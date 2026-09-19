@@ -162,12 +162,14 @@ describe("Codex node native readiness", () => {
       await receiptHeld.promise;
       expect(cleanupStarted).not.toHaveBeenCalled();
       expect(harness.release).not.toHaveBeenCalled();
+      expect(harness.command.hasActiveWork?.()).toBe(true);
       await expect(access(harness.privateHome)).resolves.toBeUndefined();
 
       receipt.resolve();
       await harness.outcome;
       expect(cleanupStarted).toHaveBeenCalledOnce();
       expect(harness.release).toHaveBeenCalledOnce();
+      expect(harness.command.hasActiveWork?.()).toBe(false);
       await expect(access(harness.privateHome)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       receipt.resolve();
@@ -192,6 +194,7 @@ describe("Codex node native readiness", () => {
       expect(harness.child.exitCode).toBeNull();
       expect(harness.child.signalCode).toBeNull();
       expect(harness.release).not.toHaveBeenCalled();
+      expect(harness.command.hasActiveWork?.()).toBe(true);
       await expect(access(harness.privateHome)).resolves.toBeUndefined();
       await expect(harness.command.onDisconnect?.()).rejects.toThrow("did not terminate");
 
@@ -204,6 +207,7 @@ describe("Codex node native readiness", () => {
       });
       await harness.command.onDisconnect?.();
       expect(harness.release).toHaveBeenCalledOnce();
+      expect(harness.command.hasActiveWork?.()).toBe(false);
     } finally {
       failedClose.mockRestore();
       failedTreeKill.mockRestore();

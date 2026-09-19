@@ -181,7 +181,11 @@ export function createDaemonActionContext(params: {
   stdout: Writable;
   warnings: string[];
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  fail: (message: string, hints?: string[], result?: "restart-health-failed") => void;
+  fail: (
+    message: string,
+    hints?: string[],
+    result?: "restart-health-failed" | "still-starting",
+  ) => void;
 } {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
@@ -198,7 +202,11 @@ export function createDaemonActionContext(params: {
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
-  const fail = (message: string, hints?: string[], result?: "restart-health-failed") => {
+  const fail = (
+    message: string,
+    hints?: string[],
+    result?: "restart-health-failed" | "still-starting",
+  ) => {
     if (params.json) {
       emit({
         ok: false,
@@ -214,7 +222,7 @@ export function createDaemonActionContext(params: {
         }
       }
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(result === "still-starting" ? 2 : 1);
   };
 
   return { stdout, warnings, emit, fail };

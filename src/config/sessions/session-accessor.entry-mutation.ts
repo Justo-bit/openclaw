@@ -12,15 +12,8 @@ import {
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
-import {
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "./session-accessor.sqlite-entry.js";
-import {
-  forkSessionEntryFromParentTarget,
-  forkSessionTranscriptFromParent,
-  resolveSessionParentForkDecision,
-} from "./session-accessor.sqlite-parent-session.js";
+import "./session-accessor.sqlite-entry.js";
+import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
 import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
@@ -43,19 +36,20 @@ import type {
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
+export {
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "./session-accessor.sqlite-entry.js";
+export {
+  forkSessionEntryFromParentTarget,
+  resolveSessionParentForkDecision,
+} from "./session-accessor.sqlite-parent-session.js";
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
   return await forkSessionTranscriptFromParent(params);
 }
-
-export {
-  forkSessionEntryFromParentTarget,
-  recordInboundSessionMeta,
-  resolveSessionParentForkDecision,
-  updateSessionLastRoute,
-};
 
 /**
  * Creates or updates one session entry and initializes its transcript header as
@@ -83,31 +77,42 @@ export async function createSessionEntryWithTranscript<TError = string>(
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
-  const { cwd, commitGuard } = options;
+  const { cwd, commitGuard, withCommit, onLifecycleCommitted } = options;
 
-  try {
-    const transcriptScope = resolveSqliteTranscriptScope({
-      ...storeScope,
-      sessionId: created.entry.sessionId,
-      sessionKey: normalizedKey,
-    });
-    await runExclusiveSqliteSessionWrite(
-      transcriptScope,
-      async () => {
-        runOpenClawAgentWriteTransaction((database) => {
-          commitGuard?.();
-          ensureTranscriptHeader(database, transcriptScope, cwd);
-        }, toDatabaseOptions(transcriptScope));
-      },
-      "session.entry.create-with-transcript",
-    );
-  } catch (err) {
-    // Preserve authority errors from the commit guard instead of projecting
-    // them as transcript failures at the Gateway boundary.
-    commitGuard?.();
+  const initializeTranscript = async (assertSourceCurrent?: () => void) => {
+    try {
+      const transcriptScope = resolveSqliteTranscriptScope({
+        ...storeScope,
+        sessionId: created.entry.sessionId,
+        sessionKey: normalizedKey,
+      });
+      await runExclusiveSqliteSessionWrite(
+        transcriptScope,
+        async () => {
+          runOpenClawAgentWriteTransaction((database) => {
+            commitGuard?.();
+            assertSourceCurrent?.();
+            ensureTranscriptHeader(database, transcriptScope, cwd);
+          }, toDatabaseOptions(transcriptScope));
+        },
+        "session.entry.create-with-transcript",
+      );
+      return undefined;
+    } catch (err) {
+      // Reassert while source custody is still held; acquisition and unwind errors
+      // must escape instead of becoming ordinary transcript failures.
+      commitGuard?.();
+      assertSourceCurrent?.();
+      return formatErrorMessage(err);
+    }
+  };
+  const transcriptError = withCommit
+    ? await withCommit(initializeTranscript)
+    : await initializeTranscript();
+  if (transcriptError !== undefined) {
     return {
       ok: false,
-      error: formatErrorMessage(err),
+      error: transcriptError,
       phase: "transcript",
     };
   }
@@ -119,6 +124,8 @@ export async function createSessionEntryWithTranscript<TError = string>(
     upserts: [{ sessionKey: normalizedKey, entry }],
     skipMaintenance: true,
     ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
+    ...(withCommit ? { withCommit } : {}),
+    ...(onLifecycleCommitted ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) } : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };
 }

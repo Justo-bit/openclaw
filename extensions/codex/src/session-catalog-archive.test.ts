@@ -426,6 +426,8 @@ describe("Codex supervision actions", () => {
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
     const processFallbackControl = {
+      hasActiveWork: () => false,
+      disconnect: async () => {},
       forRequest: () => control,
       forNode: async () => {
         throw new Error("Node source is outside this local archive fixture");

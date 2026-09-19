@@ -448,6 +448,7 @@ describe("Codex node exec-server", () => {
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
+    expect(command.hasActiveWork?.() ?? false).toBe(false);
   });
 
   it("uses prepared HOME with the actual pinned binary while keeping Codex state private", async ({

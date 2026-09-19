@@ -325,16 +325,7 @@ export async function captureGatewayServiceDefinitionBackup(
       await hooks.beforeWrite();
       return structuredClone(receipt);
     },
-    compensate: async () => {
-      // Native installers may already have restored old bytes into new inodes.
-      for (const file of receipt.files) {
-        const current = await readServiceFileState(file.sourcePath);
-        if (current?.sha256 === file.before?.sha256 && current?.mode === file.before?.mode) {
-          file.after = current;
-        }
-      }
-      await restoreGatewayServiceDefinitionBackup({ ...params, receipt });
-    },
+    compensate: () => restoreGatewayServiceDefinitionBackup({ ...params, receipt }),
   };
 }
 

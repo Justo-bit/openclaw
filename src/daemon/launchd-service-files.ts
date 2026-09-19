@@ -207,9 +207,20 @@ async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> 
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }
 
-export async function readExistingLaunchAgentPlist(plistPath: string): Promise<Buffer | null> {
+export type LaunchAgentFileSnapshot = { contents: Buffer; mode: number };
+
+export async function readExistingLaunchAgentPlist(
+  plistPath: string,
+): Promise<LaunchAgentFileSnapshot | null> {
   try {
-    return await fs.readFile(plistPath);
+    const handle = await fs.open(plistPath, "r");
+    try {
+      const contents = await handle.readFile();
+      const metadata = await handle.stat();
+      return { contents, mode: metadata.mode & 0o7777 };
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -221,14 +232,15 @@ export async function readExistingLaunchAgentPlist(plistPath: string): Promise<B
 export async function publishLaunchAgentPlist(params: {
   label: string;
   plistPath: string;
-  contents: string | Buffer;
+  contents: string | Uint8Array;
+  mode?: number;
   definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<void> {
-  const previousContents = await readExistingLaunchAgentPlist(params.plistPath);
+  const previous = await readExistingLaunchAgentPlist(params.plistPath);
   await publishServiceFile({
     filePath: params.plistPath,
     contents: params.contents,
-    mode: LAUNCH_AGENT_PLIST_MODE,
+    mode: params.mode ?? LAUNCH_AGENT_PLIST_MODE,
     definitionTransaction: params.definitionTransaction,
     beforeRename: () => assertNoSystemLaunchDaemonOwnership(params.label),
   });
@@ -240,14 +252,14 @@ export async function publishLaunchAgentPlist(params: {
       throw ownershipError;
     }
     try {
-      if (previousContents === null) {
+      if (previous === null) {
         assertGatewayServiceUpdateCurrent();
         await fs.unlink(params.plistPath);
       } else {
         await publishServiceFile({
           filePath: params.plistPath,
-          contents: previousContents,
-          mode: LAUNCH_AGENT_PLIST_MODE,
+          contents: previous.contents,
+          mode: previous.mode,
         });
       }
     } catch (rollbackError) {

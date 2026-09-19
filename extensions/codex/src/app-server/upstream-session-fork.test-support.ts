@@ -88,6 +88,8 @@ type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
 
 function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest: () => control,
     forNode: async () => {
       throw new Error("Node source is outside this local fork fixture");

@@ -27,7 +27,10 @@ import {
   captureGatewayServiceDefinitionBackup,
   restoreGatewayServiceDefinitionBackup,
 } from "./service-definition-backup.js";
-import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
+import {
+  GatewayServiceDefinitionBackupReceiptSchema,
+  publishServiceFile,
+} from "./service-stage.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { restartSystemdService } from "./systemd-lifecycle.js";
@@ -142,6 +145,7 @@ async function fixture(
   platform: "linux" | "darwin" | "win32",
   ancillary = false,
   originalDefinition?: Buffer,
+  originalMode = 0o600,
 ) {
   const root = await fs.realpath(dirs.make("service-definition-backup-"));
   const env: GatewayServiceEnv = {
@@ -200,7 +204,8 @@ async function fixture(
   for (const file of files) {
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   }
-  await fs.writeFile(sourcePath, original, { mode: 0o600 });
+  await fs.writeFile(sourcePath, original, { mode: originalMode });
+  await fs.chmod(sourcePath, originalMode);
   if (ancillary) {
     for (const file of files.slice(1)) {
       await fs.writeFile(file, "OPERATOR_SETTING=old-value\n", { mode: 0o600 });
@@ -269,10 +274,15 @@ async function fixture(
 }
 
 describe("service definition backup receipts", () => {
-  it("accepts already-restored bytes without replacing an open Windows launcher again", async () => {
+  it("accepts an acknowledged restoration without replacing an open Windows launcher again", async () => {
     const f = await fixture("win32");
     await f.install();
-    await fs.writeFile(f.sourcePath, f.original);
+    await publishServiceFile({
+      filePath: f.sourcePath,
+      contents: f.original,
+      mode: 0o600,
+      definitionTransaction: f.capture.hooks,
+    });
     const rename = fs.rename.bind(fs);
     vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (args[1] === f.sourcePath) {
@@ -285,20 +295,26 @@ describe("service definition backup receipts", () => {
     expect(f.task()).toBe(f.originalTask);
   });
 
-  it("rejects an identical operator replacement before publication acknowledgement", async () => {
-    const f = await fixture("win32");
-    const acknowledge = f.capture.hooks.fileWritten;
-    vi.spyOn(f.capture.hooks, "fileWritten").mockImplementationOnce(async (source, contents) => {
-      const replacement = `${source}.operator`;
-      await fs.copyFile(source, replacement);
-      await fs.rename(replacement, source);
-      await acknowledge(source, contents);
-    });
-    await expect(f.install()).rejects.toThrow("Could not verify service publication");
-    const edited = await fs.readFile(f.sourcePath);
-    await expect(f.capture.compensate()).rejects.toThrow("Service definition changed");
-    expect(await fs.readFile(f.sourcePath)).toEqual(edited);
-  });
+  it.each(["candidate", "original"])(
+    "rejects an operator replacement with %s bytes before acknowledgement",
+    async (bytes) => {
+      const f = await fixture("win32");
+      const acknowledge = f.capture.hooks.fileWritten;
+      vi.spyOn(f.capture.hooks, "fileWritten").mockImplementationOnce(async (source, contents) => {
+        const replacement = `${source}.operator`;
+        await fs.copyFile(source, replacement);
+        if (bytes === "original") {
+          await fs.writeFile(replacement, f.original);
+        }
+        await fs.rename(replacement, source);
+        await acknowledge(source, contents);
+      });
+      await expect(f.install()).rejects.toThrow("Could not verify service publication");
+      const edited = await fs.readFile(f.sourcePath);
+      await expect(f.capture.compensate()).rejects.toThrow("Service definition changed");
+      expect(await fs.readFile(f.sourcePath)).toEqual(edited);
+    },
+  );
 
   it.each([
     { platform: "win32", index: 0 },
@@ -764,6 +780,17 @@ describe("service definition backup receipts", () => {
       const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
       await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow();
       expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "restores full LaunchAgent permission bits from its receipt",
+    async () => {
+      const f = await fixture("darwin", false, undefined, 0o4600);
+      await f.install();
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt: await f.capture.finish() });
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      expect((await fs.stat(f.sourcePath)).mode & 0o7777).toBe(0o4600);
     },
   );
 

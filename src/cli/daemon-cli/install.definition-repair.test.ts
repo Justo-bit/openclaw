@@ -376,6 +376,7 @@ it.skipIf(process.platform === "win32")(
     const result = response();
     expect(result.ok).toBe(false);
     expect(result.error).toContain("previous definition was restored");
+    expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN:");
     expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
     expect(result.definitionBackup).toBeUndefined();
     expect(result.warnings).toContainEqual(

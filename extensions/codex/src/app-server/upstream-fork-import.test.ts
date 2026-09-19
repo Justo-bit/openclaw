@@ -193,6 +193,8 @@ describe("fork boundaries from imported Codex history", () => {
         {
           bindingStore,
           controlFactory: {
+            hasActiveWork: () => false,
+            disconnect: async () => {},
             forRequest: () => control,
             forNode: async () => {
               throw new Error("Node source is outside this local fork fixture");

@@ -52,6 +52,11 @@ on:
         required: false
         default: "26.8.2"
         type: string
+      installed_startup_cpu_diagnostic:
+        description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -81,15 +86,17 @@ jobs:
 
       - name: Validate installed startup inputs
         id: startup_input
-        if: ${{ inputs.installed_startup_package != '' }}
+        if: ${{ inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic }}
         env:
           STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
           STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
           TARGET_REF: ${{ inputs.target_ref }}
           RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrEmpty($env:STARTUP_PACKAGE)) { throw "CPU diagnostics require an installed package binding." }
           if ($env:RUN_WINDOWS_CI -eq "true") { throw "Installed startup and Windows CI are separate runs." }
           if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Installed startup requires an exact tooling target_ref." }
           if ($env:STARTUP_NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Installed startup requires an exact Node version." }
@@ -97,6 +104,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $toolingSha -cne $env:TARGET_REF) { throw "Tooling checkout differs from target_ref." }
           $selection = $env:STARTUP_PACKAGE | ConvertFrom-Json
           $paired = $selection.PSObject.Properties.Name -contains "baseline" -or $selection.PSObject.Properties.Name -contains "candidate"
+          if ($paired -and $env:CPU_DIAGNOSTIC -eq "true") { throw "CPU diagnostics require one package, not a comparison." }
           $packages = [ordered]@{ baseline = $selection }
           if ($paired) {
             if (-not $selection.baseline -or -not $selection.candidate) { throw "Comparison requires both baseline and candidate bindings." }
@@ -422,9 +430,13 @@ jobs:
 
       - name: Measure installed startup cohort
         if: ${{ inputs.installed_startup_package != '' }}
+        env:
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
         run: |
           $ErrorActionPreference = "Stop"
-          node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --installed-cohort .artifacts/windows-installed-startup/input.json --output .artifacts/windows-installed-startup/results.json 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/cohort.log
+          $diagnosticArgs = @()
+          if ($env:CPU_DIAGNOSTIC -eq "true") { $diagnosticArgs = @("--installed-cpu-diagnostic") }
+          node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --installed-cohort .artifacts/windows-installed-startup/input.json --output .artifacts/windows-installed-startup/results.json @diagnosticArgs 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/cohort.log
           if ($LASTEXITCODE -ne 0) { throw "Installed startup cohort failed; retain every sample and cleanup result." }
 
       - name: Upload installed startup evidence
@@ -435,6 +447,8 @@ jobs:
           path: |
             .artifacts/windows-installed-startup/*.json
             .artifacts/windows-installed-startup/*.log
+            .artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile
+            .artifacts/windows-installed-startup/results.json.profiles/*.json
           if-no-files-found: error
           retention-days: 7
 

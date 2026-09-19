@@ -397,6 +397,16 @@ class OpenClawShell
           this.observeDeletedSessions(sessions.state);
           this.recoverDeletedActiveSession(sessions.state);
         },
+        () => this.performUpdate(),
+      )
+      .watch(
+        () => this.context?.placementStartup,
+        (startup, notify) => startup.subscribe(notify),
+        () => {
+          if (this.context) {
+            this.recoverDeletedActiveSession(this.context.sessions.state);
+          }
+        },
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -561,9 +571,9 @@ class OpenClawShell
     this.shellNavigation.navigate(routeId, options);
   }
 
-  recoverNotFoundRoute() {
+  readonly recoverNotFoundRoute = () => {
     return this.shellNavigation.recoverNotFoundRoute();
-  }
+  };
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     this.shellNavigation.recoverDeletedActiveSession(sessionState);

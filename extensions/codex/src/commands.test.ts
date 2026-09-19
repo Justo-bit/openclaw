@@ -2259,7 +2259,7 @@ describe("codex command", () => {
     const deps = createDeps({
       readCodexStatusProbes: vi.fn(async () => ({
         models: { ok: true as const, value: { models: [] } },
-        account: { ok: true as const, value: {} },
+        account: { ok: true as const, value: { account: null, requiresOpenaiAuth: true } },
         limits: { ok: true as const, value: { rateLimits: null, rateLimitsByLimitId: null } },
         mcps: { ok: true as const, value: { data: [] } },
         skills: {
