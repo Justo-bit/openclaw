@@ -972,6 +972,8 @@ export const en: TranslationMap & {
     placementCompletionUnconfirmed:
       "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
+    placementCancelled:
+      "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
     yourDevices: "Your devices",
     autoDeviceSub: "Least-busy device",
@@ -3586,7 +3588,7 @@ export const en: TranslationMap & {
     },
     mentions: {
       menu: "Mention a person",
-      empty: "No eligible people found.",
+      empty: "No people found",
       truncated: "Keep typing to find more people.",
       online: "Online",
       offline: "Offline",
@@ -3898,6 +3900,8 @@ export const en: TranslationMap & {
       next: "Next suggested task",
       starting: "Starting…",
       dismiss: "Dismiss {title}",
+      started: "Task started",
+      startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
       adminRequired: "Administrator access is required to start suggested tasks.",
     },
     pullRequests: {
@@ -4473,6 +4477,8 @@ export const en: TranslationMap & {
       tasksEmpty: "Follow active and recently completed background tasks.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
+      portal: "Portal",
+      portalEmpty: "Preview a web application running for this task.",
       discussion: "Discussion",
       discussionEmpty: "Open the shared discussion for this session.",
       dashboard: "Dashboard",
@@ -4545,6 +4551,8 @@ export const en: TranslationMap & {
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
       preparingAttachments: "Preparing attachments…",
+      preparingAttachmentCount: "Preparing {count} attachment",
+      preparingAttachmentsCount: "Preparing {count} attachments",
       removeAttachment: "Remove attachment",
       removeNamedAttachment: "Remove {name}",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
@@ -4697,6 +4705,7 @@ export const en: TranslationMap & {
       readFailed: "Could not attach: {names}{more}",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",
+      pastedText: "Pasted text",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",

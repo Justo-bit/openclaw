@@ -196,6 +196,16 @@ export const validateNodeListParams = compile(S.NodeListParamsSchema);
 export const validateNodePluginToolsUpdateParams = compile(S.NodePluginToolsUpdateParamsSchema);
 export const validateNodeSkillsUpdateParams = compile(S.NodeSkillsUpdateParamsSchema);
 export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreateParamsSchema);
+export const validateEnvironmentsSessionCreateParams = compile(
+  S.EnvironmentsSessionCreateParamsSchema,
+);
+export const validateEnvironmentsSessionStatusParams = compile(
+  S.EnvironmentsSessionStatusParamsSchema,
+);
+export const validateEnvironmentsSessionDestroyParams = compile(
+  S.EnvironmentsSessionDestroyParamsSchema,
+);
+export const validateEnvironmentsSessionExecParams = compile(S.EnvironmentsSessionExecParamsSchema);
 export const validateEnvironmentsPrepareParams = compile(S.EnvironmentsPrepareParamsSchema);
 export const validateEnvironmentsPrepareResult = compile(S.EnvironmentsPrepareResultSchema);
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);

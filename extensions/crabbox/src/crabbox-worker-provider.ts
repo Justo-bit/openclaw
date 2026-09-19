@@ -37,6 +37,7 @@ import {
 } from "./crabbox-worker-profile.js";
 import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
 import {
+  createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
   inspectWithContext,
   isNonRunnableState,
@@ -260,8 +261,7 @@ export function createCrabboxWorkerProvider(
     operationId: string,
     options: Parameters<WorkerProvider["provision"]>[2],
   ) => {
-    const signal = options?.signal;
-    signal?.throwIfAborted();
+    const { signal, assertCurrent } = createCrabboxProvisionAuthority(options);
     const executionMode: unknown = options?.executionMode;
     if (
       executionMode !== undefined &&
@@ -313,7 +313,7 @@ export function createCrabboxWorkerProvider(
     }
 
     return async () => {
-      signal?.throwIfAborted();
+      assertCurrent();
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
       const priorAllocation = project?.preparation && (await warmImages.lookupLease(leaseId));
@@ -328,7 +328,7 @@ export function createCrabboxWorkerProvider(
           ? { projectKey: project.key, projectLabel: project.label, projectRoot: project.root }
           : {}),
         ...(project?.preparation ? { preparation: project.preparation } : {}),
-        ...(project ? { assertCurrent: project.assertCurrent } : {}),
+        assertCurrent,
         signal: preparationSignal,
         slug: operationSlug(operationId),
         timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
@@ -424,10 +424,10 @@ export function createCrabboxWorkerProvider(
             signal: preparationSignal,
             timeoutMs: () => remainingProvisionTimeout(setupDeadline, CRABBOX_SETUP_TIMEOUT_MS),
           });
-          project.assertCurrent();
+          assertCurrent();
           await warmImages.markPrepared(leaseId, project.baseCommit, () => {
             preparationSignal?.throwIfAborted();
-            project.assertCurrent();
+            assertCurrent();
           });
           captured = await warmImages.capture(
             {
@@ -435,7 +435,7 @@ export function createCrabboxWorkerProvider(
               id: leaseId,
               profile: parsed,
               signal: preparationSignal,
-              assertCurrent: project.assertCurrent,
+              assertCurrent,
               projectCaptureRequired:
                 preparedProject?.captureRequired || preparedReplay ? true : undefined,
               ...(allocationChoice.kind === "checkpoint"
@@ -448,7 +448,7 @@ export function createCrabboxWorkerProvider(
               }
               const runtime = await options.prepareNodeRuntime();
               signal?.throwIfAborted();
-              project.assertCurrent();
+              assertCurrent();
               const setup = createCrabboxNodeRuntimeSetup({
                 nodeBootstrap: runtime.nodeBootstrap,
                 workerBundle: runtime.workerBundle,
@@ -476,7 +476,7 @@ export function createCrabboxWorkerProvider(
         } catch (error) {
           // The runtime grant has a separate abort signal; revalidate the project owner.
           signal?.throwIfAborted();
-          project.assertCurrent();
+          assertCurrent();
           if (preparationFailed) {
             throw error;
           }

@@ -489,7 +489,14 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi
-          if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]; then
+          if [[ "$performance_blocking" != "true" && -n "${STABLE_SOAK_WAIVER//[[:space:]]/}" ]]; then
+            if ! jq -e '.childRuns.productPerformance.conclusion == "success"' "$manifest" >/dev/null; then
+              echo "Waiving blocking product performance requires a successful product performance child run." >&2
+              exit 1
+            fi
+            echo "::warning::Blocking product performance waived by operator stable soak waiver; advisory performance child passed."
+            echo "stable_soak_waiver=$(jq -cn --arg reason "$STABLE_SOAK_WAIVER" '$reason')" >> "$GITHUB_OUTPUT"
+          elif [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi
@@ -1469,11 +1476,12 @@ jobs:
           retention-days: 30
 
       - name: Prepare stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           RELEASE_PROFILE: ${{ needs.resolve_release_target.outputs.release_profile }}
+          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') }}
           VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
@@ -1506,6 +1514,7 @@ jobs:
             targetSha: process.env.TARGET_SHA,
             publishTag: "latest",
             releaseProfile: process.env.RELEASE_PROFILE,
+            stableSoakWaiver: process.env.STABLE_SOAK_WAIVER,
             validationRunId: process.env.VALIDATION_RUN_ID,
             validationRunAttempt: Number(process.env.VALIDATION_RUN_ATTEMPT),
             packages: packages.map((plugin) => plugin.packageName),
@@ -1514,13 +1523,13 @@ jobs:
           NODE
 
       - name: Attest stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/npm-stable-bootstrap-approval/approval.json
 
       - name: Upload stable npm bootstrap approval
-        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full') }}
+        if: ${{ inputs.npm_dist_tag == 'latest' && inputs.release_evidence_mode == 'full-release-validation' && (needs.resolve_release_target.outputs.release_profile == 'stable' || needs.resolve_release_target.outputs.release_profile == 'full' || (needs.resolve_release_target.outputs.release_profile == 'beta' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') && fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') != '')) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: npm-stable-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
