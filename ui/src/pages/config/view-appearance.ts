@@ -292,7 +292,7 @@ export function renderAppearanceSection(
     (preset) => preset.hex !== undefined && preset.hex === props.accent,
   );
   const accentSelectionStatus = defaultAccentSelected
-    ? t("configView.appearance.usingInheritedAccent")
+    ? null
     : t("configView.appearance.usingAccent", {
         value: selectedAccentPreset
           ? t(selectedAccentPreset.labelKey)
@@ -539,7 +539,13 @@ export function renderAppearanceSection(
           </div>
         </div>
         <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
-          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          ${
+            accentSelectionStatus
+              ? html`<span class="settings-accent-status__selection"
+                  >${accentSelectionStatus}</span
+                >`
+              : nothing
+          }
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>
       </section>
