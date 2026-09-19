@@ -12,6 +12,25 @@ const fixture = (mode = "direct", fault = "none") =>
   createNpmPublicationReadbackFixture(tempDirs.make("npm-parent-readback-"), mode, fault);
 
 describe("parent plugin npm publication readback", () => {
+  it("recovers a historical failed publisher only through its successful receipt step and exact bytes", async () => {
+    const value = await fixture("replanned-failed");
+    await expect(
+      createPluginNpmPublicationReadback(value.options).then((parent) =>
+        parent.verify(packageName, version, "beta"),
+      ),
+    ).resolves.toBeUndefined();
+  });
+  it.each(["missing-upload-step", "failed-upload-step", "conflicting-bytes"])(
+    "keeps replanned failed publishers fail-closed for %s",
+    async (fault) => {
+      const value = await fixture("replanned-failed", fault);
+      await expect(
+        createPluginNpmPublicationReadback(value.options).then((parent) =>
+          parent.verify(packageName, version, "beta"),
+        ),
+      ).rejects.toThrow(fault === "conflicting-bytes" ? "qualified artifact" : "producer step");
+    },
+  );
   it.each(["missing-tarball", "conflicting-bytes", "archive-identity"])(
     "does not let a fresh child skip readback after an earlier deferred publication: %s",
     async (fault) => {

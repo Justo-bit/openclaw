@@ -34,9 +34,10 @@ export async function createNpmPublicationReadbackFixture(
 ) {
   const runId = mode === "prior-deferred" ? 201 : 200;
   const runAttempt = 2;
-  const noPublication = fault === "no-publish" || mode === "prior-deferred";
-  const publisherAttempt = mode === "retained-publisher" ? 1 : 2;
-  const plannerAttempt = mode === "retained-plan" ? 1 : publisherAttempt;
+  const replanned = mode === "replanned-failed";
+  const noPublication = fault === "no-publish" || mode === "prior-deferred" || replanned;
+  const publisherAttempt = mode === "retained-publisher" || replanned ? 1 : 2;
+  const plannerAttempt = mode === "retained-plan" ? 1 : replanned ? 2 : publisherAttempt;
   const producerId = mode === "prepared" ? 100 : runId;
   const producerAttempt =
     mode === "prepared" ? 3 : mode === "retained-qualification" ? 1 : publisherAttempt;
@@ -150,7 +151,19 @@ export async function createNpmPublicationReadbackFixture(
     conclusion,
   });
   const producerJobs = [job(1, preflightName, producerAttempt)];
-  const publisher = job(2, publisherName, publisherAttempt);
+  const publisher = {
+    ...job(2, publisherName, publisherAttempt, replanned ? "failure" : "success"),
+    steps:
+      fault === "missing-upload-step"
+        ? []
+        : [
+            {
+              name: "Upload consumed npm qualification",
+              status: "completed",
+              conclusion: fault === "failed-upload-step" ? "failure" : "success",
+            },
+          ],
+  };
   const planner = job(3, "preview_plugins_npm", plannerAttempt);
   const allJobs = [...producerJobs, publisher, planner];
   const metadata = (id: number, name: string, data: Buffer, producer: number) => ({
@@ -251,7 +264,7 @@ export async function createNpmPublicationReadbackFixture(
       ? []
       : noPublication
         ? [
-            planner,
+            ...(replanned ? allJobs : [planner]),
             job(4, "Publish plugin npm package (${{ matrix.plugin.packageName }})", 1, "skipped"),
           ]
         : allJobs;

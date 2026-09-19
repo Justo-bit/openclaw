@@ -45,7 +45,7 @@ export async function createPluginNpmPublicationReadback(options) {
   const inventory = (endpoint, key) => {
     const fields =
       key === "jobs"
-        ? "id,name,run_id,run_attempt,head_sha,status,conclusion"
+        ? "id,name,run_id,run_attempt,head_sha,status,conclusion,steps"
         : "id,name,digest,size_in_bytes,expired,expires_at,workflow_run";
     const raw = runGh([
       "api",
@@ -113,12 +113,6 @@ export async function createPluginNpmPublicationReadback(options) {
     if (!previous || previous.run_attempt < job.run_attempt) {
       publishers.set(job.name, job);
     }
-  }
-  for (const job of publishers.values()) {
-    requireValue(
-      job.status === "completed" && job.conclusion === "success",
-      "Plugin npm publisher job did not complete successfully.",
-    );
   }
   const planners = jobs.filter((job) => job.name === "preview_plugins_npm");
   const planner = planners.toSorted((left, right) => right.run_attempt - left.run_attempt)[0];
@@ -194,6 +188,9 @@ export async function createPluginNpmPublicationReadback(options) {
         job.run_attempt === run.run_attempt ? "completed-success" : "same-run-producer-success",
       consumerRunAttempt: run.run_attempt,
       producerJobName: job.name,
+      ...(job.conclusion === "failure"
+        ? { producerStepName: "Upload consumed npm qualification" }
+        : {}),
       artifactId: metadata.id,
       artifactName: name,
       artifactDigest: metadata.digest,
@@ -240,6 +237,16 @@ export async function createPluginNpmPublicationReadback(options) {
     "Plugin npm planned candidate has no successful publisher job.",
   );
   const skipped = new Set(plan.skippedPublished.map((entry) => entry.packageName));
+  for (const job of publishers.values()) {
+    const skippedAfterFailure =
+      job.conclusion === "failure" &&
+      job.run_attempt < planner.run_attempt &&
+      skipped.has(byJob.get(job.name).packageName);
+    requireValue(
+      job.status === "completed" && (job.conclusion === "success" || skippedAfterFailure),
+      "Plugin npm publisher job did not complete successfully or precede its verified skipped plan.",
+    );
+  }
   const evidence = [];
   return {
     evidence,
