@@ -1,7 +1,7 @@
 // Plugin state runtime tests cover runtime-backed plugin state storage.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveStateDir } from "../config/paths.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
@@ -91,14 +91,8 @@ describe("plugin runtime state proxy", () => {
       const api = registry.createApi(record, { config: {} });
 
       expect(api.runtime.state.resolveStateDir()).toBe(state.stateDir);
-      const native = requireNodeSqlite();
-      const sql = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      const observation = observeHostDataSql(state.env);
+      const sql = observation.calls;
       try {
         const store = api.runtime.state.openKeyedStore<{ plugin: string }>({
           namespace: "runtime",
@@ -139,7 +133,7 @@ describe("plugin runtime state proxy", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
 
       const syncStore = api.runtime.state.openSyncKeyedStore<{ plugin: string }>({

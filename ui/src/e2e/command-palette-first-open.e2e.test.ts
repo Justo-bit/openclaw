@@ -60,71 +60,104 @@ suite.define(() => {
     });
   });
 
-  it("preserves continuous typing across release and restores the untouched foreground draft", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:cold-continuous";
-      await installMockGateway(page, { sessionKey });
-      const paletteModule = await holdModuleResponse(
-        page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
-      );
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-        const foregroundDraft = "Foreground text must remain unchanged";
-        await composer.fill(foregroundDraft);
-        await composer.evaluate((element: HTMLTextAreaElement) =>
-          element.setSelectionRange(3, 12, "backward"),
+  it.each([1, 8])(
+    "preserves continuous typing across release and restores the untouched foreground draft (%ix CPU)",
+    async (cpuRate) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:cold-continuous";
+        await installMockGateway(page, { sessionKey });
+        const paletteModule = await holdModuleResponse(
+          page,
+          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
         );
-        await page.keyboard.press("ControlOrMeta+K");
-        const input = page.locator(".cmd-palette__input");
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        const typed =
-          "Continuous cold typing must cross the module boundary without a missing character.";
-        const typing = page.keyboard.type(typed, { delay: 4 });
-        await expect.poll(() => input.inputValue()).not.toBe("");
-        paletteModule.release();
-        await typing;
-        const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
-        await loaded.waitFor({ state: "visible" });
-        expect(await loaded.inputValue()).toBe(typed);
-        expect(
-          await loaded.evaluate((element: HTMLTextAreaElement) => ({
-            focused: document.activeElement === element,
-            start: element.selectionStart,
-            end: element.selectionEnd,
-          })),
-        ).toEqual({ focused: true, start: typed.length, end: typed.length });
-        expect(await composer.inputValue()).toBe(foregroundDraft);
-        await page.keyboard.press("Escape");
-        await expect
-          .poll(() => composer.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        expect(
-          await composer.evaluate((element: HTMLTextAreaElement) => ({
-            start: element.selectionStart,
-            end: element.selectionEnd,
-            direction: element.selectionDirection,
-          })),
-        ).toEqual({ start: 3, end: 12, direction: "backward" });
-        expect(await composer.inputValue()).toBe(foregroundDraft);
-        expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        expect(
-          await page.evaluate(() =>
-            [localStorage, sessionStorage].some((storage) =>
-              Object.values(storage).some(
-                (value) => typeof value === "string" && value.includes("Continuous cold typing"),
+        try {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+          const foregroundDraft = "Foreground text must remain unchanged";
+          await composer.fill(foregroundDraft);
+          await composer.evaluate((element: HTMLTextAreaElement) =>
+            element.setSelectionRange(3, 12, "backward"),
+          );
+          await page.keyboard.press("ControlOrMeta+K");
+          const input = page.locator(".cmd-palette__input");
+          await expect
+            .poll(() => input.evaluate((element) => document.activeElement === element))
+            .toBe(true);
+          const cdp = await page.context().newCDPSession(page);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate });
+          const keyTargets = await page.evaluateHandle(() => {
+            const escaped: Array<{ key: string; target: string }> = [];
+            const capture = (event: KeyboardEvent) => {
+              const target = event.composedPath()[0];
+              if (
+                event.key.length === 1 &&
+                !(
+                  target instanceof HTMLTextAreaElement &&
+                  target.classList.contains("cmd-palette__input")
+                )
+              ) {
+                escaped.push({
+                  key: event.key,
+                  target: target instanceof Element ? target.tagName : "unknown",
+                });
+              }
+            };
+            document.addEventListener("keydown", capture, true);
+            return { escaped, stop: () => document.removeEventListener("keydown", capture, true) };
+          });
+          const typed =
+            "Continuous cold typing must cross the module boundary without a missing character.";
+          const typing = page.keyboard.type(typed, { delay: 4 });
+          await expect.poll(() => input.inputValue()).not.toBe("");
+          paletteModule.release();
+          await typing;
+          const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+          await loaded.waitFor({ state: "visible" });
+          expect(
+            await keyTargets.evaluate(({ escaped, stop }) => {
+              stop();
+              return escaped;
+            }),
+          ).toEqual([]);
+          await keyTargets.dispose();
+          expect(await loaded.inputValue()).toBe(typed);
+          expect(
+            await loaded.evaluate((element: HTMLTextAreaElement) => ({
+              focused: document.activeElement === element,
+              start: element.selectionStart,
+              end: element.selectionEnd,
+            })),
+          ).toEqual({ focused: true, start: typed.length, end: typed.length });
+          expect(await composer.inputValue()).toBe(foregroundDraft);
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+          await page.keyboard.press("Escape");
+          await expect
+            .poll(() => composer.evaluate((element) => document.activeElement === element))
+            .toBe(true);
+          expect(
+            await composer.evaluate((element: HTMLTextAreaElement) => ({
+              start: element.selectionStart,
+              end: element.selectionEnd,
+              direction: element.selectionDirection,
+            })),
+          ).toEqual({ start: 3, end: 12, direction: "backward" });
+          expect(await composer.inputValue()).toBe(foregroundDraft);
+          expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          expect(
+            await page.evaluate(() =>
+              [localStorage, sessionStorage].some((storage) =>
+                Object.values(storage).some(
+                  (value) => typeof value === "string" && value.includes("Continuous cold typing"),
+                ),
               ),
             ),
-          ),
-        ).toBe(false);
-      } finally {
-        paletteModule.release();
-      }
-    });
-  });
+          ).toBe(false);
+        } finally {
+          paletteModule.release();
+        }
+      });
+    },
+  );
 
   // Synthetic events verify DOM custody/ordering, not a native IME candidate window.
   it("does not replace an actively composing cold input when the module arrives", async () => {

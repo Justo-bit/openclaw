@@ -1748,7 +1748,6 @@
   "ui/src/pages/chat/chat-queue-reconnect.ts",
   "ui/src/pages/chat/chat-queue.ts",
   "ui/src/pages/chat/chat-realtime.ts",
-  "ui/src/pages/chat/chat-reset-delivery.ts",
   "ui/src/pages/chat/chat-run-startup.ts",
   "ui/src/pages/chat/chat-scroll-input.ts",
   "ui/src/pages/chat/chat-send-ack.ts",

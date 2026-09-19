@@ -141,7 +141,6 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
     <div class="cmd-palette__entry">
       <div class="cmd-palette__input-scroll">
         <textarea
-          ${ref(props.onInputRef)}
           ${paletteInputLayout(props.value)}
           autofocus
           rows="1"
@@ -156,6 +155,7 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
           .value=${props.value}
           ?disabled=${props.disabled}
           ?readonly=${props.readOnly}
+          ${ref(props.onInputRef)}
           @input=${(event: Event) => {
             if (event.currentTarget instanceof HTMLTextAreaElement) {
               props.onValueChange(event.currentTarget.value);

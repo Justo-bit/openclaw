@@ -83,7 +83,7 @@ describe("cold command palette input custody", () => {
     expect(input.disabled).toBe(false);
     type(input, "early draft");
     const take = state.captureHandoff();
-    // Input after module readiness still belongs to the live field until render.
+    // Input after module readiness still belongs to the live field until focus handoff.
     type(input, "early draft continued");
     input.setSelectionRange(6, 11, "backward");
     const snapshot = take();
@@ -123,6 +123,22 @@ describe("cold command palette input custody", () => {
         selectionDirection: "backward",
       }),
     );
+  });
+
+  it("restores a remounted loader's selection after binding its retained value", () => {
+    const { state, input, close } = mountLoader();
+    type(input, "retain this selection");
+    input.setSelectionRange(3, 10, "backward");
+    render(nothing, container);
+    render(renderCommandPaletteLoading(state, close), container);
+    const replacement = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    expect(replacement).not.toBe(input);
+    expect(replacement.value).toBe("retain this selection");
+    expect([
+      replacement.selectionStart,
+      replacement.selectionEnd,
+      replacement.selectionDirection,
+    ]).toEqual([3, 10, "backward"]);
   });
 
   it.each(["composing", "commit-pending"] as const)(

@@ -61,8 +61,8 @@ export class ShellCommandPaletteOwner {
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
     if (palette) {
       this.loading.handoff(() => {
-        // Snapshot in the replacement render: keystrokes can still arrive while
-        // the full palette queues its update. Recheck ownership at that boundary.
+        // The loader keeps keyboard custody until the replacement accepts focus.
+        // Read its final value and recheck ownership at that boundary.
         if (this.loading.active) {
           const take = this.loading.captureHandoff();
           palette.openPalette(() => {
@@ -194,7 +194,7 @@ export class CommandPaletteLoadingState {
     if (!this.active || !this.#input) {
       return;
     }
-    // The live field owns text and selection until the render-time handoff.
+    // The live field owns text and selection until replacement focus accepts it.
     this.#draft = this.#snapshot();
     this.#host.requestUpdate();
   };
@@ -215,19 +215,11 @@ export class CommandPaletteLoadingState {
     element
       .closest<OpenClawModalDialog>("openclaw-modal-dialog")
       ?.setReturnFocusTarget(this.#returnFocus ?? null);
-    requestAnimationFrame(() => {
-      if (this.#input !== element || !element.isConnected) {
-        return;
-      }
-      element.focus({ preventScroll: true });
-      if (draft && element.value === draft.value && !this.#composing) {
-        element.setSelectionRange(
-          draft.selectionStart,
-          draft.selectionEnd,
-          draft.selectionDirection,
-        );
-      }
-    });
+    // The shared renderer binds value before this ref; the modal alone owns
+    // autofocus. Restoring selection here cannot steal a later picker focus.
+    if (draft && !this.#composing) {
+      element.setSelectionRange(draft.selectionStart, draft.selectionEnd, draft.selectionDirection);
+    }
   };
 
   readonly handleCompositionStart = (): void => {
@@ -250,7 +242,7 @@ export class CommandPaletteLoadingState {
       cancelAnimationFrame(this.#compositionFrame);
     }
     // compositionend can precede the final input event. Keep the live field for
-    // that commit, and read it only at the synchronous render handoff below.
+    // that commit, and read it only when replacement focus accepts the handoff.
     this.#compositionFrame = requestAnimationFrame(() => {
       this.#compositionFrame = undefined;
       const handoff = this.#pendingHandoff;

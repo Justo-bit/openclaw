@@ -16,7 +16,7 @@ export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   submitRequested?: true;
 };
 
-/** Read the live cold input in the replacement render; undefined means its owner retired. */
+/** Read the live cold input when replacement focus is accepted; undefined means retired. */
 export type CommandPaletteInputHandoff = () => CommandPaletteOpenInput | undefined;
 
 export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";

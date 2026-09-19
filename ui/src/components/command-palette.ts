@@ -63,7 +63,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
-  private focusInputOnUpdate = false;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   @state() private filter: PaletteFilter = "all";
   private readonly draft = new PaletteSessionDraft(
@@ -150,6 +149,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = undefined;
     this.open = false;
     this.activeId = null;
@@ -218,41 +218,50 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private readonly handleInputRef = (element: Element | undefined) => {
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
-    this.focusInputOnUpdate = this.inputElement !== undefined;
+    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+  };
+
+  private readonly adoptInitialInput = () => {
+    const element = this.inputElement;
+    if (!this.open || !element?.isConnected || document.activeElement !== element) {
+      return;
+    }
+    if (this.takeInitialInput) {
+      const take = this.takeInitialInput;
+      this.takeInitialInput = undefined;
+      const input = take();
+      if (!input) {
+        this.closePalette();
+        return;
+      }
+      this.initialInput = input;
+      this.draft.setMessage(input.value);
+      // The dialog has accepted focus. Publish the captured value synchronously
+      // before the next key, then let the normal binding retain that same value.
+      element.value = input.value;
+    }
+    const input = this.initialInput;
+    if (!input) {
+      return;
+    }
+    this.initialInput = undefined;
+    if (input.returnFocus !== undefined) {
+      element
+        .closest<OpenClawModalDialog>("openclaw-modal-dialog")
+        ?.setReturnFocusTarget(input.returnFocus);
+    }
+    element.setSelectionRange(input.selectionStart, input.selectionEnd, input.selectionDirection);
+    if (input.submitRequested) {
+      void this.draft.submit();
+    }
   };
 
   protected override updated() {
-    const element = this.inputElement;
-    if (!this.open || !element?.isConnected) {
-      return;
-    }
-    // Lit ref runs before the value binding is committed. Finish focus/caret
-    // synchronously after render, before the next keyboard task, not in a frame.
-    const initialInput = this.initialInput;
-    const focusInput = this.focusInputOnUpdate;
-    this.focusInputOnUpdate = false;
-    if (initialInput) {
-      this.initialInput = undefined;
-      if (initialInput.returnFocus !== undefined) {
-        element
-          .closest<OpenClawModalDialog>("openclaw-modal-dialog")
-          ?.setReturnFocusTarget(initialInput.returnFocus);
-      }
-      element.focus({ preventScroll: true });
-      element.setSelectionRange(
-        initialInput.selectionStart,
-        initialInput.selectionEnd,
-        initialInput.selectionDirection,
-      );
-    } else if (focusInput) {
-      element.focus({ preventScroll: true });
-    }
-    if (initialInput?.submitRequested) {
-      // Deliver the captured gesture once, after text/focus handoff. The normal
-      // creation owner still admits it or displays its current blocking reason.
-      void this.draft.submit();
-    }
+    // ModalDialog owns autofocus. Focusing its not-yet-open slotted field here
+    // can retire the loader before the browser has admitted the new modal.
+    this.adoptInitialInput();
   }
 
   private clearSessionSearch() {
@@ -491,18 +500,6 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   };
 
   override render() {
-    if (this.takeInitialInput) {
-      const take = this.takeInitialInput;
-      this.takeInitialInput = undefined;
-      const input = take();
-      if (!input) {
-        // The loader was closed or replaced before this queued render.
-        this.closePalette();
-      } else {
-        this.initialInput = input;
-        this.draft.setMessage(input.value);
-      }
-    }
     return renderCommandPalette({
       basePath: this.context?.basePath ?? "",
       open: this.open,

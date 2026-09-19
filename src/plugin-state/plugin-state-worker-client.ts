@@ -48,8 +48,11 @@ async function execute<T>(
       assertActive?.();
       return result === undefined ? missing() : result;
     }
+    // Writable operations, including comparison observations, must share the
+    // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       assertCurrent: assertActive,
+      requireStateLifecycle: true,
     });
     assertActive?.();
     return result;

@@ -5877,6 +5877,25 @@ td.data-table-key-col {
   flex: 0 0 auto;
 }
 
+.session-row-workspace {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.session-row-workspace[data-workspace-kind="worktree"] {
+  border-color: color-mix(in srgb, var(--ok) 25%, var(--border));
+  background: color-mix(in srgb, var(--ok) 8%, var(--bg));
+  color: var(--ok);
+}
+
 .session-row-badge {
   display: inline-flex;
   align-items: center;
