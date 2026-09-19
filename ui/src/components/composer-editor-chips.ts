@@ -6,7 +6,7 @@ import {
   StateField,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
-import { render, type TemplateResult } from "lit";
+import { nothing, render, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 
 /** Ranges refer to the unchanged plain-text document, including the original token syntax. */
@@ -63,6 +63,10 @@ class ChipWidget extends WidgetType {
   }
   override ignoreEvent() {
     return false;
+  }
+  override destroy(dom: HTMLElement) {
+    // CodeMirror removes DOM directly; disconnect Lit directives retaining avatar resources.
+    if (this.chip.icon) render(nothing, dom.querySelector(".composer-chip__icon")!);
   }
 }
 

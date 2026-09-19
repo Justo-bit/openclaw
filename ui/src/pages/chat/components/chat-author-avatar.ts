@@ -12,6 +12,7 @@ import {
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../../../lib/identity-avatar.ts";
+import "../../../styles/chat/author-avatar.css";
 
 function renderInitialsAvatar(
   avatar: Extract<ResolvedIdentityAvatar, { kind: "initials" }>,

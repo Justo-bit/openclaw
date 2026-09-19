@@ -74,6 +74,20 @@ suite.define(() => {
             });
           const pendingSize = await size();
           expect(pendingSize).toEqual({ width: 16, height: 16 });
+          const chipAvatar = textarea.locator(".composer-chip--mention .chat-author-avatar");
+          const chipInitials = chipAvatar.locator(".chat-author-avatar__initials");
+          await expect.poll(() => chipInitials.isVisible()).toBe(true);
+          expect((await chipInitials.textContent())?.trim()).toBe("CV");
+          const chipSize = () =>
+            chipAvatar.evaluate((element) => {
+              const { width, height } = element.getBoundingClientRect();
+              return { width, height };
+            });
+          const pendingChipSize = await chipSize();
+          expect(pendingChipSize.width).toBeGreaterThan(0);
+          expect(pendingChipSize.height).toBe(pendingChipSize.width);
+          await textarea.pressSequentially("please review");
+          await expect.poll(() => chipInitials.isVisible()).toBe(true);
           releasePhoto();
           await expect
             .poll(() =>
@@ -81,7 +95,14 @@ suite.define(() => {
             )
             .toBeGreaterThan(0);
           await expect.poll(() => initials.isVisible()).toBe(false);
+          await expect
+            .poll(() =>
+              chipAvatar.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth),
+            )
+            .toBeGreaterThan(0);
+          await expect.poll(() => chipInitials.isVisible()).toBe(false);
           expect(await size()).toEqual(pendingSize);
+          expect(await chipSize()).toEqual(pendingChipSize);
           expect(requests).toEqual([avatarUrl]);
         } finally {
           releasePhoto();

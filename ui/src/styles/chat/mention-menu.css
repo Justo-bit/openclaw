@@ -8,19 +8,6 @@
   margin: 8px;
 }
 
-:is(.mention-menu, .composer-context-strip__person)
-  .chat-author-avatar.is-pending
-  .chat-author-avatar__image {
-  display: none;
-}
-
-:is(.mention-menu, .composer-context-strip__person)
-  .chat-author-avatar.is-pending
-  .chat-author-avatar__fallback {
-  display: inline-flex;
-  visibility: visible;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .mention-menu__loading .skeleton::after {
     animation: none;

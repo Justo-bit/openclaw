@@ -302,6 +302,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/composer-context-strip.css",
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
+    "ui/src/styles/chat/author-avatar.css",
     "ui/src/styles/chat/tool-cards.css",
     "ui/src/styles/chat/working-indicator.css",
     "ui/src/styles/chat/question-card.css",

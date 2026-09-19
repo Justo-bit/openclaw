@@ -6,7 +6,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import type { ComposerEditor } from "../../../components/composer-editor.ts";
+import type { ComposerChipContext, ComposerEditor } from "../../../components/composer-editor.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
@@ -29,6 +29,7 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
+import { resolveComposerMentionChips } from "./chat-composer-mention-chips.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
@@ -492,7 +493,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-input-row">
                 <div class="agent-chat__composer-combobox">
                   <openclaw-composer-editor
-                    .resolveChips=${resolveComposerSkillChips}
+                    .resolveChips=${(value: string, context: ComposerChipContext) => [
+                      ...resolveComposerSkillChips(value, context),
+                      ...resolveComposerMentionChips(
+                        value,
+                        props.getDraft?.() ?? props.draft,
+                        mentionMenuHost.getMentions(),
+                        state.mentionMenu.selectedAvatarUrls,
+                      ),
+                    ]}
                     ${ref(state.textareaRef ?? undefined)}
                     .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                     dir=${draftDirection}

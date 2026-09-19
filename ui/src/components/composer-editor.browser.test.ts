@@ -1,4 +1,7 @@
 import { EditorView } from "@codemirror/view";
+import { html } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
+import { directive } from "lit/directive.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposerEditor, type ComposerChip } from "./composer-editor.ts";
 
@@ -569,5 +572,36 @@ describe.runIf("__vitest_browser__" in globalThis)("composer inline editor", () 
     expect(element.value).toBe("Use @alex now");
     expect(element.selectionStart).toBe(4);
     expect(element.selectionEnd).toBe(9);
+  });
+
+  it("disconnects rendered chip resources on deletion and editor teardown", () => {
+    const retained = new Map<AsyncDirective, string>();
+    class ResourceIcon extends AsyncDirective {
+      override render(label: string) {
+        retained.set(this, label);
+        return label;
+      }
+      override disconnected() {
+        retained.delete(this);
+      }
+    }
+    const resourceIcon = directive(ResourceIcon);
+    const people = ["First", "Second"].map((label) => ({
+      label,
+      token: `@${label}`,
+      icon: html`${resourceIcon(label)}`,
+    }));
+    const element = editor("@First @Second");
+    element.resolveChips = (value) =>
+      people.flatMap(({ label, token, icon }) => {
+        const start = value.indexOf(token);
+        return start < 0
+          ? []
+          : [{ kind: "mention", start, end: start + token.length, label, icon }];
+      });
+    element.value = "@Second";
+    expect([...retained.values()]).toEqual(["Second"]);
+    element.remove();
+    expect(retained.size).toBe(0);
   });
 });

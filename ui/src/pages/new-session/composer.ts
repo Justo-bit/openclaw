@@ -3,7 +3,7 @@ import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
-import { ComposerEditor } from "../../components/composer-editor.ts";
+import { ComposerEditor, type ComposerChipContext } from "../../components/composer-editor.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -17,6 +17,7 @@ import {
 } from "../chat/components/chat-attachments.ts";
 import "../../components/tooltip.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import { resolveComposerMentionChips } from "../chat/components/chat-composer-mention-chips.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
@@ -377,7 +378,19 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 : nothing
             }
             <openclaw-composer-editor
-              .resolveChips=${options.nativeTerminal ? undefined : resolveComposerSkillChips}
+              .resolveChips=${
+                options.nativeTerminal
+                  ? undefined
+                  : (value: string, context: ComposerChipContext) => [
+                      ...resolveComposerSkillChips(value, context),
+                      ...resolveComposerMentionChips(
+                        value,
+                        options.message,
+                        mentionMenuHost.getMentions(),
+                        mentionMenu.selectedAvatarUrls,
+                      ),
+                    ]
+              }
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
               ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
