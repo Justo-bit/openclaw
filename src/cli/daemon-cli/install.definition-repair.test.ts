@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
+import * as installPlans from "../../commands/daemon-install-helpers.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   type GatewayServiceDefinitionBackupReceipt,
@@ -202,7 +202,7 @@ async function fixture(
     ],
     environment: { OPERATOR_SETTING: "retained", NODE_OPTIONS: "--max-old-space-size=4096" },
   };
-  const plan = await buildGatewayInstallPlan({
+  const plan = await installPlans.buildGatewayInstallPlan({
     env: process.env,
     port: 19137,
     runtime: "node",
@@ -350,10 +350,21 @@ it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as c
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "preserves the previous definition and records recovery when a temporary unit write runs out of space",
-  async () => {
+it.skipIf(process.platform === "win32").each([false, true])(
+  "preserves the previous definition when unit publication runs out of space (new environment file=%s)",
+  async (fileBacked) => {
     const f = await fixture();
+    const envFile = path.join(process.env.OPENCLAW_STATE_DIR!, "gateway.systemd.env");
+    if (fileBacked) {
+      const buildPlan = installPlans.buildGatewayInstallPlan;
+      vi.spyOn(installPlans, "buildGatewayInstallPlan").mockImplementation(async (...args) => {
+        const plan = await buildPlan(...args);
+        return {
+          ...plan,
+          environmentValueSources: { ...plan.environmentValueSources, OPERATOR_SETTING: "file" },
+        };
+      });
+    }
     const writeFile = fs.writeFile.bind(fs);
     let injected = false;
     vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
@@ -366,6 +377,9 @@ it.skipIf(process.platform === "win32")(
         contents.includes("KillMode=mixed")
       ) {
         injected = true;
+        if (fileBacked) {
+          expect(await fs.readFile(envFile, "utf8")).toContain("OPERATOR_SETTING=");
+        }
         await writeFile(file, contents.slice(0, 32), options);
         throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
       }
@@ -385,6 +399,10 @@ it.skipIf(process.platform === "win32")(
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
     const receipt = await expectDefinitionBackups(f);
     expect(receipt.files[0]?.after).toEqual(receipt.files[0]?.before);
+    if (fileBacked) {
+      expect(receipt.files[1]).toMatchObject({ before: null, after: null });
+      await expect(fs.stat(envFile)).rejects.toMatchObject({ code: "ENOENT" });
+    }
     expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
     expect(getUpdateRun(f.runId)?.steps).toContainEqual(
       expect.objectContaining({

@@ -385,6 +385,20 @@ export async function withSystemdDefinitionMutation<T>(
         await fs.unlink(temporary).catch(() => undefined);
       }
     };
+    const remove = async (file: string) => {
+      if (file !== generated) {
+        throw new Error("Only a generated environment file can be retired during restoration.");
+      }
+      await options?.definitionTransaction?.beforeWrite();
+      await refresh(true);
+      await options?.definitionTransaction?.filePrepared(file, null);
+      assertGatewayServiceUpdateCurrent();
+      options?.definitionTransaction?.assertCurrent();
+      await fs.unlink(file);
+      initial.fingerprint.set(file, "missing");
+      await options?.definitionTransaction?.fileWritten(file, null);
+      await refresh(true);
+    };
     const restore = async (file: string, snapshot: Snapshot) => {
       if (!allowed.has(file) && snapshot) {
         throw new Error("Not a managed service publication target.");
@@ -401,6 +415,8 @@ export async function withSystemdDefinitionMutation<T>(
       initial = current;
       if (snapshot) {
         await publish(file, snapshot.contents, snapshot.mode, false);
+      } else if (file === generated) {
+        await remove(file);
       } else {
         await refresh(true);
         assertGatewayServiceUpdateCurrent();
@@ -424,20 +440,7 @@ export async function withSystemdDefinitionMutation<T>(
       },
       publish,
       restore,
-      remove: async (file) => {
-        if (file !== generated) {
-          throw new Error("Only a generated environment file can be retired during restoration.");
-        }
-        await options?.definitionTransaction?.beforeWrite();
-        await refresh(true);
-        await options?.definitionTransaction?.filePrepared(file, null);
-        assertGatewayServiceUpdateCurrent();
-        options?.definitionTransaction?.assertCurrent();
-        await fs.unlink(file);
-        initial.fingerprint.set(file, "missing");
-        await options?.definitionTransaction?.fileWritten(file, null);
-        await refresh(true);
-      },
+      remove,
     });
   };
   const lockOptions = () => {
