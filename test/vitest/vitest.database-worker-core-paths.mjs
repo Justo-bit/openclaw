@@ -47,7 +47,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/agent-provenance.test.ts",
   "src/commands/agents.commands.list.worker.test.ts",
   "src/state/openclaw-agent-worker-store.test.ts",
-  "src/config/sessions/combined-store-gateway.worker.test.ts",
   "src/sessions/session-state-events.test.ts",
   "src/sessions/session-upstream-links.test.ts",
   "src/sessions/session-upstream-monitor.test.ts",
