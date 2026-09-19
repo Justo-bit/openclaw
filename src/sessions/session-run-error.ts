@@ -64,7 +64,7 @@ export function resolveSessionRunError(
   }
   // Nested failure wrappers must leave room for the terminal diagnosis in session rows.
   const marker = " ... ";
-  const headChars = Math.floor((SESSION_RUN_ERROR_MAX_CHARS - marker.length) / 2);
+  const headChars = Math.floor((SESSION_RUN_ERROR_MAX_CHARS - marker.length) / 3);
   const tailChars = SESSION_RUN_ERROR_MAX_CHARS - marker.length - headChars;
   return `${sliceUtf16Safe(error, 0, headChars).trimEnd()}${marker}${sliceUtf16Safe(error, -tailChars).trimStart()}`;
 }

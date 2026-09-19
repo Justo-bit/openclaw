@@ -128,14 +128,10 @@ function captureHashes(includeMemo = true) {
     hashes,
     accept<T>(result: WorkspaceComputationHashResult<T>): T {
       if (context) {
-        // Single-file probes bypass the memo. Retaining them rescans a growing
-        // placement cache after every file, including private temporary copies.
-        if (includeMemo) {
-          for (const [identity, digest] of result.hashes) {
-            context.memo.set(identity, digest);
-          }
-          pruneWorkspaceHashMemo(context.memo);
+        for (const [identity, digest] of result.hashes) {
+          context.memo.set(identity, digest);
         }
+        pruneWorkspaceHashMemo(context.memo);
         if (context.metrics) {
           context.metrics.contentHashCount += result.metrics.contentHashCount;
           context.metrics.contentHashDurationMs += result.metrics.contentHashDurationMs;

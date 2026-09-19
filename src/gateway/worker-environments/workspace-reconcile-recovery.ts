@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
@@ -177,20 +178,60 @@ async function readWorkspacePatch(
   currentTree: string,
 ): Promise<Uint8Array> {
   const patchPath = path.join(root, ".git", "workspace.patch");
-  await fs.writeFile(patchPath, "", { flag: "wx", mode: 0o600 });
-  // Git writes its output directly so the collector never keeps a second full patch.
-  await requireGit(root, [
-    "diff",
-    "--binary",
-    "--full-index",
-    "--no-renames",
-    `--output=${patchPath}`,
-    baseTree,
-    currentTree,
-    "--",
-  ]);
-  if ((await fs.stat(patchPath)).size > MAX_RECONCILIATION_TOTAL_BYTES) {
-    throw new Error("Cloud workspace patch exceeds its byte limit");
+  const output = await fs.open(patchPath, "wx", 0o600);
+  let bytes = 0;
+  let limitExceeded = false;
+  try {
+    const diff = await runCommandWithTimeout(
+      [
+        "git",
+        "-C",
+        root,
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-renames",
+        baseTree,
+        currentTree,
+        "--",
+      ],
+      {
+        timeoutMs: PATCH_TIMEOUT_MS,
+        killProcessTree: true,
+        outputCapture: { stdout: "discard", stderr: "head" },
+        maxOutputBytes: { stdout: MAX_RECONCILIATION_TOTAL_BYTES, stderr: 1024 * 1024 },
+        terminateOnOutputLimit: true,
+        onOutputChunk: (chunk, stream) => {
+          if (stream !== "stdout") {
+            return true;
+          }
+          if (bytes + chunk.byteLength > MAX_RECONCILIATION_TOTAL_BYTES) {
+            limitExceeded = true;
+            return false;
+          }
+          // The observer is synchronous: finish each bounded write before accepting
+          // more output, and join Git before closing its destination.
+          let offset = 0;
+          while (offset < chunk.byteLength) {
+            const written = fsSync.writeSync(output.fd, chunk, offset, chunk.byteLength - offset);
+            if (written === 0) {
+              throw new Error("Cloud workspace patch write made no progress");
+            }
+            offset += written;
+          }
+          bytes += chunk.byteLength;
+          return true;
+        },
+      },
+    );
+    if (limitExceeded) {
+      throw new Error("Cloud workspace patch exceeds its byte limit");
+    }
+    if (diff.termination !== "exit" || diff.code !== 0) {
+      throw new Error(diff.stderr.trim() || "git diff failed");
+    }
+  } finally {
+    await output.close();
   }
   return await fs.readFile(patchPath);
 }
