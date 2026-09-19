@@ -621,7 +621,7 @@ extensions/matrix/src/matrix/actions/reactions.ts	1
 extensions/matrix/src/matrix/actions/summary.ts	2
 extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
-extensions/matrix/src/matrix/client/config.ts	5
+extensions/matrix/src/matrix/client/config.ts	4
 extensions/matrix/src/matrix/client/logging.ts	3
 extensions/matrix/src/matrix/config-update.ts	4
 extensions/matrix/src/matrix/credentials-state.ts	2
@@ -1659,7 +1659,7 @@ src/agents/embedded-agent-runner/compaction-diagnostics.ts	5
 src/agents/embedded-agent-runner/compaction-hooks.ts	1
 src/agents/embedded-agent-runner/compaction-session-agent.ts	7
 src/agents/embedded-agent-runner/context-engine-maintenance.ts	3
-src/agents/embedded-agent-runner/delivery-evidence.ts	11
+src/agents/embedded-agent-runner/delivery-evidence.ts	1
 src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
@@ -1717,7 +1717,7 @@ src/agents/embedded-agent-runner/run/helpers.ts	3
 src/agents/embedded-agent-runner/run/history-image-prune.ts	4
 src/agents/embedded-agent-runner/run/images.ts	7
 src/agents/embedded-agent-runner/run/incomplete-turn-classification.ts	5
-src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	3
+src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
 src/agents/embedded-agent-runner/run/llm-idle-timeout.ts	3
 src/agents/embedded-agent-runner/run/message-tool-terminal.ts	1
@@ -1756,7 +1756,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	12
+src/agents/failover-error.ts	3
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -1827,7 +1827,7 @@ src/agents/provider-model-route.ts	1
 src/agents/provider-request-config.ts	6
 src/agents/provider-secret-egress.ts	3
 src/agents/provider-tool-policy.ts	1
-src/agents/provider-transport-fetch.ts	4
+src/agents/provider-transport-fetch.ts	2
 src/agents/run-termination.ts	3
 src/agents/run-wait.ts	2
 src/agents/runtime-plan/build.ts	4
@@ -1983,7 +1983,7 @@ src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
-src/agents/workspace.ts	6
+src/agents/workspace.ts	5
 src/agents/worktrees/git.ts	2
 src/agents/worktrees/registry.ts	11
 src/agents/worktrees/run-lease.ts	1
@@ -2186,7 +2186,7 @@ src/cli/command-secret-targets.ts	2
 src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	2
 src/cli/config-cli-path.ts	5
-src/cli/config-cli-runner.ts	3
+src/cli/config-cli-runner.ts	2
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
 src/cli/config-set-input.ts	1
@@ -2344,7 +2344,6 @@ src/commands/doctor/cron/legacy-repair.ts	5
 src/commands/doctor/cron/legacy-store-migration.ts	12
 src/commands/doctor/cron/store-migration.ts	9
 src/commands/doctor/cron/warnings.ts	1
-src/commands/doctor/shared/active-tool-schema-warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/allowlist-policy-repair.ts	3
 src/commands/doctor/shared/channel-doctor.ts	4
@@ -2556,7 +2555,7 @@ src/cron/session-reaper.ts	1
 src/cron/stagger.ts	1
 src/cron/store/delivery-codec.ts	2
 src/cron/store/quarantine.ts	1
-src/cron/store/row-codec.ts	4
+src/cron/store/row-codec.ts	3
 src/cron/task-run-detail.ts	2
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	6
@@ -2579,8 +2578,8 @@ src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.prompts.ts	2
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	7
-src/flows/doctor-core-checks.runtime.ts	5
-src/flows/doctor-core-checks.ts	4
+src/flows/doctor-core-checks.runtime.ts	3
+src/flows/doctor-core-checks.ts	3
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
@@ -2729,7 +2728,7 @@ src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
-src/gateway/server-node-events.ts	3
+src/gateway/server-node-events.ts	2
 src/gateway/server-plugin-in-process-dispatch.ts	3
 src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins-node-runtime.ts	1
@@ -3026,7 +3025,7 @@ src/logging/log-file-shared.ts	1
 src/logging/logger.ts	11
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
-src/logging/redact.ts	3
+src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
 src/logging/subsystem.ts	4
@@ -3355,7 +3354,6 @@ src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
 src/sessions/user-turn-transcript.ts	5
 src/shared/account-enabled.ts	1
-src/shared/assistant-error-format.ts	3
 src/shared/bounded-serial-queue.ts	1
 src/shared/chat-content.ts	2
 src/shared/chat-message-content.ts	7
@@ -3573,7 +3571,6 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
-ui/src/components/command-palette.ts	2
 ui/src/components/config-form-collection-draft.ts	5
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	3
@@ -3672,7 +3669,6 @@ ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/channels/view.ts	9
-ui/src/pages/chat/attachment-api.ts	1
 ui/src/pages/chat/chat-avatar.ts	4
 ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4

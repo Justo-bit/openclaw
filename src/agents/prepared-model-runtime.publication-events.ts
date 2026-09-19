@@ -12,9 +12,9 @@ import type {
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 type PreparedModelRuntimePublicationEvent =
-  | { phase: "invalidated" | "published" }
+  | { phase: "invalidated" | "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
-  // Only the catalog commit owner can prove that model facts stayed unchanged.
+  // Publication owners alone can prove that model facts stayed unchanged.
   | {
       phase: "catalog-published";
       modelFactsChanged?: boolean;
@@ -25,7 +25,11 @@ type PreparedModelRuntimePublicationEvent =
 type CatalogPublication = {
   catalog: ModelCatalogSnapshot | undefined;
 };
-type CatalogPublicationChange = { previous: CatalogPublication; current: CatalogPublication };
+type CatalogPublicationChange = {
+  previous: CatalogPublication;
+  current: CatalogPublication;
+  staticCatalog: ModelCatalogSnapshot;
+};
 
 /** Reports model changes only after the catalog owner commits its complete publication. */
 export function notifyPreparedModelCatalogPublication(
@@ -34,7 +38,10 @@ export function notifyPreparedModelCatalogPublication(
 ): void {
   notifyPreparedModelRuntimePublication({
     phase: "catalog-published",
-    modelFactsChanged: change !== undefined && change.previous.catalog !== change.current.catalog,
+    modelFactsChanged:
+      change !== undefined &&
+      (change.previous.catalog ?? change.staticCatalog) !==
+        (change.current.catalog ?? change.staticCatalog),
     ...(refreshStatusChanged ? { refreshStatusChanged: true } : {}),
   });
 }

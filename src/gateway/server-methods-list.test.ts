@@ -146,6 +146,12 @@ describe("listGatewayMethods", () => {
     "plugins.catalog.get",
   ];
   const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
+  const sessionEnvironmentMethods = [
+    ["environments.session.status", "operator.read", undefined],
+    ["environments.session.create", "operator.admin", true],
+    ["environments.session.destroy", "operator.admin", true],
+    ["environments.session.exec", "operator.admin", undefined],
+  ] as const;
 
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
@@ -218,6 +224,7 @@ describe("listGatewayMethods", () => {
       "diagnostics.heapProfile",
       "desktop.release",
       "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -262,6 +269,7 @@ describe("listGatewayMethods", () => {
       "diagnostics.heapProfile",
       "desktop.release",
       "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
     ]);
   });
 
@@ -435,6 +443,7 @@ describe("listGatewayMethods", () => {
       "diagnostics.heapProfile",
       "desktop.release",
       "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -518,7 +527,7 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("advertises and wires cloud worker environment mutations", () => {
+  it("advertises and wires cloud worker environment methods with their required scopes", () => {
     const methods = [
       "environments.create",
       "environments.destroy",
@@ -537,6 +546,13 @@ describe("listGatewayMethods", () => {
         startup: "unavailable-until-sidecars",
         controlPlaneWrite: true,
       });
+    }
+    for (const [method, scope, controlPlaneWrite] of sessionEnvironmentMethods) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toBeTypeOf("function");
+      const descriptor = descriptors.find((candidate) => candidate.name === method);
+      expect(descriptor).toMatchObject({ name: method, scope, since: "2026.9" });
+      expect(descriptor?.controlPlaneWrite).toBe(controlPlaneWrite);
     }
   });
 

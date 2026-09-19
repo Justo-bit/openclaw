@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import {
@@ -23,7 +24,6 @@ import {
   type SqliteAuthProfileRows,
 } from "./sqlite-readonly-worker-protocol.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
-import type { SqliteSchemaHeader } from "./sqlite-schema-header.js";
 
 const SLOW_HARDWARE_HEADROOM = 10;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000 * SLOW_HARDWARE_HEADROOM;
@@ -173,12 +173,7 @@ function sqliteReadOnlyWorkerRequestArgs(pathname: string, options: SqliteReadOn
   return [
     options.mode,
     path.resolve(pathname),
-    ...(options.stagingRoot || options.agentSchemaVersionForOwnership !== undefined
-      ? [options.stagingRoot ?? ""]
-      : []),
-    ...(options.agentSchemaVersionForOwnership !== undefined
-      ? [String(options.agentSchemaVersionForOwnership)]
-      : []),
+    ...(options.stagingRoot ? [options.stagingRoot] : []),
   ];
 }
 
@@ -191,9 +186,16 @@ function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorke
   ];
 }
 
-function createScopedSqliteReadOnlyWorker(env?: NodeJS.ProcessEnv) {
+function createScopedSqliteReadOnlyWorker(
+  env?: NodeJS.ProcessEnv,
+  source?: SqliteAuthProfileReadOptions["source"],
+) {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   return createSqliteReadOnlyWorkerSession({
+    // Snapshot cleanup requires a native close; a broker proxy can close before
+    // failed transport cleanup proves the child dead. Canonical reads retain
+    // their own source lease in the child, including after broker loss.
+    spawnBroker: source === "canonical" ? getSpawnBroker() : undefined,
     env: resolveNodeCompileCacheEnv(env),
     currentEnv: resolveNodeCompileCacheEnv,
     argv: [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "session"],
@@ -210,15 +212,6 @@ export function runSqliteReadOnlyWorker(
   pathname: string,
   options: SqliteAuthProfileReadOptions,
 ): Promise<SqliteAuthProfileRows>;
-export function runSqliteReadOnlyWorker(
-  pathname: string,
-  options: {
-    mode: "schema-header";
-    stagingRoot?: string;
-    signal?: AbortSignal;
-    agentSchemaVersionForOwnership?: number;
-  },
-): Promise<SqliteSchemaHeader>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
   options: { mode: "sync" | "async"; stagingRoot?: string; signal?: AbortSignal },
@@ -253,8 +246,8 @@ export function runSqliteReadOnlyWorker(
       : scope.controller.signal,
   };
   // Native backup promises can stall with a persistent IPC handle on Node 26.
-  // Header inspection may also need a backup during recovery. Keep both modes
-  // one-shot; concurrent raw reads need separate processes for POSIX lock isolation.
+  // Keep async backups one-shot; concurrent raw reads need separate processes
+  // for POSIX lock isolation.
   const useScopedWorker = options.mode === "sync" && !scope.busy;
   if (useScopedWorker) {
     scope.busy = true;
@@ -287,15 +280,45 @@ function runSqliteReadOnlyWorkerOnce(
   options: SqliteReadOnlyWorkerOptions,
 ): Promise<SqliteReadOnlyWorkerValue> {
   if (options.mode === "auth-profile-rows") {
-    const worker = createScopedSqliteReadOnlyWorker(options.env);
     return (async () => {
-      try {
-        const value = await worker.run(pathname, options);
+      options.signal?.throwIfAborted();
+      let worker = createScopedSqliteReadOnlyWorker(options.env, options.source);
+      while (true) {
+        let outcome: { value: SqliteReadOnlyWorkerValue } | { error: unknown };
+        try {
+          const value = await worker.run(pathname, options);
+          options.signal?.throwIfAborted();
+          outcome = { value };
+        } catch (error) {
+          outcome = { error };
+        }
+        let cleanupFailure: { error: unknown } | undefined;
+        try {
+          await worker.close();
+        } catch (error) {
+          cleanupFailure = { error };
+        }
+        if (cleanupFailure) {
+          if ("error" in outcome) {
+            throw new AggregateError(
+              [outcome.error, cleanupFailure.error],
+              "Auth read and child cleanup failed",
+              { cause: outcome.error },
+            );
+          }
+          throw cleanupFailure.error;
+        }
+        if ("error" in outcome) {
+          if (worker.notStarted && hasErrnoCode(outcome.error, "ERR_SPAWN_BROKER_UNAVAILABLE")) {
+            options.signal?.throwIfAborted();
+            // A confirmed refusal has no child to replay. Preserve the captured launch context.
+            worker = worker.createNativeReplacement();
+            continue;
+          }
+          throw outcome.error;
+        }
         options.signal?.throwIfAborted();
-        return value;
-      } finally {
-        await worker.close();
-        options.signal?.throwIfAborted();
+        return outcome.value;
       }
     })();
   }
@@ -384,11 +407,15 @@ function runSqliteReadOnlyWorkerOnce(
   });
 }
 
-export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string,
+  mode: "sync" | "sync-fallback" = "sync",
+): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode: "sync", stagingRoot }),
+    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),
@@ -410,6 +437,6 @@ export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: strin
       stderr: result.stderr,
       stdout: result.stdout,
     },
-    "sync",
+    mode,
   );
 }

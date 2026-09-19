@@ -16,6 +16,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
   classifySessionStateActor,
@@ -25,7 +26,6 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
-  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -488,7 +488,7 @@ describe("session state events", () => {
       database,
     )!;
     expect(event.sequence).toBeGreaterThan(0);
-    expect(peekSystemEventEntries("global")).toEqual([]);
+    expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
     const cursorRow = openOpenClawStateDatabase(database)
       .db.prepare("SELECT COUNT(*) AS n FROM session_watch_cursors")
       .get() as { n: number };
@@ -848,7 +848,7 @@ describe("session state events", () => {
 
   it("projects spawn, terminal, goal, and compaction producer helpers", async () => {
     const database = createDatabaseOptions();
-    recordSessionCreated({
+    recordSessionCreated(cfg, {
       sessionKey: child,
       agentId: "main",
       entry: {

@@ -310,6 +310,9 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   out(s.repoAuthority);
 }
 else if(args[0]==="api"&&args.includes("user")) out("relay-reader");
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
+  out({mergeable:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",mergeable_state:s.pr.mergeStateStatus.toLowerCase()});
+}
 else if(args.includes("graphql")&&args.includes("query=query { viewer { login } }")) out(args.includes("--include") ? "HTTP/2.0 200 OK\\n\\n" + JSON.stringify({data:{viewer:{login:s.operator}}}) : s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.bodyPath) fs.writeFileSync(s.duringChecks.bodyPath,"Changed later");
@@ -431,8 +434,8 @@ repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }
 node() { if [[ "$1" == */watch-pr-ci.mjs ]]; then shift; command node "$FIXTURE_GH" watch "$@"; else command node "$@"; fi; }
-gh() { command node "$FIXTURE_GH" path "$@"; }
-gh_plain() { command node "$FIXTURE_GH" direct "$@"; }
+pr_gh() { command node "$FIXTURE_GH" path "$@"; }
+pr_gh_plain() { command node "$FIXTURE_GH" direct "$@"; }
 # Skip only admission settlement delays; preserve the operation lock's short sleeps.
 sleep() { if [ "$#" = 1 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; then command node "$FIXTURE_GH" sleep "$1"; else command sleep "$@"; fi; }
 verify_crabbox_admin_merge_bypass() {
@@ -441,7 +444,7 @@ verify_crabbox_admin_merge_bypass() {
 }
 # Fault the Git boundary, not the outcome owner: crash after intent CAS, or
 # reject later receipt writes. All successful object/ref operations are real.
-git() {
+pr_git() {
   if [ "$1" = update-ref ] && [ "\${3-}" = refs/openclaw/pr-merge-outcomes/123 ]; then
     local crash
     crash=$(command jq -r .crash "$FIXTURE_STATE")
@@ -683,6 +686,50 @@ function reconciledMergeAfterCleanup(admin = false) {
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("explains every rejected admission fact and local conflicts before dispatch", () => {
+    const f = fixture();
+    f.advance("conflicting main\n", "stable\n");
+    f.save({
+      ...f.state(),
+      observations: [
+        {
+          pr: {
+            state: "CLOSED",
+            headRefOid: f.base,
+            baseRefName: "release",
+            isDraft: true,
+            mergeable: "CONFLICTING",
+            mergeStateStatus: "DIRTY",
+            autoMergeRequest: { mergeMethod: "SQUASH" },
+            isInMergeQueue: true,
+          },
+        },
+      ],
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    for (const line of [
+      'state: observed="CLOSED"; expected="OPEN"',
+      `headRefOid: observed="${f.base}"; expected="${f.head}"`,
+      'baseRefName: observed="release"; expected="main"',
+      "isDraft: observed=true; expected=false",
+      'mergeable: observed="CONFLICTING"; expected="MERGEABLE|UNKNOWN"',
+      'autoMergeRequest: observed={"mergeMethod":"SQUASH"}; expected=null',
+      "isInMergeQueue: observed=true; expected=false",
+      'REST pulls/123: mergeable=false; mergeable_state="dirty"',
+      "Conflicting path: owner.txt",
+      `Local outcome ref ${outcomeRef}: absent`,
+      "Legacy .local/merge-output.log: absent",
+      "lock-recover, then rerun merge-run",
+    ]) {
+      expect(run.output).toContain(line);
+    }
+    expect(f.state().mutations).toBe(0);
+    expect(f.state().posts).toBe(0);
+    expect(() => f.record()).toThrow();
+    expect(f.captures()).toEqual([]);
+  });
+
   it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
     const f = reconciledMergeAfterCleanup();
     const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
@@ -1089,6 +1136,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const run = f.run();
       expect(run.status, run.output).toBe(1);
       expect(run.output).toContain("PR or main changed during observation");
+      expect(run.output).toContain(`Local outcome ref ${outcomeRef}: present`);
+      expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+      expect(run.output).not.toContain("lock-recover, then rerun merge-run");
       expect(f.git(["rev-parse", outcomeRef])).toBe(before);
       expect(f.state().mutations).toBe(1);
       expect(f.state().posts).toBe(0);
@@ -1871,6 +1921,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.captures()).toEqual([]);
       expect(existsSync(f.worktree)).toBe(true);
       expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+      expect(run.output).toContain(`mergeStateStatus: observed="${mergeStateStatus}"; expected=`);
+      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      if (mergeStateStatus === "DIRTY") {
+        expect(run.output).toContain("Conflicts exist");
+      }
     },
   );
   it.each([
@@ -2059,6 +2114,14 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
     if (finalRead) {
       expect(run.output).toContain("PR or main changed during observation");
+      expect(run.output).toContain("lock-recover, then rerun merge-run");
+      expect(run.output).toContain(
+        fault === "final main"
+          ? `main: observed="${step.main}"; expected="${f.base}"`
+          : fault === "final UNKNOWN mergeable"
+            ? 'mergeable: observed="UNKNOWN"; expected="MERGEABLE"'
+            : `mergeStateStatus: observed="${fault === "final UNKNOWN status" ? "UNKNOWN" : "BEHIND"}"; expected="CLEAN"`,
+      );
       for (const [label, expected] of [
         ["observation", { main: f.base, pr: next.pr }],
         ["reread", { main: step.main ?? f.base, pr: { ...next.pr, ...step.pr } }],
@@ -2253,6 +2316,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(run.status, run.output).toBe(1);
       expect(f.state().mutations).toBe(0);
       expect(readFileSync(capture, "utf8")).toBe(output);
+      expect(run.output).toContain("Legacy .local/merge-output.log: present");
+      expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+      expect(run.output).not.toContain("lock-recover, then rerun merge-run");
       expect(() => f.record()).toThrow();
     },
   );
