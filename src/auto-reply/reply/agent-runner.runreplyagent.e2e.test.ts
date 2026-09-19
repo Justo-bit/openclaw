@@ -5684,7 +5684,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
+  it("reports a missing fallback reply without repeating a completed cron side effect", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
@@ -5700,9 +5700,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload?.isError).toBe(true);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     } finally {
       fallbackSpy.mockRestore();
     }

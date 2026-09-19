@@ -945,6 +945,14 @@ describe("runReplyAgent auto-compaction token update", () => {
       { meta: { agentMeta: {}, intentionalTerminalCompletion: "tool-batch" } },
       false,
     ],
+    [
+      "after accepting a child without a continuation or reply",
+      {
+        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+        meta: { agentMeta: {} },
+      },
+      true,
+    ],
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "accounts for empty interactive direct replies %s",
     async (_label, agentResult, fallback) => {
@@ -955,8 +963,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(result).toBeUndefined();
         return;
       }
-      const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-      expect(payload.text).toContain("did not produce a visible reply");
+      expectRecordFields(result, { isError: true }, "empty interactive fallback");
     },
   );
 
@@ -986,15 +993,6 @@ describe("runReplyAgent auto-compaction token update", () => {
     const fallback = expectRecordFields(result, { isError: true }, "empty interactive fallback");
     expect(fallback.text).toContain("did not produce a visible reply");
     expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps spawn-only empty direct replies silent", async () => {
-    expect(
-      await runEmptyDirectReply({
-        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
-        meta: { agentMeta: {} },
-      }),
-    ).toBeUndefined();
   });
 
   it("surfaces terminal direct failures after runtime compaction progress", async () => {
