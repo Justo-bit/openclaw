@@ -220,7 +220,14 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             process.exitCode = code;
           },
         },
-        { repair: input.repair, nonInteractive: true },
+        {
+          repair: input.repair,
+          nonInteractive: true,
+          ...(input.yes !== undefined ? { yes: input.yes } : {}),
+          ...(input.workspaceSuggestions !== undefined
+            ? { workspaceSuggestions: input.workspaceSuggestions }
+            : {}),
+        },
         { inputHash: input.configInputHash, assertCurrent },
       );
     },

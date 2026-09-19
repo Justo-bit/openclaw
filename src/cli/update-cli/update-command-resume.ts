@@ -133,6 +133,7 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
           await runUpdateFinalizationDoctorInFreshProcess({
+            opts: params.opts,
             phase: "post-plugin",
             assertCurrent,
             root: params.root,
@@ -312,6 +313,7 @@ export async function convergePostCoreUpdatePlugins(params: {
       ? (
           await completePostCorePluginUpdate({
             root: params.root,
+            opts: params.opts,
             pluginUpdate: producedPluginUpdate,
             freshDoctorRequired: producedPluginUpdate.changed,
             assertCurrent,

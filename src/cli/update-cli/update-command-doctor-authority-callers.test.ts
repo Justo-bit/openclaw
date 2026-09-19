@@ -23,6 +23,28 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
 }));
+// Native binding/settlement has real-process coverage. This caller suite keeps
+// both process transports inert while exercising its synthetic one-shot fence.
+vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
+  inspectUpdateDoctorChildSupport: async () => true,
+  withUpdateDoctorChild: async (
+    params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
+    operation: Parameters<
+      typeof import("./update-command-doctor-child.js").withUpdateDoctorChild
+    >[1],
+  ) => {
+    params.context.assertRequesterCurrent();
+    return await operation(async (_argv, options) => ({
+      ...(await mocks.runExec(process.execPath, ["doctor", "--repair"], options)),
+      code: 0,
+      signal: null,
+      killed: false,
+      cleanup: "normal",
+      termination: "exit",
+    }));
+  },
+}));
 vi.mock("../../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-candidate-state.js")>()),
   collectStateDatabasePaths: mocks.paths,

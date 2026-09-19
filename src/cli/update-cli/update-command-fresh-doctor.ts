@@ -1,5 +1,7 @@
 // Runs post-plugin convergence checks without retaining pre-update plugin modules.
 import os from "node:os";
+import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -7,9 +9,10 @@ import {
   UPDATE_POST_CORE_CONVERGENCE_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state.sizes.js";
@@ -27,19 +30,28 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
-import { isPlainCommandExitFailure, runExec } from "../../process/exec.js";
+import { isPlainCommandExitFailure, runExec, type RunExecOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
-import { resolveNodeRunner } from "./shared.js";
+import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import {
+  assertUpdateDoctorChildSucceeded,
+  createUpdateDoctorAuthority,
+  inspectUpdateDoctorChildSupport,
+  withUpdateDoctorChild,
+} from "./update-command-doctor-child.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
 } from "./update-command-post-plugin-validation.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
@@ -111,6 +123,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   phase: UpdateDoctorPhase;
   root: string;
   runId?: string;
+  opts?: UpdateCommandOptions;
+  /** Only local candidate code may supply its known native Doctor contract. */
+  doctorConfigWrites?: true;
   yes: boolean;
   json: boolean;
   workspaceSuggestions?: boolean;
@@ -119,13 +134,24 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   entryPath?: string;
   onWarnings?: (warnings: string[]) => void;
   assertCurrent?: () => void;
+  /** Propagate a refused child authority to the finalization owner without retrying it. */
+  onAuthorityRefused?: () => void;
 }): Promise<void> {
-  params.assertCurrent?.();
+  const {
+    run,
+    executorFence,
+    runId,
+    requester,
+    assertCurrent,
+    assertRequesterCurrent,
+    refuseAuthority,
+  } = createUpdateDoctorAuthority(params);
+  assertCurrent();
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {
     throw new Error("Updated OpenClaw entrypoint not found for post-plugin doctor");
   }
-  params.assertCurrent?.();
+  assertCurrent();
   const args = [
     entryPath,
     "doctor",
@@ -139,9 +165,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null = null;
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
-  params.assertCurrent?.();
+  assertCurrent();
   try {
-    result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
+    const commandOptions: RunExecOptions = {
       cwd: params.root,
       timeoutMs: params.timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
@@ -150,7 +176,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       baseEnv,
       env: {
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
-        ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}),
+        ...((runId ?? params.runId) ? { [UPDATE_RUN_ID_ENV]: runId ?? params.runId } : {}),
         // The outer updater owns service refresh and activation after every
         // migration finishes; a fresh Doctor must not resume its parked service.
         ...buildUpdateDoctorEnv({
@@ -161,10 +187,82 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         }),
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },
-    });
+    };
+    const workerCommand = [
+      params.nodeRunner ?? resolveNodeRunner(),
+      path.join(
+        params.root,
+        "dist",
+        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      ),
+    ];
+    const doctorConfigWrites =
+      run &&
+      (params.doctorConfigWrites ??
+        (await inspectUpdateDoctorChildSupport(
+          workerCommand,
+          {
+            cwd: params.root,
+            timeoutMs: params.timeoutMs,
+            baseEnv,
+            env: commandOptions.env,
+          },
+          assertCurrent,
+        )));
+    assertCurrent();
+    if (doctorConfigWrites && executorFence && runId) {
+      const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
+      assertCurrent();
+      const child = await withUpdateDoctorChild(
+        {
+          root: params.root,
+          context: {
+            runId,
+            executorFence,
+            requester: requester?.requester,
+            assertRequesterCurrent,
+          },
+          input: {
+            configInputHash: snapshot.hash,
+            repair: true,
+            yes: params.yes,
+            workspaceSuggestions: params.workspaceSuggestions === true,
+          },
+        },
+        (runCommand) =>
+          runCommand([...workerCommand, "--doctor"], {
+            ...commandOptions,
+            maxOutputBytes: commandOptions.maxBuffer,
+            terminateOnOutputLimit: true,
+          }),
+      );
+      result = child;
+      assertUpdateDoctorChildSucceeded(child);
+      assertCurrent();
+    } else {
+      // A valid legacy target contract retains its shipped CLI Doctor. This is
+      // capability selection, never recovery from missing or refused authority.
+      result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, commandOptions);
+      assertCurrent();
+    }
   } catch (error) {
-    params.assertCurrent?.();
+    if (
+      collectNestedErrorCandidates(error).some(
+        (cause) =>
+          cause instanceof UpdateCommandRecoveryPendingError ||
+          cause instanceof UpdateRequesterRevokedError,
+      )
+    ) {
+      refuseAuthority(error);
+    }
+    assertCurrent();
     doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    if (
+      doctorResult?.configWriteRefusal?.reason === "authority-check-failed" ||
+      doctorResult?.configWriteRefusal?.reason === "requester-revoked"
+    ) {
+      refuseAuthority(error);
+    }
     if (isRecord(error)) {
       result = error;
       // Enabling the existing result channel gives deferred plugin repair its
@@ -267,6 +365,8 @@ async function validatePostPluginConfigInFreshProcess(params: {
 export async function completePostCorePluginUpdate(params: {
   root: string;
   runId?: string;
+  opts?: UpdateCommandOptions;
+  doctorConfigWrites?: true;
   pluginUpdate: PostCorePluginUpdateResult;
   freshDoctorRequired: boolean;
   yes: boolean;
@@ -306,6 +406,9 @@ export async function completePostCorePluginUpdate(params: {
         await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
           assertCurrent,
+          onAuthorityRefused: () => {
+            authorityFailed = true;
+          },
           entryPath,
           phase: "post-plugin",
         });

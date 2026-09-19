@@ -263,6 +263,8 @@ export async function convergeUpdatePlugins(params: {
         // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
+          opts: params.opts,
+          ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,

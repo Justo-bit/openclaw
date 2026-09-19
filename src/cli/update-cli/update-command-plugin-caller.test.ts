@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -35,6 +36,36 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: transport.exec,
   runCommandWithTimeout: transport.command,
+}));
+// Native Doctor delegation has real-child coverage. Keep this suite focused on
+// the real in-process plugin/config owners, with both Doctor transports inert.
+vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
+  inspectUpdateDoctorChildSupport: async () => true,
+  withUpdateDoctorChild: async (
+    params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
+    operation: Parameters<
+      typeof import("./update-command-doctor-child.js").withUpdateDoctorChild
+    >[1],
+  ) => {
+    params.context.executorFence.assertCurrent();
+    params.context.assertRequesterCurrent();
+    const result = await operation(async (_argv, options) => ({
+      ...(await transport.exec(
+        process.execPath,
+        [path.join(params.root, "dist", "entry.js"), "doctor"],
+        options,
+      )),
+      code: 0,
+      signal: null,
+      killed: false,
+      cleanup: "normal",
+      termination: "exit",
+    }));
+    params.context.assertRequesterCurrent();
+    params.context.executorFence.assertCurrent();
+    return result;
+  },
 }));
 
 afterEach(() => {
