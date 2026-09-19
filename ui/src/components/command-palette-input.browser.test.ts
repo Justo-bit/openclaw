@@ -134,16 +134,20 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       });
-    await nextFrame();
-    await nextFrame();
     const styleChanges: MutationRecord[] = [];
     const observer = new MutationObserver((records) => styleChanges.push(...records));
     observer.observe(input, { attributes: true, attributeFilter: ["style"] });
     try {
-      await nextFrame();
-      await nextFrame();
-      await nextFrame();
-      expect(styleChanges).toEqual([]);
+      // Frame callbacks run before ResizeObserver delivery; a fixed pair of
+      // frames can still leave the final resize queued on a busy browser.
+      // Require a quiet three-frame window after those finite updates settle.
+      await vi.waitFor(async () => {
+        styleChanges.length = 0;
+        await nextFrame();
+        await nextFrame();
+        await nextFrame();
+        expect(styleChanges).toEqual([]);
+      });
     } finally {
       observer.disconnect();
     }

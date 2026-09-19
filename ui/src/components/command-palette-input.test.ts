@@ -114,7 +114,6 @@ describe("command palette input", () => {
         disconnect = disconnect;
       },
     );
-    const removeWindowListener = vi.spyOn(window, "removeEventListener");
     const inputProps = props();
     render(renderCommandPaletteInput(inputProps), host);
     await vi.advanceTimersByTimeAsync(20);
@@ -127,7 +126,6 @@ describe("command palette input", () => {
     render(nothing, host);
     expect(disconnect).toHaveBeenCalledOnce();
     expect(removeInputListener).toHaveBeenCalledWith("scroll", expect.any(Function));
-    expect(removeWindowListener).toHaveBeenCalledWith("resize", expect.any(Function));
     await vi.advanceTimersByTimeAsync(20);
     expect(input.style.height).toBe(initialHeight);
   });

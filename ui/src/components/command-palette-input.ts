@@ -111,14 +111,11 @@ class PaletteInputLayoutDirective extends AsyncDirective {
           this.#observer.observe(actions);
         }
       }
-    } else {
-      window.addEventListener("resize", this.#scheduleLayout);
     }
   }
 
   protected override disconnected() {
     this.#textarea?.removeEventListener("scroll", this.#updateOverflow);
-    window.removeEventListener("resize", this.#scheduleLayout);
     this.#observer?.disconnect();
     this.#observer = undefined;
     this.#listening = false;
