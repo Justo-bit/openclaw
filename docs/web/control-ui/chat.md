@@ -31,7 +31,14 @@ Saving keeps your existing draft and does not send a message.
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
 same editor beside it. **Save** or Enter saves changes; **Cancel** or Escape discards the edit; and the trash
-button deletes the comment. The composer's comment count is a passive indicator.
+button deletes the comment. Hover, keyboard-focus, or click the composer's comment
+count to open its preview. Deleting one comment keeps the remaining list open;
+Escape, a click outside, or moving the pointer away dismisses it. The count's
+**Remove all comments** action clears pending comments in one click and returns
+focus to the composer. **Undo** in the removal notification restores them. The
+clear action appears on hover or keyboard focus and stays visible on touch.
+Clearing pending comments preserves ordinary attachments, the message draft,
+and comments already sent in the conversation.
 Archiving another split pane leaves the current comment editor and keyboard focus in place.
 Saved comments and their source markers follow the composer's existing draft and
 queue recovery behavior. When you send, each comment is attached as a text file
@@ -69,6 +76,12 @@ worktree**. Both start the task in the background and keep your current
 conversation and draft open. The card disappears after the task starts; select
 the new session in the sidebar when you want to follow its progress.
 **Start in this session** runs the task in the current conversation.
+
+Before starting a worktree, OpenClaw checks that the suggested folder is a Git
+repository with a commit. If it is not, the card keeps the prompt and lets you
+select a registered project or enter the correct repository path. Select
+**Start in a new worktree** again to continue; no child session is started for
+an invalid source folder.
 
 ## Composer capability menu
 

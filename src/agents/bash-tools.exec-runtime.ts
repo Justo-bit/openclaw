@@ -928,7 +928,7 @@ export async function runExecProcess({
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
-      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
+      ...(opts.sandbox ? { cleanupOwnership: "external" as const, exactEnv: true as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,

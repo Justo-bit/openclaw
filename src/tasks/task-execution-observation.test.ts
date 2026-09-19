@@ -10,7 +10,7 @@ import { resetProcessRegistryForTests } from "../agents/bash-process-registry.te
 import * as nativeExecution from "../agents/subagents/registry/subagent-execution-observation.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { claimAgentRunContext, resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-records.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { clearTaskActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
@@ -18,19 +18,6 @@ import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 const taskIds = new Set<string>();
 const runIds = new Set<string>();
-const claims = new Map<string, string>();
-
-function ownExecution(run: SubagentRunRecord) {
-  const claim = claimAgentRunContext(
-    run.runId,
-    { sessionKey: run.childSessionKey },
-    { trackOwner: true, ownsContext: true },
-  );
-  if (!claim) {
-    throw new Error("Expected a live execution claim");
-  }
-  claims.set(run.runId, claim);
-}
 
 function task(id: string, status: TaskStatus): TaskRecord {
   taskIds.add(id);
@@ -71,10 +58,7 @@ function registerRun(record: TaskRecord, overrides: Partial<SubagentRunRecord> =
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
-  for (const [runId, claim] of claims) {
-    releaseAgentRunContext(runId, claim);
-  }
-  claims.clear();
+  resetAgentRunRegistryForTest();
   for (const id of taskIds) {
     clearTaskActivity(id);
   }
@@ -99,18 +83,11 @@ it.each(["agent:main:dashboard:stored", "global"])(
       detail: undefined,
     };
     for (const agentId of ["main", "other"]) {
-      const claim = claimAgentRunContext(
-        runId,
-        { sessionKey, agentId },
-        { trackOwner: true, ownsContext: true },
-      );
-      try {
-        expect(getTaskExecutionObservation(record)).toEqual({
-          state: agentId === "main" ? "running" : "unknown",
-        });
-      } finally {
-        releaseAgentRunContext(runId, claim);
-      }
+      resetAgentRunRegistryForTest();
+      claimAgentRunContext(runId, { sessionKey, agentId }, { trackOwner: true, ownsContext: true });
+      expect(getTaskExecutionObservation(record)).toEqual({
+        state: agentId === "main" ? "running" : "unknown",
+      });
     }
   },
 );
@@ -159,7 +136,11 @@ it("projects terminal task statuses without observing retained native executions
 it("keeps running task observations current through generation replacement and deletion", () => {
   const record = task("running-task", "running");
   const original = registerRun(record);
-  ownExecution(original);
+  claimAgentRunContext(
+    original.runId,
+    { sessionKey: original.childSessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
   recordTaskActivityEvent(record, {
     runId: original.runId,
     seq: 1,
@@ -190,7 +171,11 @@ it("keeps running task observations current through generation replacement and d
 
   successor.pauseReason = undefined;
   successor.execution = { status: "running", startedAt: 30 };
-  ownExecution(successor);
+  claimAgentRunContext(
+    successor.runId,
+    { sessionKey: successor.childSessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
   recordTaskActivityEvent(record, {
     runId: successor.runId,
     seq: 1,
