@@ -14,6 +14,7 @@ import { resolveExistingUsageSessionFile } from "../../infra/session-cost-usage.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { resolveGatewaySessionDisplayName } from "../session-utils-display.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
@@ -305,7 +306,7 @@ export async function selectUsageSessions(params: {
             agentId: agentIdFromKey,
             sessionId,
             sessionFile,
-            label: storeEntry?.label,
+            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
             updatedAt,
             storeEntry,
           },
@@ -364,7 +365,7 @@ export async function selectUsageSessions(params: {
             agentId: discovered.agentId,
             sessionId: entry.sessionId,
             sessionFile,
-            label: entry.label,
+            label: resolveGatewaySessionDisplayName(key, entry),
             updatedAt: entry.updatedAt ?? discovered.mtime,
             storeEntry: entry,
           },
