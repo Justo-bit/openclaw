@@ -155,7 +155,7 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
   private focusComposer() {
     this.root
       ?.querySelector<HTMLElement>(
-        "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
+        "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > openclaw-composer-editor",
       )
       ?.focus({ preventScroll: true });
   }

@@ -11,6 +11,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -51,7 +52,7 @@ import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./ch
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
-  CHAT_COMPOSER_TEXTAREA_SELECTOR,
+  CHAT_COMPOSER_EDITOR_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
   focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
@@ -643,14 +644,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
     this.syncQueuedEditRetention();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
-    if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
+    if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_EDITOR_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
       this.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }));
     }
     if (changedProperties.has("focusComposer") && this.focusComposer) {
-      const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+      const textarea = this.querySelector<ComposerEditor>(CHAT_COMPOSER_EDITOR_SELECTOR);
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
       if (input && this.draft) {
