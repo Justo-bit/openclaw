@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -26,10 +27,14 @@ import {
   detectGlobalInstallManagerForRoot,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { runStep } from "../../infra/update-runner-command.js";
-import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
+import {
+  describeUpdateInstallRoot,
+  resolveUnmanagedUpdateInstallReason,
+} from "../../infra/update-runner-install-surface.js";
 import type {
   UpdateRunResult,
   UpdateStepProgress,
@@ -303,9 +308,30 @@ async function cloneGitCheckoutTransactionally(params: {
   const targetDir = preserveDir
     ? await fs.realpath(params.dir)
     : path.join(canonicalParentDir, path.basename(params.dir));
+  const targetIdentity = preserveDir ? await fs.lstat(targetDir, { bigint: true }) : undefined;
   const stagingParent = preserveDir ? targetDir : canonicalParentDir;
   const stagingDir = await fs.mkdtemp(path.join(stagingParent, ".openclaw-clone-"));
+  const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
+
+  async function ownsDirectory(directory: string, identity: typeof stagingIdentity) {
+    try {
+      const current = await fs.lstat(directory, { bigint: true });
+      // Unknown Windows identities cannot authorize publication or recursive cleanup.
+      return (
+        current.isDirectory() &&
+        current.ino !== 0n &&
+        (process.platform !== "win32" || current.dev !== 0n) &&
+        current.ino === identity.ino &&
+        current.dev === identity.dev
+      );
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+      throw error;
+    }
+  }
 
   try {
     const result = await runUpdateStep({
@@ -320,6 +346,14 @@ async function cloneGitCheckoutTransactionally(params: {
     }
 
     const publish = async (): Promise<string> => {
+      if (
+        !(await ownsDirectory(stagingDir, stagingIdentity)) ||
+        (targetIdentity && !(await ownsDirectory(targetDir, targetIdentity)))
+      ) {
+        throw new Error(
+          `The clone destination or staging directory changed before publication: ${targetDir}. The replacement was left unchanged; choose an empty OPENCLAW_GIT_DIR and retry.`,
+        );
+      }
       if (!preserveDir) {
         try {
           await fs.lstat(targetDir);
@@ -386,7 +420,7 @@ async function cloneGitCheckoutTransactionally(params: {
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
-    if (cleanupStaging) {
+    if (cleanupStaging && (await ownsDirectory(stagingDir, stagingIdentity))) {
       await fs.rm(stagingDir, { recursive: true, force: true });
     }
   }
@@ -446,11 +480,20 @@ export async function resolveGlobalManager(params: {
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  serviceUnitTarget?: string;
 }): Promise<GlobalInstallManager> {
   await (
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
   ).assertUnowned(params.root);
-  if (params.installKind === "package") {
+  if (params.installKind !== "git") {
+    if (await resolveBrewOpenClawPath(params.root)) {
+      const reason = resolveUnmanagedUpdateInstallReason();
+      throw new UpdatePreMutationError(
+        reason,
+        "This OpenClaw installation is managed by Homebrew. To update OpenClaw, run:\n\n  brew upgrade openclaw-cli\n\nThen restart the gateway:\n\n  openclaw gateway restart",
+        { failureFacts: [] },
+      );
+    }
     const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(
       runCommandWithTimeout,
@@ -460,10 +503,13 @@ export async function resolveGlobalManager(params: {
     );
     if (!detected) {
       const reason = resolveUnmanagedUpdateInstallReason();
-      throw new UpdatePreMutationError(
-        reason,
-        `${UPDATE_INSTALL_SKIP_GUIDANCE[reason]} Inspected: ${diagnostics.join("; ")}.`,
+      const failure = createUpdatePreflightFailure(
+        "installation-unclassified",
+        `${await describeUpdateInstallRoot(params.root)} Service unit target: ${params.serviceUnitTarget ?? "not inspected"}. Inspected package-manager owners: ${diagnostics.join("; ")}. ${UPDATE_INSTALL_SKIP_GUIDANCE[reason]}`,
       );
+      throw new UpdatePreMutationError(reason, failure.message, {
+        failureFacts: failure.failureFacts,
+      });
     }
     return detected;
   }

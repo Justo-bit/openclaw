@@ -33,7 +33,7 @@ export async function buildStatusReply(
     });
     // The text body is the authored plain rendering of the same facts; channels
     // with native table support render the presentation instead.
-    return setReplyPayloadMetadata(
+    return setReplyPayloadMetadata<ReplyPayload>(
       { text, presentation, presentationTextMode: "fallback" },
       { contextFreeCommand: true },
     );

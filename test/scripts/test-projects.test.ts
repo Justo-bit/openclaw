@@ -1198,6 +1198,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
         "test/scripts/release-ci-summary.test.ts",
         "test/scripts/release-tooling-identity.test.ts",
+        "test/scripts/security-review-event.test.ts",
+        "test/scripts/security-review-script.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
       ],
     );
@@ -1383,6 +1385,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
+        "test/scripts/security-review-workflow.test.ts",
         "test/scripts/verify-stable-main-closeout.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
@@ -1508,14 +1511,35 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
+  it("keeps security review workflow edits on the automatic review owners", () => {
     expectChangedTargets(
-      [".github/workflows/security-sensitive-guard.yml"],
+      [".github/workflows/security-review.yml"],
       [
-        "test/scripts/security-sensitive-guard-workflow.test.ts",
+        "test/scripts/security-review-workflow.test.ts",
+        "test/scripts/security-review-event.test.ts",
+        "test/scripts/security-review-script.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
+  });
+
+  it("keeps automatic review entry points and rollout changes on executable owner tests", () => {
+    expectChangedTargets(
+      ["scripts/github/security-review-event.mjs"],
+      ["test/scripts/security-review-event.test.ts"],
+    );
+    for (const reviewPath of [
+      "scripts/github/security-review.mjs",
+      "scripts/github/security-review-rollout.mjs",
+    ]) {
+      expectChangedTargets(
+        [reviewPath],
+        [
+          "test/scripts/security-review-script.test.ts",
+          "test/scripts/security-review-rollout.test.ts",
+        ],
+      );
+    }
   });
 
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
@@ -1741,7 +1765,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/github/dependency-guard.mjs"],
       [
         "test/scripts/dependency-guard-script.test.ts",
-        "test/scripts/dependency-guard-workflow.test.ts",
+        "test/scripts/security-review-workflow.test.ts",
       ],
     );
 
@@ -1749,9 +1773,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/github/guard-shared.mjs"],
       [
         "test/scripts/dependency-guard-script.test.ts",
-        "test/scripts/dependency-guard-workflow.test.ts",
+        "test/scripts/security-review-workflow.test.ts",
         "test/scripts/security-sensitive-guard-script.test.ts",
-        "test/scripts/security-sensitive-guard-workflow.test.ts",
+        "test/scripts/security-review-script.test.ts",
+        "test/scripts/security-review-event.test.ts",
       ],
     );
 
@@ -1764,7 +1789,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/github/security-sensitive-guard.mjs"],
       [
         "test/scripts/security-sensitive-guard-script.test.ts",
-        "test/scripts/security-sensitive-guard-workflow.test.ts",
+        "test/scripts/security-review-workflow.test.ts",
       ],
     );
 
@@ -2544,6 +2569,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/plugins/doctor-contract-registry.load-paths.test.ts",
     ],
     ["test/vitest/vitest.plugin-sdk.config.ts", "src/plugin-sdk/provider-auth.test.ts"],
+    [
+      "test/vitest/vitest.unit-fast.config.ts",
+      "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
+    ],
   ])("preserves whole-owner watch coverage for %s with %s", (config, file) => {
     const [plan] = buildVitestRunPlans(["--watch", config, file]);
     expect(plan).toMatchObject({
@@ -2686,31 +2715,52 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    [
-      "src/agents/embedded-agent-runner/run",
-      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-    ],
-    ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
-  ])("routes focused agent directory %s to its owning shard", (directory, config) => {
-    expect(buildVitestRunPlans([directory])).toEqual([
-      {
-        config,
-        forwardedArgs: [directory],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
-  });
+    {
+      directory: "src/agents/embedded-agent-runner/run",
+      config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+      workerFiles: [
+        "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
+        "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
+        "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
+      ],
+    },
+    {
+      directory: "src/agents/runtime-plan",
+      config: "test/vitest/vitest.agents-support.config.ts",
+      workerFiles: [],
+    },
+  ])(
+    "routes focused agent directory $directory across its owners",
+    ({ directory, config, workerFiles }) => {
+      expect(buildVitestRunPlans([directory])).toEqual([
+        ...(workerFiles.length > 0
+          ? [
+              {
+                config: "test/vitest/vitest.infra.config.ts",
+                forwardedArgs: [],
+                includePatterns: workerFiles,
+                watchMode: false,
+              },
+            ]
+          : []),
+        {
+          config,
+          forwardedArgs: [directory],
+          includePatterns: null,
+          watchMode: false,
+        },
+      ]);
+    },
+  );
 
   it("splits the focused agent tools directory across its worker and tools owners", () => {
     expect(buildVitestRunPlans(["src/agents/tools"])).toEqual([
       {
         config: "test/vitest/vitest.infra.config.ts",
         forwardedArgs: [],
-        includePatterns: [
-          "src/agents/tools/message-tool.internal-source-reply.integration.test.ts",
-          "src/agents/tools/cron-tool.output-contract.test.ts",
-        ],
+        includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+          file.startsWith("src/agents/tools/"),
+        ),
         watchMode: false,
       },
       {
@@ -2722,12 +2772,22 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps shuffle options on the single owning embedded-run shard", () => {
+  it("keeps shuffle options on both embedded-run owners", () => {
     const directory = "src/agents/embedded-agent-runner/run";
 
     expect(
       buildVitestRunPlans([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]),
     ).toEqual([
+      {
+        config: "test/vitest/vitest.infra.config.ts",
+        forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3"],
+        includePatterns: [
+          "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
+          "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
+          "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
+        ],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
         forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3", directory],

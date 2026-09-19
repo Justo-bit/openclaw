@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
@@ -7,11 +6,10 @@ import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
+  assertSqliteWorkerActorReusable,
   captureSqliteWorkerOpen,
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
-  prepareSqliteWorkerActorContext,
-  prepareSqliteWorkerLifecycle,
   releaseSqliteWorkerActorCoordinators,
   prepareSqliteWorkerDatabaseAdmission,
   resolveOpenedSqliteWorkerIdentity,
@@ -22,10 +20,10 @@ import {
 } from "./sqlite-worker-broker-admission.js";
 import {
   settleSqliteWorkerJob,
-  decodeSqliteWorkerReplyError,
-  decodeSqliteWorkerReplyValue,
   dispatchSqliteWorkerJob,
   settleFailedSqliteWorkerJobs,
+  receiveSqliteWorkerReply,
+  type CompletedSqliteWorkerOutcome,
 } from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
@@ -51,6 +49,7 @@ import {
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 const MAX_WORKERS = 4;
 const MAX_STORES = 64;
@@ -159,12 +158,7 @@ export class SqliteWorkerBroker {
       );
     }
     if (actor) {
-      if (actor.slot.failed) {
-        throw actor.slot.failed;
-      }
-      if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
-        throw new Error("SQLite database already belongs to another worker backend");
-      }
+      assertSqliteWorkerActorReusable(actor, moduleUrl, inputHash, options.stateContext);
       actor.references += 1;
     } else {
       const slot = await this.acquireSlot();
@@ -322,13 +316,10 @@ export class SqliteWorkerBroker {
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: (commandType: PropertyKey) => void,
     createAdmission?: SqliteWorkerAdmissionFactory,
+    requireStateLifecycle = false,
   ): Promise<T> {
-    const client = this.stores.get(store);
-    if (!client || client.sealed || this.draining) {
-      return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
-    }
     return runSqliteWorkerClientOperation(
-      client,
+      this.draining ? undefined : this.stores.get(store),
       operation,
       stateContext,
       (pending) => {
@@ -337,6 +328,7 @@ export class SqliteWorkerBroker {
       },
       assertCurrent,
       createAdmission,
+      requireStateLifecycle,
     );
   }
 
@@ -389,18 +381,27 @@ export class SqliteWorkerBroker {
       ensureSqliteLibrarySelected();
     }
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteStore);
-    const worker = runOutsideCaller(
-      () =>
-        new Worker(url, {
-          env: resolveNodeCompileCacheEnv(),
-          execArgv: url.pathname.endsWith(".ts")
-            ? ["--import", import.meta.resolve("tsx/esm")]
-            : [],
-        }),
+    const worker = runOutsideCaller(() =>
+      createCpuTrackedWorker(url, {
+        env: resolveNodeCompileCacheEnv(),
+        execArgv: url.pathname.endsWith(".ts") ? ["--import", import.meta.resolve("tsx/esm")] : [],
+      }),
     );
     const exited = createDeferredCore();
+    const replyOwner = {
+      fail: (reason: unknown, currentError?: Error, completed?: CompletedSqliteWorkerOutcome) =>
+        this.fail(slot, reason, currentError, completed),
+      finish: (
+        job: Job,
+        error?: unknown,
+        value?: unknown,
+        settlement?: SqliteWorkerOperationSettlement,
+      ) => this.finish(job, error, value, settlement),
+      dispatch: () => this.dispatch(slot),
+    };
     const slot: Slot = {
       worker,
+      receiveReply: (reply, pumping) => receiveSqliteWorkerReply(slot, reply, replyOwner, pumping),
       actors: new Set(),
       queue: [],
       exit: exited.promise,
@@ -408,50 +409,7 @@ export class SqliteWorkerBroker {
       pendingOpens: 1,
     };
     this.slots.add(slot);
-    worker.on("message", (reply: SqliteWorkerReply) => {
-      const job = slot.current;
-      if (!job || reply.id !== job.request.id) {
-        this.fail(slot, new Error("SQLite worker returned an unexpected response"));
-        return;
-      }
-      if (!reply.ok) {
-        if (reply.openNotEntered && job.request.type === "open" && job.dispatchState) {
-          job.dispatchState.openNotEntered = true;
-        }
-        const error = decodeSqliteWorkerReplyError(job, reply.error);
-        if (job.request.type === "open" && reply.openNotEntered && !reply.retire) {
-          slot.current = undefined;
-          const refusal = job.operationAdmission?.admission.failure ?? error;
-          this.finish(job, refusal, undefined, { kind: "not-entered", error: refusal });
-          this.dispatch(slot);
-          return;
-        }
-        if (job.request.type !== "execute" || reply.retire) {
-          this.fail(slot, error, job.request.type !== "execute" ? error : undefined);
-          return;
-        }
-        slot.current = undefined;
-        this.finish(job, job.operationAdmission?.admission.failure ?? error);
-        this.dispatch(slot);
-        return;
-      }
-      let value: unknown;
-      try {
-        const result = decodeSqliteWorkerReplyValue(job, reply);
-        if (result.type === "continue") {
-          // Continuations retain the current job and its reserved transport credits through drain.
-          slot.worker.postMessage(result.request, []);
-          return;
-        }
-        value = result.value;
-      } catch (error) {
-        this.fail(slot, error);
-        return;
-      }
-      slot.current = undefined;
-      this.finish(job, undefined, value);
-      this.dispatch(slot);
-    });
+    worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
     worker.on("error", (error) => this.fail(slot, error));
     worker.on("messageerror", (error) => this.fail(slot, error));
     worker.once("exit", (code) => {
@@ -501,6 +459,7 @@ export class SqliteWorkerBroker {
     }
     const result = createDeferredCore<unknown>();
     const job: Job = {
+      requireStateLifecycle: scope?.requireStateLifecycle,
       maintenanceScope,
       createAdmission,
       assertCurrent,
@@ -517,11 +476,15 @@ export class SqliteWorkerBroker {
         slot.queue.splice(index, 1);
         this.finish(job, signal?.reason ?? new Error("SQLite worker operation canceled"));
       }
+      if (slot.current === job && !job.nativeDispatched) {
+        job.cancelPreparation?.abort(signal?.reason);
+      }
       // Once dispatched, retain the Promise until the database outcome is known.
     };
     this.requests += 1;
     this.bytes += reservedBytes;
     if (activeInput) {
+      signal?.addEventListener("abort", abort, { once: true });
       // A complete oversized value is active-operation memory, never retained in the bounded queue.
       if (signal?.aborted) {
         this.finish(job, signal.reason ?? new Error("SQLite worker operation canceled"));
@@ -553,29 +516,21 @@ export class SqliteWorkerBroker {
 
   private dispatchJob(slot: Slot, job: Job): void {
     slot.current = job;
-    job.detach();
     slot.worker.ref();
-    try {
-      job.assertCurrent?.();
-      const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
-      prepareSqliteWorkerActorContext(actor, job.request);
-      prepareSqliteWorkerLifecycle(job, actor);
-      dispatchSqliteWorkerJob(slot.worker, job);
-    } catch (error) {
-      if (
-        job.request.gatewaySchemaFence ||
-        job.request.maintenanceSchemaFence ||
-        job.request.stateLifecycle ||
-        job.request.operationAdmission
-      ) {
-        // A failed transfer cannot attest that the receiving native owner is gone.
+    dispatchSqliteWorkerJob(slot, job, (error, retire) => {
+      // Slot failure owns settlement after joining preparation and native retirement.
+      if (slot.current !== job) {
+        return;
+      }
+      if (retire) {
+        // Retire uncertain transfers or failed prepared-custody cleanup before settlement.
         this.fail(slot, error, toErrorObject(error, "SQLite worker transfer failed"));
       } else {
         slot.current = undefined;
         this.finish(job, error);
         this.dispatch(slot);
       }
-    }
+    });
   }
 
   private finish(
@@ -589,12 +544,20 @@ export class SqliteWorkerBroker {
     settleSqliteWorkerJob(job, error, value, settlement);
   }
 
-  private fail(slot: Slot, reason: unknown, currentError?: Error): void {
+  private fail(
+    slot: Slot,
+    reason: unknown,
+    currentError?: Error,
+    completed?: CompletedSqliteWorkerOutcome,
+  ): void {
     if (slot.failed) {
       return;
     }
     const error = toErrorObject(reason, "SQLite worker failed");
     slot.failed = new SqliteWorkerError(error.message, "unavailable");
+    if (completed) {
+      slot.retiredAfterCompletion = true;
+    }
     const current = slot.current;
     slot.current = undefined;
     if (current) {
@@ -609,7 +572,8 @@ export class SqliteWorkerBroker {
       queued,
       error,
       currentError,
-      retirement: this.retire(slot),
+      completed,
+      retire: () => this.retire(slot),
       finish: (job, failure, value, settlement) => this.finish(job, failure, value, settlement),
     });
   }
@@ -639,7 +603,7 @@ export class SqliteWorkerBroker {
           this.fail(actor.slot, error instanceof Error ? error : new Error(String(error)));
           await actor.slot.exit;
         }
-      } else if (firstAttempt && actor.slot.failed) {
+      } else if (firstAttempt && actor.slot.failed && !actor.slot.retiredAfterCompletion) {
         errors.push(actor.slot.failed);
       }
       try {

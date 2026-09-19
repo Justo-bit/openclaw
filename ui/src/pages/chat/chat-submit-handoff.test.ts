@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
@@ -19,7 +19,7 @@ import { removeQueuedMessage } from "./chat-queue.ts";
 import {
   flushChatQueueForEvent,
   moveQueuedChatMessage,
-  retryReconnectableQueuedChatSends,
+  resumeStoredChatOutboxes,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import {
@@ -383,7 +383,7 @@ describe("chat submission handoff", () => {
           expect(host.request).not.toHaveBeenCalled();
         }
         host.connected = true;
-        await retryReconnectableQueuedChatSends(host);
+        await resumeStoredChatOutboxes(host);
         expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(
           1,
         );

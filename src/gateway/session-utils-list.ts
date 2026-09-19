@@ -230,13 +230,23 @@ export function prepareSessionRowSelection(
     configuredAgentIds: new Set(listAgentIds(cfg)),
     userProfileIdentityById: rowContext.userProfileIdentityById,
     getRowContext: () => rowContext,
-    getTarget: (key: string): (RecordRow & { storeKey?: string }) | undefined => {
+    getTarget: (
+      key: string,
+    ):
+      | (RecordRow & {
+          storeKey?: string;
+          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
+        })
+      | undefined => {
       const winner = winners.get(key);
-      const row =
-        winner && opts.search
-          ? projection.describe({ ...winner, storePath: winner.storeTarget.storePath })
-          : winner;
-      return row && key !== row.key ? { ...row, storeKey: row.key } : row;
+      if (!winner || (!opts.search && key === winner.key)) {
+        return winner;
+      }
+      return {
+        ...winner,
+        ...(key !== winner.key ? { storeKey: winner.key } : {}),
+        getModelFacts: () => projection.modelFacts(winner),
+      };
     },
   };
 }
@@ -252,6 +262,57 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
   ).entries;
 }
 
+/** Shared synchronous membership policy for list pages and full-roster transcript search. */
+export function prepareProjectedSessionList(params: {
+  projection: SessionRowProjection;
+  opts: SessionsListParams;
+  context?: GatewayRequestContext;
+  client?: GatewayClient | null;
+  now: number;
+}) {
+  const { projection, opts, context, client, now } = params;
+  const presentation = prepareProjectedSessionPresentation(
+    projection,
+    client,
+    now,
+    context
+      ? createVisibleActiveSessionRunProjector(
+          context,
+          projection.state.rowContext.projectedAgentRuns,
+        )
+      : undefined,
+  );
+  const prepared = prepareSessionRowSelection(projection, opts, {
+    now,
+    rowContext: presentation.rowContext,
+  });
+  const { getTarget } = prepared;
+  const { active } = presentation;
+  const identity = gatewayClientSessionCreator(client ?? null)?.id;
+  const filters: SessionListFilterParams = {
+    ...prepared,
+    involvingActorId: opts.involvingMe ? identity : undefined,
+    ownerFirstActorId: opts.ownerFirst ? identity : undefined,
+    restrictProfileReferences: client !== undefined,
+    projectActiveRun: context
+      ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
+      : undefined,
+    entryFilter: (key, entry) => {
+      const row = getTarget(key);
+      const visible = Boolean(
+        row &&
+        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+      );
+      return (
+        visible &&
+        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
+      );
+    },
+  };
+  return { prepared, presentation, filters };
+}
+
 /** One readiness await, then one synchronous selection/authorization/presentation boundary. */
 export async function listProjectedSessions(params: {
   projection: SessionRowProjection;
@@ -264,7 +325,7 @@ export async function listProjectedSessions(params: {
   const { projection, opts, context, client, diagnostics } = params;
   const dirtyRowCount = projection.dirtyRowCount;
   const materializedBefore = projection.materializedCount;
-  diagnostics?.mark("modelCatalog");
+  diagnostics?.mark("materialize");
   const waitStarted = performance.now();
   let yieldCount = 0;
   do {
@@ -277,49 +338,20 @@ export async function listProjectedSessions(params: {
   let syncCpu = diagnostics?.startSyncCpu();
   try {
     diagnostics?.mark("storeLoad");
-    const presentation = prepareProjectedSessionPresentation(
+    const { presentation, prepared, filters } = prepareProjectedSessionList({
       projection,
+      opts,
+      context,
       client,
       now,
-      context
-        ? createVisibleActiveSessionRunProjector(
-            context,
-            projection.state.rowContext.projectedAgentRuns,
-          )
-        : undefined,
-    );
-    const prepared = prepareSessionRowSelection(projection, opts, {
-      now,
-      rowContext: presentation.rowContext,
     });
     const { cfg, getTarget } = prepared;
     diagnostics?.mark("filterSetup");
-    const { active } = presentation;
-    const identity = gatewayClientSessionCreator(client ?? null)?.id;
     const selection = withAgentRosterFactsBatch(cfg, () =>
       runSynchronousWork(
         selectSessionEntries({
-          ...prepared,
+          ...filters,
           defaultLimit: 100,
-          involvingActorId: opts.involvingMe ? identity : undefined,
-          ownerFirstActorId: opts.ownerFirst ? identity : undefined,
-          restrictProfileReferences: client !== undefined,
-          projectActiveRun: context
-            ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
-            : undefined,
-          entryFilter: (key, entry) => {
-            const row = getTarget(key);
-            const visible = Boolean(
-              row &&
-              (client === undefined ||
-                (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-            );
-            return (
-              visible &&
-              (opts.hasBoard === undefined || row?.facts?.hasBoard === opts.hasBoard) &&
-              (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
-            );
-          },
         }),
       ),
     );
@@ -331,6 +363,7 @@ export async function listProjectedSessions(params: {
     cpuPhase = "rowThreadCpuMs";
     syncCpu = diagnostics?.startSyncCpu();
     let materializedRowCount = 0;
+    projection.setArchivePageSize(selection.entries.length);
     const sessions = selection.entries.flatMap(([key], index) => {
       const target = getTarget(key);
       const record =

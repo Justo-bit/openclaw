@@ -106,7 +106,7 @@ export const callGatewayMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
 export const readSessionMessagesAsyncMock = createMock();
 
-const resolveBootstrapWarningSignaturesSeenMock = createMock();
+const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
 const resolveCronStyleNowMock = createMock();
 export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
@@ -600,7 +600,7 @@ function resetRunConfigMocks(): void {
 
 function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
-  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
+  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
@@ -719,7 +719,7 @@ function resetRunOutcomeMocks(): void {
       sourceDeliveryOutcome,
       resolvedDelivery,
     }) => ({
-      result: undefined,
+      disposition: undefined,
       delivered: Boolean(
         sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&

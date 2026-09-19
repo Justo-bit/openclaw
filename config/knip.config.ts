@@ -84,6 +84,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs!",
   "scripts/e2e/lib/fleet-cache/probe-podman-cell.mjs!",
   "scripts/e2e/lib/fleet-cache/runtime-preflight.mjs!",
+  // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
+  "scripts/e2e/lib/node-auto-update/scenario.mjs!",
   "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
@@ -190,6 +192,8 @@ const repositoryScriptEntries = [
   "scripts/run-stylelint.mts!",
   // Path-spawned test roots are development entries; `!` would audit dev tools as production.
   "scripts/run-vitest-child.mts",
+  // The isolated Vitest adapter executes this entry by path inside its container.
+  "scripts/lib/vitest-isolated-entry.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
@@ -273,6 +277,7 @@ const rootEntries = [
   "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
+  "scripts/bench-codex-catalog-pages.ts!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.

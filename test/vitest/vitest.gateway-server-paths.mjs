@@ -1,15 +1,24 @@
 // Plugin integration tests retain Gateway runtime setup outside core source.
-export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway.test.ts"];
+export const gatewayPluginTestFiles = [
+  "test/plugins/codex-model-catalog.gateway.test.ts",
+  "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+];
 
 // This curated cohort retains serial forks and the extended database-worker watchdog,
 // even though ordinary Gateway methods also use forks.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
   "src/gateway/device-pairing-prune.test.ts",
+  "src/gateway/gateway-auth-recovery.test.ts",
+  "src/gateway/gateway-cli-backend.connect.test.ts",
   "src/gateway/gateway-code-mode-clock.test.ts",
+  "src/gateway/gateway-cron-process-identity.windows.test.ts",
+  "src/gateway/gateway-route-model-reuse.test.ts",
+  "src/gateway/gateway-ssh-upload-signal.test.ts",
   "src/gateway/gateway.chat-redaction.test.ts",
   "src/gateway/health/collector.queue-health.test.ts",
   "src/gateway/internal-source-reply-persistence.test.ts",
@@ -20,6 +29,9 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
+  "src/gateway/mention-directory.test.ts",
+  "src/gateway/mention-inbox.test.ts",
+  "src/gateway/probe.device-auth-scope.test.ts",
   "src/gateway/server-methods/agent.create-event.test.ts",
   "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
@@ -69,6 +81,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/skill-library-read.test.ts",
   "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
+  "src/gateway/session-message-events.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
@@ -77,6 +90,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
+  "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
 ];
@@ -94,6 +109,8 @@ export const gatewayServerBackedHttpTestFiles = [
 // Gateway methods needing native process state or a private module graph keep
 // the shared methods runner in isolated forks.
 export const gatewayMethodsIsolatedTestFiles = [
+  // Heap scans should not traverse objects from unrelated test files.
+  "src/gateway/server-methods/chat-metadata-runtime.cache.test.ts",
   "src/gateway/server-methods/tasks.access.test.ts",
   "src/gateway/server-methods/tasks.test.ts",
   "src/gateway/server-methods/agent.task-runtime.test.ts",
@@ -106,6 +123,7 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/sessions.send-yield-resume.test.ts",
   "src/gateway/server-methods/system-agent-nested-inference.integration.test.ts",
   "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
+  "src/gateway/server-methods/transcripts.test.ts",
   "src/gateway/server-methods/users-preferences.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
@@ -115,6 +133,7 @@ export const gatewayMethodsIsolatedTestFiles = [
 export const gatewayServerIsolatedTestFiles = [
   // A failed native close permanently fences this process's metadata owner.
   "src/gateway/server-close.agent-databases.test.ts",
+  "src/gateway/server.chat.canonical-publication.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",
   "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
   // Loads the real plugin runtime that neighboring server tests replace with mocks.
@@ -123,6 +142,8 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.cli-watchdog.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "src/gateway/server.incomplete-stream.test.ts",
+  "src/gateway/server.encrypted-tool-continuation.test.ts",
+  "src/gateway/server.message-buffer-caption.test.ts",
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",

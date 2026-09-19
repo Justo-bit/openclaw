@@ -19,6 +19,7 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -26,6 +27,7 @@ import {
   noteDoctorHookConfigWarnings,
   noteImplicitFallbackClobberWarnings,
   noteMcpOriginWarning,
+  noteMediaCliModelWarnings,
   noteMissingDefaultAgentOwner,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
@@ -111,6 +113,7 @@ async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
  */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
@@ -129,6 +132,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
+        ...(params.agentDatabaseMigrationDiscovery
+          ? { agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery }
+          : {}),
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
           params.prompter,
           progress.done,
@@ -477,16 +483,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   }
 
-  const { collectPluginToolAllowlistWarnings } =
-    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const [
+    { collectPluginToolAllowlistWarnings },
+    { collectGitHubUpgradeWarnings },
+    { normalizePluginsConfig },
+  ] = await Promise.all([
+    import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
+    import("./doctor/shared/github-preview-upgrade.js"),
+    import("../plugins/config-state.js"),
+  ]);
   const pluginToolAllowlistWarnings = runWithCurrentPluginMetadata(state.candidate, () =>
     collectPluginToolAllowlistWarnings({
       cfg: state.candidate,
       env: process.env,
     }),
   );
-  if (pluginToolAllowlistWarnings.length > 0) {
-    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
+  const pluginWarnings = [
+    ...pluginToolAllowlistWarnings,
+    ...collectGitHubUpgradeWarnings(normalizePluginsConfig(state.candidate.plugins)),
+  ];
+  if (pluginWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginWarnings.join("\n")), "Doctor warnings");
   }
 
   const hasConfiguredChannels =
@@ -581,7 +598,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         env: process.env,
         allowExec: params.options.allowExec === true,
         blockedCodexProviderPlan,
-        runWithPluginMetadataSnapshot,
       });
     const previewNotes = await runWithCurrentPluginMetadata(state.candidate, collectPreviewNotes);
     emitDoctorNotes({
@@ -674,6 +690,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
+  noteMediaCliModelWarnings(cfg);
   noteMissingDefaultAgentOwner(cfg);
 
   const migrationResult = await finalizeMigrationResult({

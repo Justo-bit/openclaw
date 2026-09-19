@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -75,6 +76,8 @@ afterAll(() => {
 describe("webchat commentary media", () => {
   it.each([
     "image",
+    "worktree",
+    "sender-denied",
     "document",
     "hook",
     "revoked",
@@ -120,8 +123,20 @@ describe("webchat commentary media", () => {
       const address = upstream.address() as AddressInfo;
       const fixtureUrl = `http://127.0.0.1:${address.port}/11111111-1111-4111-8111-111111111111`;
       const mediaUrl = MEDIA_URL;
-      const mediaUrls =
-        scenario === "revoked" || scenario === "aborted"
+      const worktree = state.statePath("worktrees", "project");
+      const relativeImage = "./proof/relative.png";
+      const absoluteImage = path.join(worktree, "proof", "absolute.png");
+      const siblingImage = state.statePath("worktrees", "other", "private.png");
+      const localMedia = scenario === "worktree" || scenario === "sender-denied";
+      if (localMedia) {
+        for (const file of [absoluteImage, path.join(worktree, relativeImage), siblingImage]) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, PNG_BYTES);
+        }
+      }
+      const mediaUrls = localMedia
+        ? [absoluteImage, relativeImage, siblingImage]
+        : scenario === "revoked" || scenario === "aborted"
           ? [mediaUrl, `${mediaUrl}/second`]
           : [mediaUrl];
       const mixed = scenario === "mixed-text" || scenario === "mixed-media";
@@ -141,6 +156,9 @@ describe("webchat commentary media", () => {
         sessionId: scope.sessionId,
         lifecycleRevision: "initial",
         updatedAt: 1,
+        ...(localMedia
+          ? { spawnedCwd: worktree, spawnedBy: "agent:main:main", sessionRoot: worktree }
+          : {}),
       });
       if (scenario === "unrelated-rewrite") {
         expect(
@@ -175,6 +193,7 @@ describe("webchat commentary media", () => {
       };
       const dispatch = createChatSendReplyDispatch({
         accountId: undefined,
+        requesterContext: { SenderId: "cli" },
         isAgentRunStarted: () => true,
         isRunCurrent: () => current,
         abortSignal: abortController.signal,
@@ -182,7 +201,19 @@ describe("webchat commentary media", () => {
         session: {
           ...scope,
           backingSessionId: scope.sessionId,
-          cfg: { agents: { list: [{ id: "main", workspace: state.workspaceDir }] } },
+          cfg: {
+            agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+            ...(localMedia
+              ? {
+                  tools: {
+                    fs: { workspaceOnly: true },
+                    ...(scenario === "sender-denied"
+                      ? { toolsBySender: { "id:cli": { deny: ["read"] } } }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
           clientRunId: runId,
           sessionLoadOptions: { agentId: "main" },
         },
@@ -320,7 +351,7 @@ describe("webchat commentary media", () => {
                 });
                 await vi.waitFor(() => {
                   expect(warn).not.toHaveBeenCalled();
-                  expect(requestCount).toBe(mediaUrls.length);
+                  expect(requestCount).toBe(localMedia ? 0 : mediaUrls.length);
                 });
                 if (scenario === "completion") {
                   return;
@@ -377,7 +408,42 @@ describe("webchat commentary media", () => {
                   .flatMap((row) => (Array.isArray(row.content) ? row.content : []))
                   .map(asOptionalRecord)
                   .filter((block) => block?.type === "image" || block?.type === "attachment");
-                expect(displayedMedia).toHaveLength(1);
+                expect(displayedMedia).toHaveLength(
+                  scenario === "sender-denied" ? 0 : scenario === "worktree" ? 2 : 1,
+                );
+                if (scenario === "sender-denied") {
+                  const failures = displayed
+                    .flatMap((row) => row.content ?? [])
+                    .map(asOptionalRecord)
+                    .filter((block) => block?.type === "attachment_error");
+                  expect(failures).toHaveLength(3);
+                  expect(
+                    await listManagedImageRecordEntries({ sessionKey: scope.sessionKey }),
+                  ).toEqual([]);
+                }
+                if (scenario === "worktree") {
+                  const blocks = displayed.flatMap((row) => row.content ?? []);
+                  expect(blocks).toContainEqual({
+                    type: "attachment_error",
+                    attachment: {
+                      code: "delivery-failed",
+                      kind: "image",
+                      label: "private.png",
+                      mimeType: "image/png",
+                    },
+                  });
+                  expect(displayedMedia).toEqual([
+                    expect.objectContaining({
+                      type: "image",
+                      url: expect.stringContaining("/api/chat/media/outgoing/"),
+                    }),
+                    expect.objectContaining({
+                      type: "image",
+                      url: expect.stringContaining("/api/chat/media/outgoing/"),
+                    }),
+                  ]);
+                  expect(await fs.readFile(absoluteImage)).toEqual(PNG_BYTES);
+                }
                 if (scenario === "top-level") {
                   expect(displayed).toContainEqual(
                     expect.objectContaining({
@@ -473,10 +539,12 @@ describe("webchat commentary media", () => {
         if (scenario === "aborted") {
           await vi.waitFor(() => {
             expect(abortedResponseClosed).toBe(true);
-            expect(cleanupSettled).toBe(true);
           });
         }
         await run;
+        if (scenario === "aborted") {
+          expect(cleanupSettled).toBe(true);
+        }
         if (mixed) {
           expect(readMessage()).toMatchObject({ content: expectedContent });
           expect(

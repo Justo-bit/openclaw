@@ -32,12 +32,13 @@ finished but still owe completion delivery; they are not necessarily executing.
 “Current activity unavailable” means no current execution is observable, not that
 the task failed. These observations do not change retained active/done counts.
 
-In the Control UI, parent sessions with recent child runs have an expandable
-sidebar row. Subagents appear only under an expanded parent, including when a
-custom group is assigned. The nested rows show child status and runtime, and
-selecting one opens that child's chat while preserving the parent hierarchy. Chat
-activity rows identify each subagent by its task name beside its status and latest
-activity.
+In the Control UI, subagent runs appear in inline transcript activity rows, the
+chat **Tasks** tab, and the [Tasks page](/automation/tasks#control-ui). They do not
+appear as sidebar rows or add an expand control to their parent. The parent's
+activity ring, counts, unread attention, and child-failure warnings still include
+their work. Persistent spawned sessions and forks keep their sidebar nesting.
+Chat activity rows identify each subagent by its task name beside its status and
+latest activity; selecting a task opens its details and transcript in **Review**.
 Parent-sent follow-up turns also appear in these activity rows while they run,
 including after the original child task completed. They preserve the original
 result and any pending child wait; replies still follow `sessions_send` delivery.

@@ -7,7 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
-import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import {
   PluginHostCleanupTimeoutError,
   withPluginHostCleanupTimeout,
@@ -41,6 +41,7 @@ import { createPluginReloadChannels } from "./server-plugin-reload-channels.js";
 import {
   createPluginReloadCleanup,
   createPluginReloadDiagnostics,
+  PluginAdmittedWorkTimeoutError,
 } from "./server-plugin-reload-cleanup.js";
 import { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
 import {
@@ -128,6 +129,7 @@ export async function reloadGatewayPlugins(
   >[] = [];
   const quiescedInstances: PluginInstanceHandle[] = [];
   let rollbackConfigEffects: (() => Promise<void>) | undefined;
+  let releaseResourceHandoff: (() => void) | undefined;
   const skipChannels =
     isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS);
@@ -146,8 +148,10 @@ export async function reloadGatewayPlugins(
     isBlockingStopError,
     rethrowServiceStopTimeout,
     includeServiceStopFailure,
-    assertResourceHandoff,
+    reserveResourceHandoff,
+    selectResourceHandoff,
     drainInstances,
+    drainBeforeReplacement,
     drainForRecovery,
     disposeInstances,
     runLifecycleHooks,
@@ -165,7 +169,6 @@ export async function reloadGatewayPlugins(
     retainRetirement: (retire) => kernel.pluginMetadata.retire(cache, retire),
   });
   const replacement = kernel.pluginRuntimeGeneration.reserve();
-  replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
   const assertCurrent = () => {
     params.assertInvokerOwned?.();
     if (params.isAborted?.()) {
@@ -234,38 +237,13 @@ export async function reloadGatewayPlugins(
     );
     preflight.retireGatewayRuntimeBindings();
     let nextRegistry = preflight.pluginRegistry;
-    const retainedRecords = new Set(nextRegistry.plugins);
-    changedPluginIds.clear();
-    for (const pluginId of [
-      ...requestedIds,
-      ...previousRegistry.plugins
-        .filter((record) => !retainedRecords.has(record))
-        .map((record) => record.id),
-      ...nextRegistry.plugins
-        .filter((record) => !previousRegistry.plugins.includes(record))
-        .map((record) => record.id),
-    ]) {
-      changedPluginIds.add(pluginId);
-    }
-    resourceHandoffIds = new Set(
-      nextRegistry.plugins
-        .filter(
-          (record) =>
-            changedPluginIds.has(record.id) &&
-            record.enabled &&
-            record.status === "loaded" &&
-            record.format !== "bundle" &&
-            previousRegistry.plugins.some(
-              (previous) => previous.id === record.id && getPluginInstance(previous),
-            ),
-        )
-        .map((record) => record.id),
-    );
-    assertResourceHandoff(resourceHandoffIds);
+    resourceHandoffIds = selectResourceHandoff(nextRegistry, requestedIds);
     channels.collectTargets(nextRegistry, changedPluginIds);
     recovery.capture(changedPluginIds);
     await params.checkpoint?.();
     assertCurrent();
+    // No yield between the final work check, admission fence, and invalidation.
+    releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
     rollbackConfigEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
@@ -317,6 +295,20 @@ export async function reloadGatewayPlugins(
         }
       }
     }
+    try {
+      await drainBeforeReplacement(
+        resourceHandoffIds,
+        restartDrainSignal,
+        replacement.setReloadStatus,
+      );
+    } catch (error) {
+      if (error instanceof PluginHostCleanupTimeoutError) {
+        throw new PluginAdmittedWorkTimeoutError(resourceHandoffIds, error);
+      }
+      throw error;
+    }
+    assertCurrent();
+    replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     // Channel monitors and services hold long-lived consumers until stop cancels
     // their loops. Ask those owners to stop before joining the remaining work.
     previousStopStarted = true;
@@ -615,6 +607,8 @@ export async function reloadGatewayPlugins(
               { dropIfSlow: true },
             );
           } else {
+            // Restored preparation must be able to retain the still-callable instances.
+            releaseResourceHandoff?.();
             for (const instance of quiescedInstances) {
               instance.resume();
             }
@@ -661,9 +655,6 @@ export async function reloadGatewayPlugins(
         } finally {
           await releaseChannelHandoffs(recoveryErrors);
         }
-        if (recoveryErrors.length === 0) {
-          await attempt(recoveryErrors, () => rollbackConfigEffects?.());
-        }
         restored = recoveryErrors.length === 0;
         if (recoveryErrors.length > 0) {
           const recoveryError =
@@ -688,6 +679,14 @@ export async function reloadGatewayPlugins(
             "Plugin replacement failed and an unchanged channel could not resume.",
           );
         }
+        try {
+          await rollbackConfigEffects?.();
+        } catch (rollbackError) {
+          restored = false;
+          onCleanupFailure("Plugin runtime rollback could not republish the model runtime")(
+            rollbackError,
+          );
+        }
       }
     } else {
       await kernel.pluginMetadata
@@ -706,6 +705,7 @@ export async function reloadGatewayPlugins(
       { cause: failure },
     );
   } finally {
+    releaseResourceHandoff?.();
     // A completed operation never retains an in-progress channel pause. Failed
     // instances keep their own resource/admission fence until a later safe reload.
     channels.release("failed");
