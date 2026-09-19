@@ -5,8 +5,33 @@ import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
+import type { DraftSessionCreateOverrides } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
+import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
+
+/** Project the draft's explicit choices through the existing session-create parameter owner. */
+export function buildDraftSubmissionCreateParams(
+  place: DraftPlaceState,
+  gateway: DraftGatewayState,
+  draft: Pick<DraftSubmissionFlow, "capabilities" | "permission" | "visibility">,
+  snapshot: DraftSubmissionSnapshot,
+  options: DraftSessionCreateOverrides = {},
+) {
+  return buildSelectedSessionCreateParams(place, {
+    ...options,
+    message: options.message ?? "",
+    toolOverrides: draft.capabilities.toolOverrides,
+    permissionMode: draft.permission.value,
+    visibility: options.visibility ?? draft.visibility,
+    catalogId: snapshot.data?.catalogId,
+    category: gateway.resolvedGroupCategory(),
+  });
+}
 
 /** Freeze the selected or recovered input before creation can yield to another draft. */
 export function prepareDraftSubmission(

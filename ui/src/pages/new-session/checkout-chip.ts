@@ -47,6 +47,7 @@ export function resolveCheckoutChip(params: {
 }
 
 function renderWorktreeFields(params: {
+  idPrefix?: string;
   branches: DraftBranches | null;
   branchesLoading: boolean;
   baseRef: string;
@@ -62,7 +63,7 @@ function renderWorktreeFields(params: {
       <span>${t("newSession.worktreeBaseRef")}</span>
       <input
         type="text"
-        list="new-session-branches"
+        list=${(params.idPrefix ?? "new-session") + "-branches"}
         ?disabled=${params.submitting || params.pendingPlacement}
         placeholder=${
           params.branchesLoading
@@ -76,7 +77,7 @@ function renderWorktreeFields(params: {
           }
         }}
       />
-      <datalist id="new-session-branches">
+      <datalist id=${(params.idPrefix ?? "new-session") + "-branches"}>
         ${(params.branches?.branches ?? []).map(
           (branch) => html`<option value=${branch.name}></option>`,
         )}
@@ -112,6 +113,7 @@ function renderWorktreeFields(params: {
 }
 
 export function renderCheckoutChip(params: {
+  idPrefix?: string;
   state: CheckoutChipState;
   remotePlacement: boolean;
   repository?: boolean;
@@ -138,7 +140,7 @@ export function renderCheckoutChip(params: {
   return html`
     <span class="new-session-page__select">
       <button
-        id="new-session-checkout-trigger"
+        id=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
         type="button"
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
@@ -167,7 +169,7 @@ export function renderCheckoutChip(params: {
     </span>
     <wa-popover
       class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
-      for="new-session-checkout-trigger"
+      for=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
       placement="bottom-start"
       without-arrow
       @wa-show=${params.onPopoverShow}

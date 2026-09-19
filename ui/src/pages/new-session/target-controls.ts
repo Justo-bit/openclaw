@@ -39,6 +39,12 @@ export function renderAgentSelect(params: {
           label: normalizeAgentTargetLabel(agent, params.agentIdentity?.get(agent.id)),
           agent,
         }))}
+        .identityById=${Object.fromEntries(
+          params.agents.flatMap((agent) => {
+            const identity = params.agentIdentity?.get(agent.id);
+            return identity ? [[agent.id, identity]] : [];
+          }),
+        )}
         .value=${selectedId}
         .accessibleLabel=${t("newSession.agent")}
         .menuLabel=${t("newSession.agents")}
@@ -52,6 +58,7 @@ export function renderAgentSelect(params: {
 }
 
 export function renderNewSessionPlaceControls({
+  idPrefix,
   context,
   data,
   gateway,
@@ -59,8 +66,10 @@ export function renderNewSessionPlaceControls({
   submitting,
   pendingPlacement,
   onConnectMachine,
+  onNavigate,
   requestUpdate,
 }: {
+  idPrefix?: string;
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   gateway: DraftGatewayState;
@@ -68,6 +77,7 @@ export function renderNewSessionPlaceControls({
   submitting: boolean;
   pendingPlacement: boolean;
   onConnectMachine: () => void;
+  onNavigate: ApplicationContext["navigate"];
   requestUpdate: () => void;
 }) {
   const browser = place.browser;
@@ -126,6 +136,7 @@ export function renderNewSessionPlaceControls({
           onSelect: (hostId) => place.selectTerminalHost(hostId),
         })
       : renderWhereChip({
+          idPrefix,
           state: whereState,
           environmentQuery: browser.environmentQuery,
           onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
@@ -171,7 +182,7 @@ export function renderNewSessionPlaceControls({
           onConnectMachine,
           onManageCloudWorkers: () => {
             browser.close();
-            context?.navigate("cloud-workers");
+            onNavigate("cloud-workers");
           },
         })
   }${
@@ -189,6 +200,7 @@ export function renderNewSessionPlaceControls({
             }}
         /></label>`
       : renderProjectChip({
+          idPrefix,
           state: projectState,
           browseAvailable: place.browseAvailable(),
           isAdmin: place.isAdmin(),
@@ -240,6 +252,7 @@ export function renderNewSessionPlaceControls({
   }${
     checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
+          idPrefix,
           state: checkoutState,
           remotePlacement: place.remotePlacement,
           repository: Boolean(place.remoteRepository),

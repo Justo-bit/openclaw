@@ -6,7 +6,10 @@ import * as agentEn from "./en-agents.ts";
 export const en: TranslationMap & {
   board: TranslationMap & { widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap };
+  shortcutsOverlay: TranslationMap & { title: string };
   chat: TranslationMap & {
+    commands: TranslationMap;
+    welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
     backgroundTasks: TranslationMap;
     messages: TranslationMap &
       Record<
@@ -52,7 +55,14 @@ export const en: TranslationMap & {
   updates: TranslationMap;
   login: TranslationMap;
   modelSetup: TranslationMap;
-  newSession: TranslationMap;
+  newSession: TranslationMap &
+    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+  commandPalette: TranslationMap;
+  palette: TranslationMap & {
+    placeholder: string;
+    categories: TranslationMap & { navigation: string };
+  };
+  sessionsView: TranslationMap;
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
   usage: TranslationMap & { overview: TranslationMap };
@@ -193,53 +203,7 @@ export const en: TranslationMap & {
   focus: {
     unsupported: "This focused view is not supported.",
   },
-  shortcutsOverlay: {
-    title: "Keyboard shortcuts",
-    sections: {
-      general: "General",
-      chat: "Chat",
-      panels: "Panels",
-      sidebar: "Sidebar",
-      imageViewer: "Image viewer",
-      approvals: "Approvals",
-    },
-    labels: {
-      commandPalette: "Open command palette",
-      keyboardShortcuts: "Show keyboard shortcuts",
-      toggleSidebar: "Toggle sidebar",
-      debugOverlay: "Toggle debug overlay",
-      appearanceSettings: "Open appearance settings",
-      startNewSession: "Start new session (from the new-session page)",
-      closeDialog: "Close dialog or exit settings",
-      sendMessage: "Send message",
-      newline: "Insert new line",
-      steerImmediately: "Steer active response",
-      historyRecall: "Browse sent message history",
-      transcriptSearch: "Search conversation",
-      clearReply: "Clear reply",
-      stopResponse: "Stop active response",
-      cancelDictation: "Cancel dictation",
-      saveQueuedMessage: "Save queued message",
-      toggleSessionSelect: "Select multiple sessions",
-      extendSessionSelect: "Extend session selection",
-      zoomIn: "Zoom in",
-      zoomOut: "Zoom out",
-      zoomReset: "Reset zoom",
-      terminalPanel: "Toggle terminal panel",
-      homePanel: "Talk to your Home agent",
-      workspaceFiles: "Toggle workspace files",
-      sideChat: "Toggle side chat",
-      browserPanel: "Toggle browser panel",
-      tasksPanel: "Toggle tasks panel",
-      desktopPanel: "Toggle desktop panel",
-      discussionPanel: "Toggle discussion panel",
-      dashboardPanel: "Toggle dashboard panel",
-      reviewPanel: "Toggle review panel",
-      approveOnce: "Approve once",
-      approveAlways: "Always allow",
-      denyApproval: "Deny approval",
-    },
-  },
+  shortcutsOverlay: { title: "Keyboard shortcuts" },
   optionCard: {
     recommended: "Recommended",
     skip: "Skip for now",
@@ -957,38 +921,8 @@ export const en: TranslationMap & {
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
-    environments: "Environments",
-    gateway: "Gateway · local",
-    cloudWorkerMachine: "{profile} · {machine}",
-    cloudWorkerOsMachine: "{profile} · {os} · {machine}",
-    cloudWorkerOs: "{profile} · {os}",
-    cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
-    cloudProfileRuntimeUnsupported:
-      "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
-    deviceRuntimeUnsupported: "This runtime does not support paired devices",
-    placementStartFailed: "The session was created, but startup needs attention: {error}",
-    placementStillStarting:
-      "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
-    placementCompletionUnconfirmed:
-      "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
-    placementCancelled:
-      "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
-    yourDevices: "Your devices",
-    autoDeviceSub: "Least-busy device",
-    autoDeviceSubEligible: "First eligible device",
-    cloud: "Cloud",
-    machine: "Machine",
-    operatingSystem: "Operating system",
-    runsOn: "Runs on {place}",
-    browse: "Browse folders",
-    worktree: "Worktree",
-    checkingGit: "Checking Git availability…",
-    gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
-    starting: "Starting…",
-    createFailed: "Couldn't create the session.",
-    checkoutCurrentNote: "Works in the selected folder on its current branch.",
   },
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
@@ -1082,24 +1016,6 @@ export const en: TranslationMap & {
     archivedOnlyTooltip: "Show only archived sessions.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
-    transcriptSearchTitle: "Search transcripts",
-    transcriptSearchDescription:
-      "Find exact words or phrases in user and assistant messages across the default agent's sessions.",
-    transcriptSearchInputLabel: "Search session transcripts",
-    transcriptSearchPlaceholder: "Search exact words or phrases…",
-    transcriptSearchAction: "Search",
-    transcriptSearchClear: "Clear",
-    transcriptSearchRetry: "Retry",
-    transcriptSearchSearching: "Searching transcripts…",
-    transcriptSearchUnavailable: "Transcript search requires a newer Gateway.",
-    transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing:
-      "The transcript index is still updating. Retry to include recent messages.",
-    transcriptSearchArchivedExcluded:
-      "{count} archived transcripts excluded; open a session to restore its searchable history.",
-    transcriptSearchEmpty: "No transcript messages match that search.",
-    transcriptSearchMatches: "Transcript matches: {count}",
-    transcriptSearchTruncated: "Showing the first 25 matches.",
     user: "User",
     assistant: "Assistant",
     selected: "{count} selected",
@@ -3401,44 +3317,10 @@ export const en: TranslationMap & {
       storageCorrupt: "Storage corrupt",
     },
   },
+  commandPalette: {},
   palette: {
-    placeholder: "Search chats and commands…",
-    noResults: "No results",
-    searchingSessions: "Searching sessions…",
-    searchingCommands: "Searching commands…",
-    clearSearch: "Clear search",
-    escapeKey: "esc",
-    searchNotices: "Search notices ({count})",
-    filterLabel: "Filter search results",
-    filters: { all: "All", sessions: "Sessions", messages: "Messages" },
-    searchFailed: "Chat search failed — check the gateway logs and retry",
-    modelSearchFailed: "Model search unavailable. Change your search to retry.",
-    searchPartial: "Transcript search unavailable — showing chat titles and metadata",
-    searchIncomplete: "Transcript matches may be incomplete — indexing or search limits apply",
-    categories: {
-      search: "Search",
-      navigation: "Navigation",
-      skills: "Skills",
-      messages: "In messages",
-    },
-    items: {
-      apps: "Apps",
-      sessions: "Sessions",
-      scheduled: "Automations",
-      skills: "Skills",
-      plugins: "Plugins",
-      settings: "Settings",
-      agents: "Agents",
-      desktop: "Desktop",
-    },
-    descriptions: {
-      verboseMode: "Toggle verbose mode.",
-    },
-    footer: {
-      navigate: "navigate",
-      select: "select",
-      close: "close",
-    },
+    placeholder: "Search or start a task…",
+    categories: { navigation: "Navigation" },
   },
   dreaming: {},
   modelProviders: {},
@@ -4106,20 +3988,7 @@ export const en: TranslationMap & {
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
-    commands: {
-      arguments: "Command arguments",
-      menu: "Slash commands",
-      optionCount: "{count} options",
-      clearDescription: "Clear chat history",
-      redirectDescription: "Abort and restart with a new message",
-      steerDescription: "Inject a message into the active run",
-      categories: {
-        session: "Session",
-        model: "Model",
-        agents: "Agents",
-        tools: "Tools",
-      },
-    },
+    commands: {},
     skills: {
       menu: "Skill references",
       label: "Skills",
@@ -4167,17 +4036,7 @@ export const en: TranslationMap & {
       catalogPaginationFailed: "Session catalog returned a repeated page cursor",
       catalogPageMissingHost: "Session catalog page did not include the requested host",
     },
-    welcome: {
-      hintBeforeShortcut: "Type a message below ·",
-      hintAfterShortcut: "for commands",
-      recentSessions: "Recent chats",
-      suggestions: {
-        whatCanYouDo: "What can you do?",
-        summarizeRecentSessions: "Summarize my recent sessions",
-        configureChannel: "Help me configure a channel",
-        checkSystemHealth: "Check system health",
-      },
-    },
+    welcome: { suggestions: { whatCanYouDo: "What can you do?" } },
     runControls: {
       newSession: "New session",
       newSessionWorktree: "New session in worktree",

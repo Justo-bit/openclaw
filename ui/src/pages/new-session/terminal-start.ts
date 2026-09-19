@@ -10,7 +10,12 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { startCatalogSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { buildLocalUserMessage } from "../chat/user-message-content.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -30,7 +35,7 @@ export function readNewSessionTerminalStartAccess(
       });
 }
 
-export async function startNewSessionInTerminal(
+async function startNewSessionInTerminal(
   client: GatewayBrowserClient,
   params: {
     catalogId: string;
@@ -69,7 +74,73 @@ export async function startNewSessionInTerminal(
   );
 }
 
-export function navigateToStartedTerminal(context: ApplicationContext, sessionId: string): void {
+/** Native startup shares draft custody, but never falls through to chat creation. */
+export async function submitDraftInTerminal(options: {
+  snapshot: DraftSubmissionSnapshot;
+  place: DraftPlaceState;
+  flow: Pick<
+    DraftSubmissionFlow,
+    "message" | "canSubmit" | "noteBlockedSubmitAttempt" | "setError"
+  >;
+  closeTransientUi: () => void;
+  capture: (client: GatewayBrowserClient) => {
+    isCurrent: () => boolean;
+    isRequestCurrent: () => boolean;
+    publish: (message: ReturnType<typeof buildLocalUserMessage>, active: boolean) => void;
+    consume: () => Promise<void>;
+  };
+}) {
+  const { context, data } = options.snapshot;
+  const { place, flow } = options;
+  const client = context?.gateway.snapshot.client;
+  const catalogId = data?.catalogId.trim() ?? "";
+  const agentId = normalizeAgentId(place.agentId);
+  if (!context || !client || !catalogId || !agentId || !flow.canSubmit()) {
+    flow.noteBlockedSubmitAttempt();
+    return;
+  }
+  const submission = options.capture(client);
+  const initialMessage = flow.message.trim();
+  submission.publish(
+    buildLocalUserMessage({ text: initialMessage, createdAt: Date.now() }, "available"),
+    true,
+  );
+  place.browser.close();
+  options.closeTransientUi();
+  try {
+    const result = await startNewSessionInTerminal(
+      client,
+      {
+        catalogId,
+        agentId,
+        hostId: place.terminalHostId,
+        cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
+        initialMessage,
+        worktree: place.worktree,
+        worktreeName: place.worktreeName,
+        baseRef: place.baseRef,
+      },
+      submission.isCurrent,
+    );
+    if (!result || !submission.isCurrent()) {
+      return;
+    }
+    await submission.consume();
+    if (submission.isCurrent()) {
+      navigateToStartedTerminal(context, result.sessionId);
+    }
+  } catch (error) {
+    if (submission.isCurrent()) {
+      flow.setError(error instanceof Error ? error.message : String(error));
+    }
+  } finally {
+    if (submission.isRequestCurrent()) {
+      submission.publish(null, false);
+    }
+  }
+}
+
+function navigateToStartedTerminal(context: ApplicationContext, sessionId: string): void {
   context.replace("terminal", {
     pathname: pathForTerminalSession(sessionId, context.basePath),
     search: "",

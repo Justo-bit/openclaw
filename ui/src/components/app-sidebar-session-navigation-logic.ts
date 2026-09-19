@@ -4,7 +4,6 @@ import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
@@ -167,7 +166,7 @@ export type SidebarSessionNavigationState = {
 };
 
 export function buildSidebarSessionNavigationState(input: {
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
   routeSessionKey: string;
   sessionsResult: SessionsListResult | null;
   activeSession?: GatewaySessionRow | null;
@@ -426,8 +425,8 @@ function latestVisibleAgentSessionRow(input: {
 
 export function resolveActiveSidebarAgent(input: {
   activeId: string;
-  roster: NonNullable<ApplicationContext<RouteId>["agents"]["state"]["agentsList"]>["agents"];
-  identities: ReturnType<ApplicationContext<RouteId>["agentIdentity"]["entries"]>;
+  roster: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]>["agents"];
+  identities: ReturnType<ApplicationContext["agentIdentity"]["entries"]>;
 }) {
   const identities = new Map(
     input.identities.map((identity) => [identity.agentId, identity] as const),
@@ -448,7 +447,7 @@ export function resolveLatestSidebarAgentSession(input: {
     sessionsResult: SessionsListResult | null;
     sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
   };
-  context: ApplicationContext<RouteId> | undefined;
+  context: ApplicationContext | undefined;
 }): SessionRow | null {
   return latestVisibleAgentSessionRow({
     agentId: input.agentId,
@@ -546,8 +545,8 @@ export function collectKnownSidebarSessionCatalogIds(input: {
 
 export function resolveSidebarMainSessionKey(input: {
   agentId: string;
-  agentsList: ApplicationContext<RouteId>["agents"]["state"]["agentsList"] | undefined;
-  hello: ApplicationContext<RouteId>["gateway"]["snapshot"]["hello"] | undefined;
+  agentsList: ApplicationContext["agents"]["state"]["agentsList"] | undefined;
+  hello: ApplicationContext["gateway"]["snapshot"]["hello"] | undefined;
 }): string {
   const host = { agentsList: input.agentsList, hello: input.hello };
   // Global-scope gateways advertise the canonical main session as the

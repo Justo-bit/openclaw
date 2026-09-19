@@ -105,12 +105,12 @@ export type ApplicationChatAttachmentHandoff = {
   dispose(): void;
 };
 
-export type ApplicationContext<TRouteId extends string = string> = {
+export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
   readonly router: Pick<
-    Router<RouteId, ApplicationContext<RouteId>, unknown, unknown>,
+    Router<RouteId, ApplicationContext, unknown, unknown>,
     "getState" | "subscribe" | "navigate"
   >;
   readonly gateway: ApplicationGateway;
@@ -151,5 +151,4 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
-export const applicationContext =
-  createContext<ApplicationContext<RouteId>>("openclaw.application");
+export const applicationContext = createContext<ApplicationContext>("openclaw.application");
