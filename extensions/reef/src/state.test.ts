@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
@@ -66,7 +67,7 @@ function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" =
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
@@ -469,7 +470,7 @@ describe("Reef SQLite state", () => {
       const runtime = createRuntime(stateDir);
       const failure = new Error("registration worker unavailable");
       const open = runtime.state.openKeyedStore;
-      runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) => ({
+      runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
         ...open<T>(options),
         [method]: async () => {
           throw failure;
@@ -850,7 +851,7 @@ describe("Reef SQLite state", () => {
     const runtime = createRuntime(stateDir);
     const openKeyedStore = runtime.state.openKeyedStore;
     runtime.state.openKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
+      options: OpenAsyncKeyedStoreOptions,
     ): PluginStateKeyedStore<T> => {
       const store = openKeyedStore<T>(options);
       return options.namespace === REEF_DELIVERED_NAMESPACE

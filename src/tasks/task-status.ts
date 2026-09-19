@@ -8,16 +8,11 @@ import {
 import { truncateUtf16Safe } from "../utils.js";
 import { matchesTaskStatusFilter, type TaskRecord } from "./task-registry.types.js";
 
-const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost", "blocked"]);
 /** Window for showing recently completed tasks in compact status output. */
 const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
-
-function isActiveTask(task: TaskRecord): boolean {
-  return ACTIVE_TASK_STATUSES.has(task.status);
-}
 
 export function formatTaskStatus(task: Pick<TaskRecord, "status" | "terminalOutcome">) {
   return matchesTaskStatusFilter(task, "blocked") ? "blocked" : task.status;
@@ -25,24 +20,6 @@ export function formatTaskStatus(task: Pick<TaskRecord, "status" | "terminalOutc
 
 export function isTaskStatusIssue(task: Pick<TaskRecord, "status" | "terminalOutcome">): boolean {
   return FAILURE_TASK_STATUSES.has(formatTaskStatus(task));
-}
-
-function resolveTaskReferenceAt(task: TaskRecord): number {
-  if (isActiveTask(task)) {
-    return task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  }
-  return task.endedAt ?? task.lastEventAt ?? task.startedAt ?? task.createdAt;
-}
-
-function isExpiredTask(task: TaskRecord, now: number): boolean {
-  return typeof task.cleanupAfter === "number" && task.cleanupAfter <= now;
-}
-
-function isRecentTerminalTask(task: TaskRecord, now: number): boolean {
-  if (isActiveTask(task)) {
-    return false;
-  }
-  return now - resolveTaskReferenceAt(task) <= TASK_STATUS_RECENT_WINDOW_MS;
 }
 
 /** Applies a task display limit to text that its caller has already sanitized. */
@@ -185,11 +162,29 @@ export function buildTaskStatusSnapshot(
   opts?: { now?: number },
 ): TaskStatusSnapshot {
   const now = opts?.now ?? Date.now();
-  const visibleCandidates = tasks.filter((task) => !isExpiredTask(task, now));
-  const active = visibleCandidates.filter(isActiveTask);
-  const recentTerminal = visibleCandidates.filter((task) => isRecentTerminalTask(task, now));
+  const active: TaskRecord[] = [];
+  const recentTerminal: TaskRecord[] = [];
+  let firstIssue: TaskRecord | undefined;
+  let recentFailureCount = 0;
+  for (const task of tasks) {
+    if (typeof task.cleanupAfter === "number" && task.cleanupAfter <= now) {
+      continue;
+    }
+    if (task.status === "queued" || task.status === "running") {
+      active.push(task);
+      continue;
+    }
+    const referenceAt = task.endedAt ?? task.lastEventAt ?? task.startedAt ?? task.createdAt;
+    if (now - referenceAt <= TASK_STATUS_RECENT_WINDOW_MS) {
+      recentTerminal.push(task);
+      if (isTaskStatusIssue(task)) {
+        firstIssue ??= task;
+        recentFailureCount += 1;
+      }
+    }
+  }
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
-  const focus = active[0] ?? recentTerminal.find(isTaskStatusIssue) ?? recentTerminal[0];
+  const focus = active[0] ?? firstIssue ?? recentTerminal[0];
   return {
     latest: active[0] ?? recentTerminal[0],
     focus,
@@ -198,6 +193,6 @@ export function buildTaskStatusSnapshot(
     recentTerminal,
     activeCount: active.length,
     totalCount: visible.length,
-    recentFailureCount: recentTerminal.filter(isTaskStatusIssue).length,
+    recentFailureCount,
   };
 }

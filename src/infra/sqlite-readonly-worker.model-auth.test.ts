@@ -47,7 +47,7 @@ function fixtureStore(key: string): AuthProfileStore {
   };
 }
 
-function modelResolver(state: OpenClawTestState) {
+function modelResolver(state: OpenClawTestState, options?: { automatic: boolean }) {
   const stores = createEmptyAgentDiscoveryStores();
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [{ id: PROVIDER, providers: [PROVIDER] }],
@@ -66,7 +66,7 @@ function modelResolver(state: OpenClawTestState) {
     normalizeProviderResolvedModelWithPlugin: () => undefined,
     normalizeProviderTransportWithPlugin: () => undefined,
   };
-  return (authProfileId = PROFILE_ID) =>
+  return (authProfileId = options?.automatic ? undefined : PROFILE_ID) =>
     withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
       resolveModelAsync(
         PROVIDER,
@@ -213,6 +213,13 @@ describe("model resolution auth row snapshots", () => {
     async ({ change, cached, published }) => {
       await withOpenClawTestState({ label: "model-auth-concurrent-usage" }, async (state) => {
         const store = fixtureStore("fixture-original");
+        const fallbackProfileId = `${PROVIDER}:fallback`;
+        store.profiles[fallbackProfileId] = {
+          type: "token",
+          provider: PROVIDER,
+          token: "fixture-fallback",
+        };
+        store.order = { [PROVIDER]: [PROFILE_ID, fallbackProfileId] };
         await state.writeAuthProfiles(store);
         if (change === "unrelated-order") {
           await state.writeAuthProfiles(store, "other");
@@ -220,7 +227,7 @@ describe("model resolution auth row snapshots", () => {
         if (published === true) {
           setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
         }
-        const resolve = modelResolver(state);
+        const resolve = modelResolver(state, { automatic: true });
         if (cached) {
           expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
         }
@@ -260,7 +267,7 @@ describe("model resolution auth row snapshots", () => {
           }
           const updated: AuthProfileStore =
             change === "order" || change === "unrelated-order"
-              ? { ...store, order: { [PROVIDER]: [PROFILE_ID] } }
+              ? { ...store, order: { [PROVIDER]: [fallbackProfileId, PROFILE_ID] } }
               : {
                   ...store,
                   usageStats: {
@@ -273,13 +280,11 @@ describe("model resolution auth row snapshots", () => {
           const updatedAgent = change === "unrelated-order" ? "other" : "main";
           await state.writeAuthProfiles(updated, updatedAgent);
           resume.resolve();
-          if (change === "usage" || change === "unrelated-order") {
-            expect((await loading).model?.name).toBe(`${PROFILE_ID}:api_key`);
-          } else {
-            await expect(loading.then(() => "resolved")).rejects.toThrow(
-              "Auth profile store changed during its runtime read",
-            );
-          }
+          expect((await loading).model?.name).toBe(
+            change === "order" || change === "disabled"
+              ? `${fallbackProfileId}:token`
+              : `${PROFILE_ID}:api_key`,
+          );
           const current = await loadAuthProfileStoreForRuntimeAsync(state.agentDir(updatedAgent), {
             readOnly: true,
             externalCli: { mode: "none" },

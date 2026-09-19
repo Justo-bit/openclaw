@@ -1,5 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/audit/audit-events.test.ts",
+  "src/audit/audit-event-store.message.test.ts",
+  "src/audit/audit-event-writer.test.ts",
   "src/agents/tools/transcripts-tool-read.test.ts",
   "src/agents/tools/transcripts-tool.account-ownership.test.ts",
   "src/agents/tools/transcripts-tool.auto-start.test.ts",
@@ -52,6 +55,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/conversation-binding.test.ts",
   "src/plugins/conversation-binding.worker.test.ts",
   "src/plugins/conversation-binding.sqlite.test.ts",
+  "src/plugins/legacy-session-surfaces.state-migration.test.ts",
   "src/state/backup-run-records.test.ts",
   "src/tasks/task-registry.async-restore.test.ts",
   "src/tasks/task-registry-flow-sync.test.ts",
@@ -174,6 +178,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/cron-message-read.integration.test.ts",
   "test/imessage-reply-alias.integration.test.ts",
   "test/matrix-channel-read-authority.integration.test.ts",
+  "test/telegram-history-read.integration.test.ts",
   "test/plugins/beam-http-identity.test.ts",
   "test/plugins/codex-session-catalog-naming.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
@@ -184,7 +189,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-store.expiry.test.ts",
   "src/plugin-state/plugin-state-store.fresh-store.test.ts",
   "src/plugin-state/plugin-state-store.namespace-independence.test.ts",
-  "src/plugin-state/plugin-state-store.persistence.test.ts",
+  "src/plugin-state/plugin-state-store.retained.test.ts",
   "src/plugin-state/plugin-state-store.retention.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
   "src/plugin-state/plugin-state-store.schema.test.ts",

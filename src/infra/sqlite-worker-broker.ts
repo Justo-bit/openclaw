@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
@@ -50,6 +49,7 @@ import {
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 const MAX_WORKERS = 4;
 const MAX_STORES = 64;
@@ -381,14 +381,11 @@ export class SqliteWorkerBroker {
       ensureSqliteLibrarySelected();
     }
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteStore);
-    const worker = runOutsideCaller(
-      () =>
-        new Worker(url, {
-          env: resolveNodeCompileCacheEnv(),
-          execArgv: url.pathname.endsWith(".ts")
-            ? ["--import", import.meta.resolve("tsx/esm")]
-            : [],
-        }),
+    const worker = runOutsideCaller(() =>
+      createCpuTrackedWorker(url, {
+        env: resolveNodeCompileCacheEnv(),
+        execArgv: url.pathname.endsWith(".ts") ? ["--import", import.meta.resolve("tsx/esm")] : [],
+      }),
     );
     const exited = createDeferredCore();
     const slot: Slot = {

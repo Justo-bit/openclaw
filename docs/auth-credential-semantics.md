@@ -107,12 +107,11 @@ and private database snapshots do not share this cache. Gateway cache misses reu
 a read-only child whose lifetime ends at shutdown; each read reacquires its source
 admission and closes its SQLite handles before returning.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish
-their snapshots. Materializing persisted/local provenance annotations still
-refreshes catalog metadata, but does not revoke a persisted-row read that
-reconstructs those annotations from its own admitted rows. First publication of
-a derived snapshot likewise cannot supersede an admitted persisted read; durable
-writes and explicit clears retain their independent invalidation generations. Credential, selection,
-physical ownership, and lifecycle changes still invalidate in-flight preparation.
+their snapshots. Credential, selection, ownership, and lifecycle changes still
+invalidate in-flight preparation.
+Model selection retries that stale read once after its readers finish cleanup,
+preserving the selected agent and any explicit profile pin. Continued changes,
+admission refusals, and cleanup failures remain errors.
 Workers certify committed SQLite visibility before rows enter the cache. Reads
 with unpublished or trailing WAL frames return normally without being retained.
 

@@ -1,6 +1,7 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -46,8 +47,8 @@ function fixture(
   const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
   runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
-  runtime.state.openKeyedStore = <T>(opts: OpenKeyedStoreOptions) => {
-    if (opts.namespace !== REEF_REPLAY_NAMESPACE) {
+  runtime.state.openKeyedStore = <T>(opts: OpenAsyncKeyedStoreOptions) => {
+    if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
       return createPluginStateKeyedStoreForTests<T>("reef", { ...opts, env });
     }
     const adapter = {

@@ -1,14 +1,46 @@
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
 import { getActiveBackgroundExecSession } from "../agents/bash-process-registry.js";
 import { getSubagentExecutionObservation } from "../agents/subagents/registry/subagent-execution-observation.js";
+import { isAgentRunWaitingForCapacity } from "../infra/agent-run-capacity-wait.js";
+import { getAgentRunContext, hasLiveAgentRunContext } from "../infra/agent-run-registry.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { readTaskBackingInstance } from "./task-backing-records.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { resolveTaskAgentId } from "./task-registry-records.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { sanitizeTaskStatusText, TASK_STATUS_DETAIL_MAX_CHARS } from "./task-status.js";
 
 function sanitizeOptionalTaskText(value: unknown): string | undefined {
   return sanitizeTaskStatusText(value, { maxChars: TASK_STATUS_DETAIL_MAX_CHARS }) || undefined;
+}
+
+function observeCliExecution(task: TaskRecord): "queued" | "running" | undefined {
+  if (task.runtime !== "cli" || !task.runId) {
+    return undefined;
+  }
+  const context = getAgentRunContext(task.runId);
+  const sessionKey =
+    task.childSessionKey ?? (task.scopeKind === "session" ? task.ownerKey : undefined);
+  if (
+    !context ||
+    !sessionKey ||
+    context.sessionKey !== sessionKey ||
+    !hasLiveAgentRunContext(task.runId)
+  ) {
+    return undefined;
+  }
+  const agentId = context.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  const taskAgentId = resolveTaskAgentId({
+    explicitAgentId: task.agentId,
+    childSessionKey: task.childSessionKey,
+    ownerKey: task.ownerKey,
+    requesterSessionKey: task.requesterSessionKey,
+  });
+  if (taskAgentId && (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(taskAgentId))) {
+    return undefined;
+  }
+  return isAgentRunWaitingForCapacity(task.runId) ? "queued" : "running";
 }
 
 /** One runtime observation for Gateway inspection and model-facing task controls. */
@@ -70,7 +102,8 @@ export function getTaskExecutionObservation(
       ? undefined
       : activity;
   const execution: NonNullable<TaskSummary["execution"]> = nativeExecution ?? {
-    state: currentActivity?.executionState ?? "unknown",
+    // Missing transient events do not erase a live run; explicit waits and invalidations still win.
+    state: currentActivity?.executionState ?? observeCliExecution(task) ?? "unknown",
     ...(currentActivity?.executionWait ? { wait: currentActivity.executionWait } : {}),
   };
   if (execution.state === "running" && currentActivity?.executionWait) {

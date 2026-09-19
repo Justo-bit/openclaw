@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -9,7 +10,10 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPluginBlobStoreForTests, type OpenBlobStoreOptions } from "./plugin-blob-store.js";
-import { resetPluginStateStoreForTests } from "./plugin-state-store.js";
+import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "./plugin-state-store.js";
 
 function createPluginRecord(
   id: string,
@@ -164,6 +168,63 @@ describe("plugin runtime state proxy", () => {
       });
       await expect(store.register("thread", { plugin: "slack" })).resolves.toBeUndefined();
       await expect(store.lookup("thread")).resolves.toEqual({ plugin: "slack" });
+    });
+  });
+
+  it("fences retained operations and range reads when the owning plugin closes", async () => {
+    await withOpenClawTestState({ label: "plugin-retained-runtime-closure" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("history-owner");
+      registry.registry.plugins.push(record);
+      markPluginRegistryActive(registry.registry);
+      const api = registry.createApi(record, { config: {} });
+      const sourceOptions = { namespace: "history", maxEntries: 10 };
+      const retainedOptions = { namespace: "history", retention: "retained" as const };
+      const source = api.runtime.state.openKeyedStore<number>(sourceOptions);
+      const retained = api.runtime.state.openKeyedStore<number>(retainedOptions);
+      await source.register("legacy", 1);
+      await retained.register("current", 2);
+      const observed = await retained.observe!("current");
+      const range = { keyStartInclusive: "a", keyEndExclusive: "z", limit: 10 };
+      const detachedRead = retained.entriesInKeyRange!;
+      const pendingMove = retained.moveEntriesFrom!({
+        namespace: "history",
+        entries: [{ sourceKey: "legacy", targetKey: "promoted" }],
+      });
+      revokePluginRecord(registry.registry, record);
+      await expect(pendingMove).rejects.toThrow();
+      for (const operation of [
+        () => retained.register("denied", 3),
+        () => retained.registerIfAbsent("denied", 3),
+        () => retained.observe!("current"),
+        () =>
+          retained.compareAndApply!("current", observed.comparison, {
+            operation: "update",
+            action: "set",
+            value: 3,
+          }),
+        () => retained.update!("current", () => 3),
+        () => retained.deleteIf!("current", () => true),
+        () => retained.deleteIfEqual!("current", 2),
+        () => retained.lookup("current"),
+        () => retained.lookupMany!(["current"]),
+        () => retained.consume("current"),
+        () => retained.delete("current"),
+        () => retained.entries(),
+        () => retained.count!(),
+        () => retained.clear(),
+        () => detachedRead(range),
+        () => source.entriesInKeyRange!(range),
+      ]) {
+        await expect(operation()).rejects.toThrow();
+      }
+      expect(() => api.runtime.state.openKeyedStore(retainedOptions)).toThrow();
+      const canonicalSource = createPluginStateKeyedStore<number>(record.id, sourceOptions);
+      const canonicalRetained = createPluginStateKeyedStore<number>(record.id, retainedOptions);
+      expect(await canonicalSource.lookup("legacy")).toBe(1);
+      expect(await canonicalRetained.lookup("current")).toBe(2);
+      expect(await canonicalRetained.lookup("promoted")).toBeUndefined();
+      expect(await canonicalRetained.lookup("denied")).toBeUndefined();
     });
   });
 
