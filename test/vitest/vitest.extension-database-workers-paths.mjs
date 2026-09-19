@@ -6,6 +6,15 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/feishu/src/dedup.test.ts",
+  "extensions/feishu/src/bot.broadcast.test.ts",
+  "extensions/feishu/src/feishu-ingress.test.ts",
+  "extensions/feishu/src/monitor.lifecycle.test.ts",
+  "extensions/matrix/src/matrix/monitor/inbound-dedupe.test.ts",
+  "extensions/nextcloud-talk/src/doctor.test.ts",
+  "extensions/raft/src/gateway.test.ts",
+  "extensions/slack/src/monitor/ingress.test.ts",
+  "extensions/telegram/src/message-dispatch-dedupe.test.ts",
   "extensions/google-meet/index.create.test.ts",
   "extensions/google-meet/index.test.ts",
   "extensions/teams-meetings/index.test.ts",
