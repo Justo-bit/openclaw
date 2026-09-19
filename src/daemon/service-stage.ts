@@ -42,6 +42,8 @@ export const GatewayServiceDefinitionBackupReceiptSchema = z.strictObject({
     .strictObject({
       beforeSha256: fileState.shape.sha256,
       afterPolicySha256: fileState.shape.sha256,
+      preparedXml: z.string().min(1).optional(),
+      recoveredPolicy: z.enum(["previous", "prepared"]).optional(),
     })
     .optional(),
 });
@@ -54,6 +56,7 @@ export type GatewayServiceDefinitionTransactionHooks = {
   filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;
   fileWritten: (sourcePath: string, contents: string | Uint8Array | null) => Promise<void>;
   taskWritten: (expectedXml: string) => Promise<void>;
+  taskPrepared: (expectedXml: string) => Promise<void>;
 };
 type GatewayServiceFileState = z.infer<typeof fileState>;
 

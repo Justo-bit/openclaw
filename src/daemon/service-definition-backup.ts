@@ -142,7 +142,29 @@ function mutationHooks(
     params.assertCurrent();
     assertGatewayServiceUpdateCurrent();
   };
-  const beforeWrite = async (settlePrepared = true) => {
+  const taskWritten = async (expectedXml: string) => {
+    if (!receipt.task || receipt.task.preparedXml !== expectedXml) {
+      throw new Error("Scheduled Task publication was not admitted.");
+    }
+    const findings: ServiceDefinitionDrift[] = [];
+    const xml = await auditScheduledTaskDefinition(
+      params.env,
+      findings,
+      undefined,
+      undefined,
+      expectedXml,
+    );
+    assertCurrent();
+    if (findings.length) {
+      throw new Error(
+        `SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed: publication differs: ${findings.map((finding) => finding.key).join(", ")}`,
+      );
+    }
+    receipt.task.afterPolicySha256 = taskPolicy(xml);
+    delete receipt.task.preparedXml;
+    await checkpointReceipt(params, receipt);
+  };
+  const beforeWrite = async (settlePrepared = true): Promise<void> => {
     assertCurrent();
     const command = await resolveGatewayService().readCommand(params.env, {
       requireEffective: true,
@@ -167,11 +189,22 @@ function mutationHooks(
         throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
       }
     }
-    if (
-      receipt.task &&
-      taskPolicy(await readScheduledTaskDefinition(params.env)) !== receipt.task.afterPolicySha256
-    ) {
-      throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
+    if (receipt.task) {
+      const current = taskPolicy(await readScheduledTaskDefinition(params.env));
+      if (settlePrepared && receipt.task.preparedXml) {
+        const previous = current === receipt.task.afterPolicySha256;
+        receipt.task.recoveredPolicy = previous ? "previous" : "prepared";
+        if (previous) {
+          delete receipt.task.preparedXml;
+          await checkpointReceipt(params, receipt);
+        } else {
+          await taskWritten(receipt.task.preparedXml);
+        }
+        return beforeWrite(false);
+      }
+      if (current !== receipt.task.afterPolicySha256) {
+        throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
+      }
     }
     assertCurrent();
   };
@@ -214,26 +247,15 @@ function mutationHooks(
       delete file.prepared;
       await checkpointReceipt(params, receipt);
     },
-    taskWritten: async (expectedXml) => {
+    taskWritten,
+    taskPrepared: async (expectedXml) => {
+      await beforeWrite();
       if (!receipt.task) {
         throw new Error("Scheduled Task publication was not admitted.");
       }
-      const findings: ServiceDefinitionDrift[] = [];
-      const xml = await auditScheduledTaskDefinition(
-        params.env,
-        findings,
-        undefined,
-        undefined,
-        expectedXml,
-      );
-      assertCurrent();
-      if (findings.length) {
-        throw new Error(
-          `SERVICE_DEFINITION_UNKNOWN: Scheduled Task publication differs: ${findings.map((finding) => finding.key).join(", ")}`,
-        );
-      }
-      receipt.task.afterPolicySha256 = taskPolicy(xml);
+      receipt.task.preparedXml = expectedXml;
       await checkpointReceipt(params, receipt);
+      await beforeWrite(false);
     },
   };
 }
@@ -272,9 +294,8 @@ export async function captureGatewayServiceDefinitionBackup(
         return { sourcePath: file.sourcePath, contents };
       }),
   );
-  let originalXml: string | undefined;
   if (process.platform === "win32") {
-    originalXml = await readScheduledTaskDefinition(params.env);
+    const originalXml = await readScheduledTaskDefinition(params.env);
     const contents = taskBytes(originalXml);
     originals.push({ sourcePath: `${paths[0]}.task.xml`, contents });
     receipt.task = {
@@ -311,13 +332,6 @@ export async function captureGatewayServiceDefinitionBackup(
         if (current?.sha256 === file.before?.sha256 && current?.mode === file.before?.mode) {
           file.after = current;
         }
-      }
-      if (
-        receipt.task &&
-        originalXml !== undefined &&
-        taskPolicy(await readScheduledTaskDefinition(params.env)) === taskPolicy(originalXml)
-      ) {
-        receipt.task.afterPolicySha256 = taskPolicy(originalXml);
       }
       await restoreGatewayServiceDefinitionBackup({ ...params, receipt });
     },
@@ -360,7 +374,7 @@ async function prepareGatewayServiceDefinitionRestore(
   return { receipt, hooks, contents, task };
 }
 
-/** Preflight uses the same reads as restoration, before stopping the candidate. */
+/** Reconcile retained publication facts before stopping the candidate. */
 export async function verifyGatewayServiceDefinitionBackup(
   params: Context & { receipt: GatewayServiceDefinitionBackupReceipt },
 ): Promise<void> {
@@ -408,16 +422,20 @@ export async function restoreGatewayServiceDefinitionBackup(
           (a.index === 0 ? 1 : a.file.before ? 0 : 2) - (b.index === 0 ? 1 : b.file.before ? 0 : 2),
       );
     for (const { file, index } of order) {
-      if (file.before?.sha256 === file.after?.sha256 && file.before?.mode === file.after?.mode) {
+      const unchanged =
+        file.before?.sha256 === file.after?.sha256 && file.before?.mode === file.after?.mode;
+      if (unchanged && !(native && index === 0)) {
         continue;
       }
       const content = contents[index]!;
       await hooks.beforeWrite();
       if (native) {
         if (content) {
-          await native.publish(file.sourcePath, content, file.before!.mode);
+          if (!unchanged) {
+            await native.publish(file.sourcePath, content, file.before!.mode);
+          }
           if (index === 0) {
-            // Retire the manager's old EnvironmentFile references before removal.
+            // Replay must reload even if a previous attempt already restored the unit.
             await hooks.beforeWrite();
             await assertNoSystemGatewayOwnership(params.env);
             await reloadSystemdUserManager(params.env, undefined, hooks.assertCurrent);
@@ -455,17 +473,15 @@ export async function restoreGatewayServiceDefinitionBackup(
   } else {
     await restoreFiles();
   }
-  if (
-    task &&
-    receipt.task!.afterPolicySha256 !== taskPolicy(task.subarray(2).toString("utf16le"))
-  ) {
+  const taskXml = task?.subarray(2).toString("utf16le");
+  if (taskXml && receipt.task!.afterPolicySha256 !== taskPolicy(taskXml)) {
     await restoreScheduledTaskDefinition({
       env: params.env,
-      xml: task.subarray(2).toString("utf16le"),
-      beforeWrite: hooks.beforeWrite,
+      xml: taskXml,
+      beforeWrite: () => hooks.taskPrepared(taskXml),
       assertCurrent: hooks.assertCurrent,
     });
-    await hooks.taskWritten(task.subarray(2).toString("utf16le"));
+    await hooks.taskWritten(taskXml);
   }
   await hooks.beforeWrite();
 }

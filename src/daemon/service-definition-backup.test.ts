@@ -528,9 +528,9 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it.each([false, true])(
-    "reloads the restored systemd definition before retiring its old inputs (authority expires=%s)",
-    async (expires) => {
+  it.each(["normal", "expired", "interrupted-reload"])(
+    "reloads the restored systemd definition before retiring its old inputs: %s",
+    async (mode) => {
       const f = await fixture("linux");
       await stageSystemdService({
         env: f.env,
@@ -540,7 +540,7 @@ describe("service definition backup receipts", () => {
         environmentValueSources: { OPERATOR_SETTING: "file" },
         definitionTransaction: f.capture.hooks,
       });
-      const receipt = await f.capture.finish();
+      let receipt = await f.capture.finish();
       let loaded = await fs.readFile(f.sourcePath, "utf8");
       expect(loaded).toContain("EnvironmentFile=");
       const loadedArguments = () => parseSystemdExecStart(/^ExecStart=(.*)$/mu.exec(loaded)![1]!);
@@ -551,11 +551,16 @@ describe("service definition backup receipts", () => {
         return { ...f.command, programArguments: loadedArguments() };
       });
       let started: string[] | undefined;
+      let interrupt = mode === "interrupted-reload";
       native.identity.mockImplementation(async (command, args) => {
         expect(command).toBe("systemctl");
         if (args.includes("daemon-reload")) {
           expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
           await fs.access(f.files[1]!);
+          if (interrupt) {
+            interrupt = false;
+            throw new Error("interrupted before daemon-reload");
+          }
           loaded = await fs.readFile(f.sourcePath, "utf8");
         } else if (args.includes("restart")) {
           started = loadedArguments();
@@ -564,7 +569,7 @@ describe("service definition backup receipts", () => {
         }
         return { code: 0, stdout: "", stderr: "", termination: "exit" };
       });
-      if (expires) {
+      if (mode === "expired") {
         native.transport.mockImplementation(async () => {
           f.expire();
           return undefined;
@@ -575,6 +580,21 @@ describe("service definition backup receipts", () => {
         expect(native.identity).not.toHaveBeenCalled();
         await fs.access(f.files[1]!);
         return;
+      }
+      if (mode === "interrupted-reload") {
+        await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+          "interrupted before daemon-reload",
+        );
+        expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+        expect(loaded).toContain("EnvironmentFile=");
+        receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
+          JSON.parse(
+            await fs.readFile(
+              f.capture.backupPaths.find((p) => p.endsWith(".receipt.bak"))!,
+              "utf8",
+            ),
+          ),
+        );
       }
       await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
       expect(loaded).toBe(f.original.toString("utf8"));
@@ -759,6 +779,64 @@ describe("service definition backup receipts", () => {
     expect(f.task()).toContain("<Count>7</Count>");
     expect(await fs.readFile(f.sourcePath)).toEqual(script);
   });
+
+  it.each(["before-create", "after-create", "normalized", "foreign", "during-restore"])(
+    "recovers the retained task receipt after interruption: %s",
+    async (phase) => {
+      const f = await fixture("win32", true);
+      if (phase === "during-restore") {
+        await f.install();
+      }
+      const execute = native.task.getMockImplementation()!;
+      native.task.mockImplementation(async (args: string[]) => {
+        if (args[0] === "/Create" && phase === "before-create") {
+          throw new Error("interrupted task publication");
+        }
+        const result = await execute(args);
+        if (args[0] === "/Create") {
+          if (phase === "normalized") {
+            f.setTask(
+              f
+                .task()
+                .replaceAll("<UserId>operator</UserId>", "<UserId>S-1-5-21-1-2-3-1001</UserId>")
+                .replace("<RunLevel>LeastPrivilege</RunLevel>", ""),
+            );
+          } else if (phase === "foreign") {
+            f.setTask(f.task().replace("<Count>3</Count>", "<Count>7</Count>"));
+          }
+          throw new Error("interrupted task publication");
+        }
+        return result;
+      });
+      await expect(
+        phase === "during-restore"
+          ? restoreGatewayServiceDefinitionBackup({ ...f, receipt: await f.capture.finish() })
+          : f.install(),
+      ).rejects.toThrow("interrupted task publication");
+      native.task.mockImplementation(execute);
+      const checkpoint = f.capture.backupPaths.find((p) => p.endsWith(".receipt.bak"))!;
+      const readReceipt = async () =>
+        GatewayServiceDefinitionBackupReceiptSchema.parse(
+          JSON.parse(await fs.readFile(checkpoint, "utf8")),
+        );
+      const receipt = await readReceipt();
+      if (phase === "foreign") {
+        const files = await Promise.all(f.files.map((file) => fs.readFile(file)));
+        await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
+          "Scheduled Task changed",
+        );
+        expect(f.task()).toContain("<Count>7</Count>");
+        expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(files);
+        return;
+      }
+      await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      expect(f.task()).toBe(f.originalTask);
+      expect((await readReceipt()).task).toMatchObject({
+        recoveredPolicy: phase === "before-create" ? "previous" : "prepared",
+      });
+    },
+  );
 
   it.each([
     "Settings.RestartOnFailure.Count",

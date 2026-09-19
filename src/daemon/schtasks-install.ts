@@ -215,7 +215,7 @@ async function updateExistingScheduledTask(params: {
   });
   const upgradeXmlPath = await writeTaskXmlTempFile(expectedXml);
   try {
-    await params.definitionTransaction?.beforeWrite();
+    await params.definitionTransaction?.taskPrepared(expectedXml);
     params.definitionTransaction?.assertCurrent();
     const upgraded = await execSchtasks([
       "/Create",
@@ -292,7 +292,7 @@ async function activateScheduledTask(params: {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
     // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
     // with a non-interactive S4U logon, so a successful task never starts here.
-    await params.definitionTransaction?.beforeWrite();
+    await params.definitionTransaction?.taskPrepared(expectedXml);
     params.definitionTransaction?.assertCurrent();
     create = await execSchtasks(xmlArgs);
     if (create.code === 0) {
