@@ -38,6 +38,7 @@ const notice = {
 const approval = {
   id: 11,
   user: approver,
+  html_url: "https://github.com/openclaw/openclaw/pull/7#issuecomment-11",
   body: "/allow-security-sensitive-change",
   created_at: "2026-01-01T00:01:00Z",
   updated_at: "2026-01-01T00:01:00Z",
@@ -168,7 +169,26 @@ describe("security-sensitive guard entry point", () => {
     const result = runGuard({ authorRole });
     expect(result.status, result.stderr).toBe(0);
     expect(result.statuses).toEqual(["failure", "success"]);
-    expect(result.comment).toContain("Informational");
+    expect(result.comment).toContain("informational");
+  });
+
+  it.each([
+    { script: "security-sensitive-guard" as const, filename: "src/gateway/auth.ts" },
+    { script: "dependency-guard" as const, filename: "pnpm-workspace.yaml" },
+  ])("$script reports GitHub errors when notice writes are forbidden", ({ script, filename }) => {
+    const result = runGuard({
+      script,
+      files: [{ filename }],
+      authorRole: "maintain",
+      comments: [],
+      routes: {
+        "POST /repos/openclaw/openclaw/issues/7/comments": { httpError: 403 },
+        "POST /repos/openclaw/openclaw/issues/7/labels": { httpError: 403 },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/Skipping label .*Fixture API failure/u);
+    expect(result.stderr).toMatch(/Skipping comment creation.*Fixture API failure/u);
   });
 
   it("does not transfer a maintainer author's exemption to a duplicate PR with the same head", () => {
@@ -311,7 +331,8 @@ describe("security-sensitive guard entry point", () => {
       const result = runGuard({ comments: [notice, approval], approverRole, event: commentEvent });
       expect(result.status, result.stderr).toBe(0);
       expect(result.statuses).toEqual(["failure", "success"]);
-      expect(result.comment).toContain("@maintainer approved");
+      expect(result.comment).toContain("- Maintainer: @maintainer");
+      expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
       expect(
         result.requests
           .filter((request) => request.path.includes("/statuses/"))

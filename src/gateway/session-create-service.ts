@@ -50,7 +50,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
-  listSessionEntriesReadOnly,
+  loadExactSessionEntryFromStoreReadOnly,
   patchSessionEntryCore,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
@@ -440,13 +440,13 @@ export async function createGatewaySession(params: {
       };
     }
     const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntryExists = listSessionEntriesReadOnly({
+    const durableEntry = loadExactSessionEntryFromStoreReadOnly({
       agentId,
       storePath: durableStorePath,
+      sessionKey: explicitTargetKey,
       projection: "list",
-      clone: false,
-    }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
-    if (durableEntryExists || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
+    });
+    if (durableEntry || loadGatewaySessionEntryReadOnly(explicitTargetKey).entry) {
       return {
         ok: false,
         error: errorShape(

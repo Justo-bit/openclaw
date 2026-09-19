@@ -4874,6 +4874,62 @@ public struct ConnectParams: Codable, Sendable {
     }
 }
 
+public struct ControlUiLinkReaderDescriptor: Codable, Sendable {
+    public let pluginid: String
+    public let id: String
+    public let label: String
+    public let icon: String?
+    public let linkreader: ControlUiLinkReaderMetadata
+
+    public init(
+        pluginid: String,
+        id: String,
+        label: String,
+        icon: String? = nil,
+        linkreader: ControlUiLinkReaderMetadata)
+    {
+        self.pluginid = pluginid
+        self.id = id
+        self.label = label
+        self.icon = icon
+        self.linkreader = linkreader
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case id
+        case label
+        case icon
+        case linkreader = "linkReader"
+    }
+}
+
+public struct ControlUiLinkReaderMetadata: Codable, Sendable {
+    public let hosts: [String]
+    public let pathpattern: String
+    public let detailmethod: String
+    public let previewmethod: String?
+
+    public init(
+        hosts: [String],
+        pathpattern: String,
+        detailmethod: String,
+        previewmethod: String? = nil)
+    {
+        self.hosts = hosts
+        self.pathpattern = pathpattern
+        self.detailmethod = detailmethod
+        self.previewmethod = previewmethod
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hosts
+        case pathpattern = "pathPattern"
+        case detailmethod = "detailMethod"
+        case previewmethod = "previewMethod"
+    }
+}
+
 public struct ControlUiPluginTab: Codable, Sendable {
     public let pluginid: String
     public let id: String
@@ -8323,6 +8379,7 @@ public struct HelloOk: Codable, Sendable {
     public let controluiurl: String?
     public let controluitabs: [ControlUiPluginTab]?
     public let controluiwidgetkinds: [ControlUiPluginWidgetKind]?
+    public let controluilinkreaders: [ControlUiLinkReaderDescriptor]?
     public let pluginsurfaceurls: [String: AnyCodable]?
     public let auth: [String: AnyCodable]
     public let policy: [String: AnyCodable]
@@ -8336,6 +8393,7 @@ public struct HelloOk: Codable, Sendable {
         controluiurl: String? = nil,
         controluitabs: [ControlUiPluginTab]? = nil,
         controluiwidgetkinds: [ControlUiPluginWidgetKind]? = nil,
+        controluilinkreaders: [ControlUiLinkReaderDescriptor]? = nil,
         pluginsurfaceurls: [String: AnyCodable]? = nil,
         auth: [String: AnyCodable],
         policy: [String: AnyCodable])
@@ -8348,6 +8406,7 @@ public struct HelloOk: Codable, Sendable {
         self.controluiurl = controluiurl
         self.controluitabs = controluitabs
         self.controluiwidgetkinds = controluiwidgetkinds
+        self.controluilinkreaders = controluilinkreaders
         self.pluginsurfaceurls = pluginsurfaceurls
         self.auth = auth
         self.policy = policy
@@ -8362,6 +8421,7 @@ public struct HelloOk: Codable, Sendable {
         case controluiurl = "controlUiUrl"
         case controluitabs = "controlUiTabs"
         case controluiwidgetkinds = "controlUiWidgetKinds"
+        case controluilinkreaders = "controlUiLinkReaders"
         case pluginsurfaceurls = "pluginSurfaceUrls"
         case auth
         case policy
@@ -10220,6 +10280,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     public let pluginid: String
     public let pluginname: String?
     public let surface: AnyCodable
+    public let linkreader: ControlUiLinkReaderMetadata?
     public let label: String
     public let description: String?
     public let icon: String?
@@ -10235,6 +10296,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         pluginid: String,
         pluginname: String? = nil,
         surface: AnyCodable,
+        linkreader: ControlUiLinkReaderMetadata? = nil,
         label: String,
         description: String? = nil,
         icon: String? = nil,
@@ -10249,6 +10311,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         self.pluginid = pluginid
         self.pluginname = pluginname
         self.surface = surface
+        self.linkreader = linkreader
         self.label = label
         self.description = description
         self.icon = icon
@@ -10265,6 +10328,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case pluginid = "pluginId"
         case pluginname = "pluginName"
         case surface
+        case linkreader = "linkReader"
         case label
         case description
         case icon
@@ -11448,6 +11512,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     public let methods: [String]?
     public let controluitabs: [ControlUiPluginTab]?
     public let controluiwidgetkinds: [ControlUiPluginWidgetKind]?
+    public let controluilinkreaders: [ControlUiLinkReaderDescriptor]?
     public let pluginsurfaceurls: [String: AnyCodable]?
 
     public init(
@@ -11457,6 +11522,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
         methods: [String]? = nil,
         controluitabs: [ControlUiPluginTab]? = nil,
         controluiwidgetkinds: [ControlUiPluginWidgetKind]? = nil,
+        controluilinkreaders: [ControlUiLinkReaderDescriptor]? = nil,
         pluginsurfaceurls: [String: AnyCodable]? = nil)
     {
         self.ok = ok
@@ -11465,6 +11531,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
         self.methods = methods
         self.controluitabs = controluitabs
         self.controluiwidgetkinds = controluiwidgetkinds
+        self.controluilinkreaders = controluilinkreaders
         self.pluginsurfaceurls = pluginsurfaceurls
     }
 
@@ -11475,6 +11542,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
         case methods
         case controluitabs = "controlUiTabs"
         case controluiwidgetkinds = "controlUiWidgetKinds"
+        case controluilinkreaders = "controlUiLinkReaders"
         case pluginsurfaceurls = "pluginSurfaceUrls"
     }
 }
@@ -17126,6 +17194,8 @@ public struct SessionsListParams: Codable, Sendable {
     public let includeglobal: Bool?
     public let includeunknown: Bool?
     public let excludesubagents: Bool?
+    public let excludecron: Bool?
+    public let excludesystem: Bool?
     public let configuredagentsonly: Bool?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
@@ -17159,6 +17229,8 @@ public struct SessionsListParams: Codable, Sendable {
         includeglobal: Bool? = nil,
         includeunknown: Bool? = nil,
         excludesubagents: Bool? = nil,
+        excludecron: Bool? = nil,
+        excludesystem: Bool? = nil,
         configuredagentsonly: Bool? = nil,
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
@@ -17191,6 +17263,8 @@ public struct SessionsListParams: Codable, Sendable {
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
         self.excludesubagents = excludesubagents
+        self.excludecron = excludecron
+        self.excludesystem = excludesystem
         self.configuredagentsonly = configuredagentsonly
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
@@ -17225,6 +17299,8 @@ public struct SessionsListParams: Codable, Sendable {
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
         case excludesubagents = "excludeSubagents"
+        case excludecron = "excludeCron"
+        case excludesystem = "excludeSystem"
         case configuredagentsonly = "configuredAgentsOnly"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
@@ -17994,17 +18070,20 @@ public struct SessionsSearchHit: Codable, Sendable {
 public struct SessionsSearchParams: Codable, Sendable {
     public let agentid: String?
     public let sessionkeys: [String]?
+    public let scope: [String: AnyCodable]?
     public let query: String
     public let limit: Int?
 
     public init(
         agentid: String? = nil,
         sessionkeys: [String]? = nil,
+        scope: [String: AnyCodable]? = nil,
         query: String,
         limit: Int? = nil)
     {
         self.agentid = agentid
         self.sessionkeys = sessionkeys
+        self.scope = scope
         self.query = query
         self.limit = limit
     }
@@ -18012,6 +18091,7 @@ public struct SessionsSearchParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case sessionkeys = "sessionKeys"
+        case scope
         case query
         case limit
     }
@@ -18019,17 +18099,20 @@ public struct SessionsSearchParams: Codable, Sendable {
 
 public struct SessionsSearchResult: Codable, Sendable {
     public let results: [SessionsSearchHit]
+    public let sessions: [SessionRow]?
     public let indexing: Bool?
     public let archivedtranscriptsexcluded: Int?
     public let truncated: Bool?
 
     public init(
         results: [SessionsSearchHit],
+        sessions: [SessionRow]? = nil,
         indexing: Bool? = nil,
         archivedtranscriptsexcluded: Int? = nil,
         truncated: Bool? = nil)
     {
         self.results = results
+        self.sessions = sessions
         self.indexing = indexing
         self.archivedtranscriptsexcluded = archivedtranscriptsexcluded
         self.truncated = truncated
@@ -18037,6 +18120,7 @@ public struct SessionsSearchResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case results
+        case sessions
         case indexing
         case archivedtranscriptsexcluded = "archivedTranscriptsExcluded"
         case truncated
@@ -23371,6 +23455,16 @@ public struct TranscriptsStatusResult: Codable, Sendable {
         case active
         case latesttranscript = "latestTranscript"
         case omitted
+    }
+}
+
+public struct TranscriptsSummarizeParams: Codable, Sendable {
+    public let selector: String
+
+    public init(
+        selector: String)
+    {
+        self.selector = selector
     }
 }
 

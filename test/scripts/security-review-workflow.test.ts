@@ -43,7 +43,7 @@ function readWorkflow(name: string): Workflow {
 
 const reviewPermissions = {
   contents: "read",
-  "pull-requests": "read",
+  "pull-requests": "write",
   actions: "read",
   issues: "write",
   statuses: "write",

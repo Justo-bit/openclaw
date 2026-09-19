@@ -962,6 +962,7 @@ enum class GatewayMethod(
   EnvironmentsSessionDestroy("environments.session.destroy"),
   EnvironmentsSessionExec("environments.session.exec"),
   SessionsSetInvolvement("sessions.setInvolvement"),
+  TranscriptsSummarize("transcripts.summarize"),
   ThemesList("themes.list"),
   ThemesGet("themes.get"),
   ThemesSet("themes.set"),

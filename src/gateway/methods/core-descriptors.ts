@@ -696,6 +696,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["environments.session.exec", "environments", "operator.admin", "2026.9"],
   ["sessions.setInvolvement", "sessions-mutations", "operator.read", "2026.9"],
+  ["transcripts.summarize", "transcripts", "operator.write", "2026.9"],
   ["themes.list", "themes", "operator.read", "2026.9"],
   ["themes.get", "themes", "operator.read", "2026.9"],
   ["themes.set", "themes", "operator.write", "2026.9"],
