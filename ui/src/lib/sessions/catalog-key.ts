@@ -94,10 +94,12 @@ export function catalogSessionSearch(key: CatalogSessionKey): string {
 
 export function catalogSessionKeyFromSearch(search: string): CatalogSessionKey | null {
   const params = new URLSearchParams(search);
-  const catalogId = params.get("catalog")?.trim() ?? "";
-  const hostId = params.get("host")?.trim() ?? "";
-  const threadId = params.get("thread")?.trim() ?? "";
-  const sourceHomeId = params.get("sourceHomeId")?.trim();
+  const [catalogId, hostId, threadId, sourceHomeId] = [
+    "catalog",
+    "host",
+    "thread",
+    "sourceHomeId",
+  ].map((name) => params.get(name)?.trim());
   return catalogId && hostId && threadId
     ? { catalogId, hostId, threadId, ...(sourceHomeId ? { sourceHomeId } : {}) }
     : null;
@@ -110,7 +112,7 @@ export function parseCatalogSessionKey(value: string | null | undefined): Catalo
     return null;
   }
   const parts = source.slice("catalog:".length).split(":");
-  if (parts.length !== 3 || parts.some((part) => !part)) {
+  if (parts.length !== 3) {
     return null;
   }
   try {

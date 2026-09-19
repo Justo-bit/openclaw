@@ -13,10 +13,16 @@ describe("catalog session keys", () => {
     expect(parseCatalogSessionKey(buildCatalogSessionKey(key, agentId))).toEqual(key);
   });
 
-  it.each(["", "catalog:", "catalog:a:b", "catalog:a:b:c:d", "catalog:a:%:c"])(
-    "rejects %s",
-    (value) => expect(parseCatalogSessionKey(value)).toBeNull(),
-  );
+  it.each([
+    "",
+    "catalog:",
+    "catalog:a:b",
+    "catalog:a:b:c:d",
+    "catalog:a:%:c",
+    "catalog::b:c",
+    "catalog:a::c",
+    "catalog:a:b:",
+  ])("rejects %s", (value) => expect(parseCatalogSessionKey(value)).toBeNull());
 
   it.each([undefined, "home:a/b"])(
     "round-trips a catalog thread URL target for source %s",
