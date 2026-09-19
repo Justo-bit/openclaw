@@ -22,7 +22,10 @@ import {
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
-import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
+import {
+  inspectPackageTarballBytes,
+  verifyPluginPublicationArtifact,
+} from "./plugin-publication-artifact.mjs";
 
 export const PREPARED_NPM_MANIFEST = "plugin-npm-prepared.json";
 const SCHEMA = "openclaw.plugin-npm-prepared/v1";
@@ -399,6 +402,7 @@ export async function consumePreparedNpmPackage(params) {
       }),
     ),
     outputDir: params.outputDir,
+    verificationOutput: params.verificationOutput,
   });
 }
 
@@ -407,8 +411,14 @@ export async function verifyPreparedNpmRegistry(params) {
     label: "qualified plugin tarball",
     maxBytes: MAX_PACKAGE_BYTES,
   });
-  const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
-  const shasum = createHash("sha1").update(tarball).digest("hex");
+  return verifyNpmRegistryPublication(params, tarball);
+}
+
+export async function verifyPublishedNpmRegistry(params) {
+  return verifyNpmRegistryPublication({ ...params, route: "npm-readback", allowMissing: false });
+}
+
+async function verifyNpmRegistryPublication(params, tarball) {
   requireValue(
     PACKAGE.test(params.packageName) && ROUTES.has(params.route),
     "Invalid prepared npm publication request.",
@@ -466,12 +476,16 @@ export async function verifyPreparedNpmRegistry(params) {
   }
   requireValue(
     version.name === params.packageName && version.version === params.version,
-    "npm registry version identity differs from the qualified package.",
+    "npm registry version identity differs from the requested package.",
   );
-  requireValue(
-    version.dist?.integrity === integrity && version.dist?.shasum === shasum,
-    `${params.packageName}@${params.version}: registry bytes conflict with the qualified artifact.`,
-  );
+  if (tarball) {
+    requireValue(
+      version.dist?.integrity ===
+        `sha512-${createHash("sha512").update(tarball).digest("base64")}` &&
+        version.dist?.shasum === createHash("sha1").update(tarball).digest("hex"),
+      `${params.packageName}@${params.version}: registry bytes conflict with the qualified artifact.`,
+    );
+  }
   const url = new URL(version.dist.tarball);
   requireValue(
     url.origin === "https://registry.npmjs.org" && !url.username && !url.password,
@@ -480,24 +494,40 @@ export async function verifyPreparedNpmRegistry(params) {
   const published = await fetchNpmRegistryTarballWithRetry({
     packageName: params.packageName,
     packageUrl: url.href,
-    maxBytes: tarball.length,
+    maxBytes: tarball?.length ?? MAX_PACKAGE_BYTES,
     deadlineMs,
     fetchImpl: params.fetchImpl,
   });
-  requireValue(
-    published.length === tarball.length && sha256(published) === sha256(tarball),
-    "Published npm tarball bytes differ from the qualified artifact.",
-  );
-  const selectorState = classifyNpmDistTagVersion(
-    registry.packument["dist-tags"][params.publishTag],
-    params.version,
-  );
-  if (selectorState !== "match") {
-    const message = `${params.packageName}: ${params.publishTag} differs from the prepared version; use authorized tag repair.`;
-    if (selectorState === "missing" || selectorState === "lagging") {
-      throw new NpmRegistryUnavailableError(message);
+  if (tarball) {
+    requireValue(
+      published.length === tarball.length && sha256(published) === sha256(tarball),
+      "Published npm tarball bytes differ from the qualified artifact.",
+    );
+  } else {
+    requireValue(
+      version.dist?.integrity ===
+        `sha512-${createHash("sha512").update(published).digest("base64")}` &&
+        version.dist?.shasum === createHash("sha1").update(published).digest("hex"),
+      "Published npm tarball bytes differ from registry integrity.",
+    );
+    const { packageManifest } = inspectPackageTarballBytes(published);
+    requireValue(
+      packageManifest.name === params.packageName && packageManifest.version === params.version,
+      "Published npm archive package identity differs from the requested version.",
+    );
+  }
+  for (const publishTag of params.publishTags) {
+    const selectorState = classifyNpmDistTagVersion(
+      registry.packument["dist-tags"][publishTag],
+      params.version,
+    );
+    if (selectorState !== "match") {
+      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
+      if (selectorState === "missing" || selectorState === "lagging") {
+        throw new NpmRegistryUnavailableError(message);
+      }
+      throw new Error(message);
     }
-    throw new Error(message);
   }
   return { alreadyPublished: true };
 }
@@ -584,6 +614,7 @@ async function main(argv) {
       sourcePackageJson: options["--source-package-json"],
       cacheDir: options["--cache-dir"],
       outputDir: options["--output-dir"],
+      verificationOutput: options["--verification-output"],
     });
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
@@ -599,7 +630,7 @@ async function main(argv) {
       result = await verifyPreparedNpmRegistry({
         packageName: options["--package-name"],
         version: options["--version"],
-        publishTag: options["--publish-tag"],
+        publishTags: [options["--publish-tag"]],
         route: options["--route"],
         tarballPath: options["--tarball"],
         allowMissing: options["--allow-missing"] === "true",

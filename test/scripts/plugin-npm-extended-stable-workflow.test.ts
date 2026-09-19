@@ -172,6 +172,42 @@ function runStableBootstrapAdmission(
 }
 
 describe("plugin npm extended-stable workflow", () => {
+  it("records the resolved candidate and already-published dispositions without producer-local data", () => {
+    const root = mkdtempSync(join(tmpdir(), "npm-publication-plan-"));
+    try {
+      const identity = (packageName: string) => ({
+        packageName,
+        packageDir: `extensions/${packageName}`,
+        version: "2026.9.5",
+      });
+      const all = [identity("new"), identity("existing")];
+      const planStep = step(
+        workflow().jobs?.preview_plugins_npm,
+        "Record resolved npm publication plan",
+      );
+      const result = spawnSync("bash", ["-c", planStep.run ?? "exit 99"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          RUNNER_TEMP: root,
+          SOURCE_SHA: "a".repeat(40),
+          ALL_PACKAGES: JSON.stringify(
+            all.map((entry) => ({ ...entry, localPath: "/producer/private" })),
+          ),
+          CANDIDATES: JSON.stringify([all[0]]),
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(join(root, "npm-publication-plan.json"), "utf8"))).toEqual({
+        sourceSha: "a".repeat(40),
+        all,
+        candidates: [all[0]],
+        skippedPublished: [all[1]],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it.each([
     ["selected existing-package repair", "", "latest", "full-release-validation", false],
     ["qualified stable publication", "stable", "latest", "full-release-validation", true],
