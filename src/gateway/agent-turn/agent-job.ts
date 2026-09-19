@@ -596,12 +596,17 @@ function getCanonicalAgentRunSnapshot(
   const dedupe = source
     ? snapshotsBySource.get(source)
     : getFreshestDedupeSnapshot(snapshotsBySource);
-  // A chat waiter must observe completed delivery before consuming the same
-  // run's lifecycle outcome and reply. An agent dedupe cannot close that barrier.
-  if (source && !dedupe) {
-    return undefined;
-  }
   const lifecycle = snapshotsBySource.get("lifecycle");
+  // A chat waiter must observe completed delivery before consuming the same
+  // run's lifecycle outcome and reply. Gateway user cancellation suppresses
+  // delivery, so its retained persistence entry cannot require a later chat receipt.
+  if (source && !dedupe) {
+    const outcome = lifecycle && terminalOutcomeFromSnapshot(lifecycle);
+    return outcome?.reason === "cancelled" &&
+      (outcome.stopReason === "rpc" || outcome.stopReason === "stop")
+      ? lifecycle
+      : undefined;
+  }
   if (!dedupe || !lifecycle) {
     return dedupe ?? lifecycle;
   }

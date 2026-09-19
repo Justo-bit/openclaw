@@ -163,6 +163,8 @@ attempts, it publishes `executionSettled: true`. The Gateway and `agent.wait`
 consume that fact immediately, including preparation failures that never reached
 a model or emitted a fallback step. Unmarked timeout and bare-abort observations
 retain their existing wait-layer retry handling.
+A confirmed user cancellation also settles a chat's `agent.wait` while its terminal
+session write is pending, without waiting for reply delivery.
 
 Cron attempt completions remain `finishing` across model fallbacks and
 interim-acknowledgment retries; worker `finishing` events do not claim execution

@@ -1,12 +1,19 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentRuntimeEvent,
+} from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { registerQueuedChatTurn, type QueuedChatTurnMap } from "../chat-queued-turns.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -359,6 +366,75 @@ describe("agent.wait gateway dedupe observations", () => {
     await waiter.promise;
     expect(waiter.respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId, status }));
   });
+
+  it.each(["before", "after"])(
+    "settles a wait prepared %s cancellation while terminal persistence retains the chat entry",
+    async (timing) => {
+      vi.useFakeTimers();
+      const runId = `retained-chat-cancellation-${timing}`;
+      const sessionKey = "agent:main:retained-cancellation";
+      const context = createGatewayRequestContext(makeContextParams());
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId,
+        sessionKey,
+        sessionId: "retained-cancellation-session",
+        timeoutMs: 60_000,
+        kind: "chat-send",
+      });
+      const entry = expectDefined(registration.entry, "registered chat entry");
+      const persistence = createDeferred();
+      const unsubscribe = onAgentRuntimeEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle" && event.data.phase === "end") {
+          entry.projectSessionTerminalObservedAt = event.ts;
+          entry.projectSessionTerminalPersistence = persistence.promise;
+        }
+      });
+      const respond = vi.fn();
+      const handler = expectDefined(agentHandlers["agent.wait"], "registered agent.wait");
+      const beginWait = () =>
+        Promise.resolve(
+          handler({
+            req: { type: "req", id: runId, method: "agent.wait" },
+            params: { runId, timeoutMs: 1_000 },
+            context,
+            client: null,
+            respond,
+            isWebchatConnect: () => false,
+          }),
+        );
+      let waiter: Promise<void> | undefined;
+      try {
+        if (timing === "before") {
+          waiter = beginWait();
+          expect(respond).not.toHaveBeenCalled();
+        }
+        expect(
+          abortChatRunById(createChatAbortOps(context), { runId, sessionKey, stopReason: "rpc" }),
+        ).toEqual({ aborted: true });
+        expect(context.chatAbortControllers.get(runId)).toBe(entry);
+        expect(entry.projectSessionTerminalPersistence).toBe(persistence.promise);
+        if (timing === "after") {
+          waiter = beginWait();
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect
+          .soft(respond)
+          .toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ runId, status: "error", stopReason: "rpc" }),
+          );
+        expect(context.dedupe.has(`chat:${runId}`)).toBe(false);
+      } finally {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await waiter;
+        unsubscribe();
+        entry.projectSessionTerminalPending = false;
+        persistence.resolve();
+        registration.cleanup();
+      }
+    },
+  );
 
   it("binds queued observation to the queue entry selected after waiting", async () => {
     const runId = "queued-observation-session";

@@ -61,9 +61,16 @@ describe("waitForAgentJob settled execution", () => {
     vi.useRealTimers();
   });
 
-  it.each(["ok", "error", "timeout"] as const)(
-    "returns recorded reply evidence only after chat settles: %s",
-    async (status) => {
+  it.each([
+    { status: "ok", runtimeStopReason: undefined },
+    { status: "error", runtimeStopReason: undefined },
+    { status: "timeout", runtimeStopReason: undefined },
+    { status: "error", runtimeStopReason: "aborted" },
+    { status: "error", runtimeStopReason: "superseded" },
+    { status: "error", runtimeStopReason: "restart" },
+  ] as const)(
+    "returns recorded reply evidence only after chat settles: $status/$runtimeStopReason",
+    async ({ status, runtimeStopReason }) => {
       const runId = `chat-recorded-reply-${runSequence++}`;
       const terminalReply = { disposition: "visible", text: "The requested answer" } as const;
       const terminalReceipt = {
@@ -80,7 +87,13 @@ describe("waitForAgentJob settled execution", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", executionSettled: true, terminalReply, terminalReceipt },
+        data: {
+          phase: "end",
+          executionSettled: true,
+          terminalReply,
+          terminalReceipt,
+          ...(runtimeStopReason ? { status: "error", stopReason: runtimeStopReason } : {}),
+        },
       });
       // Runtime completion must not release the chat delivery barrier.
       await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toBeNull();
@@ -129,7 +142,8 @@ describe("waitForAgentJob settled execution", () => {
   it.each([
     { status: "timeout", stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
     { status: "error", stopReason: "rpc" },
-  ] as const)("preserves lifecycle $stopReason after the chat barrier", async (outcome) => {
+    { status: "error", stopReason: "stop" },
+  ] as const)("preserves lifecycle $stopReason and its chat delivery boundary", async (outcome) => {
     for (const lifecycleFirst of [true, false]) {
       const runId = `chat-sticky-reply-${runSequence++}`;
       const terminalReply = { disposition: "visible", text: "Partial output" } as const;
@@ -145,8 +159,21 @@ describe("waitForAgentJob settled execution", () => {
       const waiter = lifecycleFirst
         ? waitForAgentJob({ runId, source: "chat", timeoutMs: 60_000 })
         : undefined;
+      let waiterSettled = false;
+      void waiter?.then(() => {
+        waiterSettled = true;
+      });
       if (lifecycleFirst) {
         recordLifecycle();
+        await vi.advanceTimersByTimeAsync(0);
+        const observed = await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
+        if (outcome.stopReason === "rpc" || outcome.stopReason === "stop") {
+          expect.soft(observed).toMatchObject({ ...outcome, terminalReply });
+          expect.soft(waiterSettled).toBe(true);
+        } else {
+          expect.soft(observed).toBeNull();
+          expect.soft(waiterSettled).toBe(false);
+        }
       }
       registerAgentRunContext(runId, {
         sessionKey: "agent:main:replacement",
