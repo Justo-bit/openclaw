@@ -382,7 +382,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: keep complete-preamble admission off the deprecated compatibility facade.
       // +4: approved workspace access exports; later stack exports belong to their consumers.
       // +6: passive link-reader descriptor, metadata, document, preview, and request types.
-      4495,
+      // +2: remote attachment preparation and its filesystem-backed adapter.
+      4497,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -525,7 +526,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
       // -1: keep complete-preamble admission off the deprecated compatibility facade.
       // +3: approved workspace access callables; later stack exports belong to their consumers.
-      2652,
+      // +2: remote attachment preparation and its filesystem-backed adapter.
+      2654,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
