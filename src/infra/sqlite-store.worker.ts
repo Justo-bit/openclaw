@@ -195,12 +195,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (lifecyclePreparation) {
         const context = stateContexts.get(request.actor);
         const databasePath = actorPaths.get(request.actor);
-        if (
-          lifecyclePreparation.actor !== request.actor ||
-          lifecycle ||
-          !context ||
-          !databasePath
-        ) {
+        if (lifecyclePreparation.actor !== request.actor || !context || !databasePath) {
           throw new Error("SQLite lifecycle preparation lost its captured actor");
         }
         const preparation = lifecyclePreparation;
@@ -209,18 +204,13 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         const prepared = await acquireSqliteWorkerLifecycle({
           port: preparation.port,
           databasePath,
-          actorId: `${request.actor}:${request.id}`,
           deadlineNs: preparation.deadlineNs,
           runtime: context.coordinatorRuntime,
           onUnsettled: () => {
             retire = true;
           },
         });
-        if (prepared.kind === "delegate") {
-          lifecycle = { actor: request.actor, delegate: prepared.delegate };
-        } else {
-          coordinator = prepared.coordinator;
-        }
+        coordinator = prepared.coordinator;
         if (prepared.admission) {
           operationAdmission = { actor: request.actor, port: prepared.admission };
         }

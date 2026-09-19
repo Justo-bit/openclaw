@@ -9,7 +9,6 @@ import {
 } from "./sqlite-coordinator.js";
 import {
   acquireStateDatabaseCoordinator,
-  attachStateLifecycleDelegate,
   StateDatabaseCoordinatorContentionError,
   withStateDatabaseCoordinatorRuntimeDirectory,
   type StateDatabaseCoordinatorRuntime,
@@ -18,7 +17,6 @@ import {
 /** Service only this job's preparation while a legacy native caller owns the host turn. */
 export function createSqliteWorkerLifecyclePreparation(params: {
   assertCurrent(): void;
-  delegate(): MessagePort | undefined;
   admit(): MessagePort | undefined;
   dispatch(): void;
   receiveResult(reply: unknown, pumping: boolean): void;
@@ -52,14 +50,7 @@ export function createSqliteWorkerLifecyclePreparation(params: {
         throw new SqliteCoordinatorError("SQLite lifecycle preparation already admitted its job");
       }
       if (request.type === "check") {
-        // A native sibling can acquire custody after the execute request was posted.
-        const stateLifecycle = params.delegate();
-        params.signal.throwIfAborted();
-        params.assertCurrent();
-        port1.postMessage(
-          { type: "accepted", stateLifecycle },
-          stateLifecycle ? [stateLifecycle] : [],
-        );
+        port1.postMessage({ type: "accepted" });
         return;
       }
       const admission = params.admit();
@@ -99,23 +90,16 @@ export function createSqliteWorkerLifecyclePreparation(params: {
   };
 }
 
-type LifecycleCustody =
-  | { kind: "coordinator"; coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> }
-  | { kind: "delegate"; delegate: Awaited<ReturnType<typeof attachStateLifecycleDelegate>> };
-
-type PreparationReply = { admission?: MessagePort; stateLifecycle?: MessagePort };
-
 /** The executing data worker owns acquisition, its synchronous command, and native release. */
 export async function acquireSqliteWorkerLifecycle(params: {
   port: MessagePort;
   databasePath: string;
-  actorId: string;
   deadlineNs: bigint;
   runtime: StateDatabaseCoordinatorRuntime;
   onUnsettled(): void;
 }) {
   const controller = new AbortController();
-  let waiting: ReturnType<typeof createDeferredCore<PreparationReply>> | undefined;
+  let waiting: ReturnType<typeof createDeferredCore<MessagePort | undefined>> | undefined;
   const cancel = () => {
     const error = new SqliteCoordinatorError("SQLite lifecycle preparation was canceled");
     controller.abort(error);
@@ -136,21 +120,17 @@ export async function acquireSqliteWorkerLifecycle(params: {
       pending.reject(new SqliteCoordinatorError("SQLite lifecycle admission port is invalid"));
       return;
     }
-    if (reply.stateLifecycle !== undefined && !(reply.stateLifecycle instanceof MessagePort)) {
-      pending.reject(new SqliteCoordinatorError("SQLite lifecycle delegation port is invalid"));
-      return;
-    }
-    pending.resolve({ admission: reply.admission, stateLifecycle: reply.stateLifecycle });
+    pending.resolve(reply.admission);
   };
   params.port.on("message", receive);
   params.port.once("close", cancel);
   const check = (type: "check" | "acquired") => {
     controller.signal.throwIfAborted();
-    waiting = createDeferredCore<PreparationReply>();
+    waiting = createDeferredCore<MessagePort | undefined>();
     params.port.postMessage({ type }, []);
     return waiting.promise;
   };
-  let custody: LifecycleCustody | undefined;
+  let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
   try {
     const held = await acquireWithWait({
       deadlineMs:
@@ -161,42 +141,22 @@ export async function acquireSqliteWorkerLifecycle(params: {
       shouldRetry: (error) =>
         error instanceof StateDatabaseCoordinatorContentionError &&
         error.family === "state-lifecycle",
-      acquire: async (): Promise<LifecycleCustody> => {
-        const { stateLifecycle } = await check("check");
+      acquire: async () => {
+        await check("check");
         controller.signal.throwIfAborted();
-        if (stateLifecycle) {
-          return {
-            kind: "delegate",
-            delegate: await attachStateLifecycleDelegate(stateLifecycle, {
-              databasePath: params.databasePath,
-              runtimeDirectory: params.runtime.directory,
-              actorId: params.actorId,
-            }),
-          };
-        }
-        return {
-          kind: "coordinator",
-          coordinator: withStateDatabaseCoordinatorRuntimeDirectory(params.runtime, () =>
-            acquireStateDatabaseCoordinator({
-              databasePath: params.databasePath,
-              busyTimeoutMs: 0,
-            }),
-          ),
-        };
+        return withStateDatabaseCoordinatorRuntimeDirectory(params.runtime, () =>
+          acquireStateDatabaseCoordinator({ databasePath: params.databasePath, busyTimeoutMs: 0 }),
+        );
       },
     });
-    custody = held;
-    const { admission } = await check("acquired");
+    coordinator = held;
+    const admission = await check("acquired");
     controller.signal.throwIfAborted();
-    custody = undefined;
-    return { ...held, admission };
+    coordinator = undefined;
+    return { coordinator: held, admission };
   } catch (error) {
     try {
-      if (custody?.kind === "delegate") {
-        custody.delegate.close();
-      } else {
-        custody?.coordinator.release();
-      }
+      coordinator?.release();
     } catch (cleanupError) {
       params.onUnsettled();
       throw createSqliteLifecycleAggregateError(

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { deserialize, serialize } from "node:v8";
-import { MessagePort, Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,19 +34,20 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
-  it.each(
-    (["observe", "compareDelete"] as const).flatMap((operation) =>
-      (["dispatch", "checked"] as const).map((stage) => ({ operation, stage })),
-    ),
-  )(
-    "shares lifecycle custody acquired at $stage during $operation",
-    async ({ operation, stage }) => {
+  it.each(["observe", "compareDelete"] as const)(
+    "waits for an overlapping host owner before worker lifecycle acquisition during %s",
+    async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
-        const store = createPluginStateKeyedStore<string>("memory-core", {
-          namespace: "lock-custody",
-          maxEntries: 10,
-          env: state.env,
-        });
+        const assertActive = vi.fn();
+        const store = createPluginStateKeyedStore<string>(
+          "memory-core",
+          {
+            namespace: "lock-custody",
+            retention: "retained",
+            env: state.env,
+          },
+          assertActive,
+        );
         const messages = vi.spyOn(Worker.prototype, "postMessage");
         await store.register("workspace", "owner");
         const worker = messages.mock.contexts[0];
@@ -56,63 +57,59 @@ describe("worker plugin state", () => {
         }
         const observation = await store.observe("workspace");
         let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-        const hold = () => {
-          held = acquireStateDatabaseCoordinator({
-            databasePath: resolveOpenClawStateSqlitePath(state.env),
-            busyTimeoutMs: 0,
-          });
-        };
-        const nativeReply = vi.spyOn(MessagePort.prototype, "postMessage");
-        nativeReply.mockRestore();
-        const checked = vi
-          .spyOn(MessagePort.prototype, "postMessage")
-          .mockImplementation(function (this: MessagePort, message, transferList) {
-            const reply = asOptionalRecord(message);
-            if (
-              stage === "checked" &&
-              !held &&
-              reply?.type === "accepted" &&
-              reply.admission === undefined &&
-              reply.stateLifecycle === undefined
-            ) {
-              // Custody appears after the check chose no delegate, before worker acquisition.
-              hold();
-            }
-            return nativeReply.call(this, message, transferList);
-          });
         const nativePost = worker.postMessage.bind(worker);
         const dispatch = vi
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
             if (
-              stage === "dispatch" &&
               request?.type === "execute" &&
               request.input instanceof Uint8Array &&
               asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
             ) {
-              // A sibling native owner starts after broker preparation but before
-              // dispatch. Its live custody must be shared with this worker command.
-              hold();
+              // This owner arrives too late to be delegated. Fresh worker acquisition
+              // must wait for its release while the host keeps servicing authority checks.
+              held = acquireStateDatabaseCoordinator({
+                databasePath: resolveOpenClawStateSqlitePath(state.env),
+                busyTimeoutMs: 0,
+              });
+              assertActive.mockClear();
             }
             return nativePost(message, transferList);
           });
-        try {
-          if (operation === "observe") {
-            await expect(store.observe("workspace")).resolves.toMatchObject({ value: "owner" });
-          } else {
-            await expect(
-              store.compareAndApply("workspace", observation.comparison, {
+        let completed = false;
+        const pending = (
+          operation === "observe"
+            ? store.observe("workspace")
+            : store.compareAndApply("workspace", observation.comparison, {
                 operation: "delete",
                 action: "delete",
-              }),
-            ).resolves.toEqual({ status: "applied" });
+              })
+        ).then(
+          (value) => {
+            completed = true;
+            return { ok: true, value } as const;
+          },
+          (error: unknown) => {
+            completed = true;
+            return { ok: false, error } as const;
+          },
+        );
+        try {
+          await vi.waitFor(() => expect(held).toBeDefined());
+          await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
+          expect(completed).toBe(false);
+          held?.release();
+          held = undefined;
+          if (operation === "observe") {
+            await expect(pending).resolves.toMatchObject({ ok: true, value: { value: "owner" } });
+          } else {
+            await expect(pending).resolves.toEqual({ ok: true, value: { status: "applied" } });
           }
-          expect(held).toBeDefined();
         } finally {
           dispatch.mockRestore();
-          checked.mockRestore();
           held?.release();
+          await pending;
         }
         expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
       });

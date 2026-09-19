@@ -255,27 +255,6 @@ function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: Job): vo
   }
 }
 
-export function retainSqliteWorkerLifecycleDelegate(
-  job: Job,
-  actor: Actor,
-  runtime: SqliteWorkerStateContext["coordinatorRuntime"],
-) {
-  if (job.stateLifecycle) {
-    throw new Error("SQLite worker lifecycle custody is already delegated");
-  }
-  return withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
-    const delegate = tryCreateStateLifecycleDelegate({
-      databasePath: actor.databasePath,
-      actorId: `${actor.id}:${job.request.id}`,
-    });
-    if (!delegate) {
-      return undefined;
-    }
-    job.stateLifecycle = { actor, delegate };
-    return delegate.port;
-  });
-}
-
 export function prepareSqliteWorkerLifecycle(
   job: Job,
   actor: Actor | undefined,
@@ -308,7 +287,10 @@ export function prepareSqliteWorkerLifecycle(
         job.maintenanceSchemaFence = { actor, delegate: schemaFence };
         job.request.maintenanceSchemaFence = schemaFence.port;
       }
-      const delegate = retainSqliteWorkerLifecycleDelegate(job, actor, runtime);
+      const delegate = tryCreateStateLifecycleDelegate({
+        databasePath: actor.databasePath,
+        actorId: `${actor.id}:${job.request.id}`,
+      });
       if (!delegate && job.requireStateLifecycle) {
         job.request.workerStateLifecycle = {
           deadlineNs:
@@ -316,7 +298,8 @@ export function prepareSqliteWorkerLifecycle(
         };
       }
       if (delegate) {
-        job.request.stateLifecycle = delegate;
+        job.stateLifecycle = { actor, delegate };
+        job.request.stateLifecycle = delegate.port;
       }
     };
     prepare();

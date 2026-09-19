@@ -1861,6 +1861,38 @@ openclaw-chat-video-player {
   background: var(--task-suggestion-prompt-bg);
 }
 
+.task-suggestion__repository {
+  display: grid;
+  gap: 8px;
+}
+
+.task-suggestion__repository label {
+  display: grid;
+  gap: 4px;
+}
+
+.task-suggestion__repository-path {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.task-suggestion__repository-choice {
+  display: grid;
+  justify-content: stretch;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.task-suggestion__repository-choice small {
+  color: var(--muted);
+}
+
 .task-suggestion__actions {
   grid-column: 1 / -1;
   display: flex;

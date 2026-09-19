@@ -3704,6 +3704,10 @@ export const en: TranslationMap & {
       startSession: "Start in a new session",
       startOptions: "Choose where to start the task",
       startWorktree: "Start in a new worktree",
+      chooseRepository: "Choose repository",
+      repositoryFolder: "Repository folder",
+      chooseRepositoryHelp:
+        "Choose a Git repository with a commit. Your task will start in a new worktree; its instructions are preserved.",
       startCurrentSession: "Start in this session",
       copyPrompt: "Copy prompt",
       copyPromptFailed: "Couldn't copy the prompt to the clipboard",

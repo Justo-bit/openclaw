@@ -1852,6 +1852,7 @@
     "mobile:release:resolve": "node --import ./scripts/tsx.mjs scripts/mobile-release-ref.ts resolve",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "perf:redaction": "node --import ./scripts/tsx.mjs scripts/bench-redaction-prefilters.ts",
     "perf:web-fetch": "node --import ./scripts/tsx.mjs scripts/bench-web-fetch.ts",
     "perf:write-diff": "node --import ./scripts/tsx.mjs scripts/bench-write-diff.ts",
     "perf:kova:summary": "node --import ./scripts/tsx.mjs scripts/kova-ci-summary.mts",
