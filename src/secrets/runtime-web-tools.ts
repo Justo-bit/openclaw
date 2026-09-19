@@ -588,7 +588,11 @@ async function resolveBundledWebSearchProviders(params: {
   // Narrow plugin hints can use explicit public artifacts first; broad custom-plugin risk still
   // routes through runtime discovery because installed or path-loaded providers may participate.
   if (onlyPluginIds && onlyPluginIds.length > 0) {
-    const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });
+    const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds,
+      env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
+    });
     if (bundled && bundled.length > 0) {
       return bundled;
     }
@@ -640,6 +644,8 @@ async function resolveBundledWebFetchProviders(params: {
   if (params.configuredBundledPluginId) {
     const bundled = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
       onlyPluginIds: [params.configuredBundledPluginId],
+      env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
