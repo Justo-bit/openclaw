@@ -572,6 +572,66 @@ suite.define(() => {
     },
   );
 
+  it.each(["pointer", "keyboard"] as const)(
+    "opens persistent rejected-turn recovery with %s after dismissing its toast",
+    async (interaction) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const key = "agent:main:dashboard:palette-rejected-turn";
+        const gateway = await installMockGateway(
+          page,
+          scenario({
+            "sessions.create": {
+              key,
+              runError: { code: "INVALID_REQUEST", message: "Initial turn rejected" },
+            },
+          }),
+        );
+        const { composer, url, palette, input } = await openFromForeground(page);
+        const prompt = "Keep this accepted session recoverable without sending twice.";
+        await input.fill(prompt);
+        const start = palette.getByRole("button", {
+          name: "Start new session in background",
+          exact: true,
+        });
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        await input.press("ControlOrMeta+Enter");
+        await gateway.waitForRequest("sessions.create");
+        await expect
+          .poll(() => palette.getByRole("alert").textContent())
+          .toContain("Initial turn rejected");
+        const toast = page.locator(".app-toast");
+        await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+        await toast.waitFor({ state: "hidden" });
+        expect(await input.inputValue()).toBe(prompt);
+        expect(page.url()).toBe(url);
+        expect(await composer.inputValue()).toBe(foregroundDraft);
+        await input.press("ControlOrMeta+Enter");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        const recovery = palette.getByRole("button", { name: "Open session", exact: true });
+        await recovery.waitFor({ state: "visible" });
+        if (interaction === "pointer") {
+          await recovery.click();
+        } else {
+          await input.focus();
+          for (let step = 0; step < 10; step += 1) {
+            await page.keyboard.press("Tab");
+            if (await recovery.evaluate((element) => document.activeElement === element)) {
+              break;
+            }
+          }
+          expect(await recovery.evaluate((element) => document.activeElement === element)).toBe(
+            true,
+          );
+          await page.keyboard.press("Enter");
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
+        await input.waitFor({ state: "hidden" });
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toEqual([]);
+      });
+    },
+  );
+
   it("keeps a rejected creation visible and retries the same prompt without touching chat", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(

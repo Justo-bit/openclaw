@@ -277,25 +277,30 @@ export class PaletteSessionDraft implements ReactiveController {
     this.draft.place.restorePreferenceSelections();
   }
 
+  renderRecovery() {
+    return this.rejectedOpen
+      ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
+          ${t("sessionsView.openSession")}
+        </button>`
+      : nothing;
+  }
+
   renderAuxiliary() {
-    return html`${this.rejectedOpen ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>${t("sessionsView.openSession")}</button>` : nothing}${renderConnectMachineDialog(
-      {
-        open:
-          this.connectMachine.open && this.read().open && (this.draft?.place.isAdmin() ?? false),
-        loading: this.connectMachine.loading,
-        error: this.connectMachine.error,
-        setup: this.connectMachine.setup,
-        onRefresh: () => void this.connectMachine.refresh(),
-        onClose: () => {
-          this.connectMachine.close();
-          this.host.requestUpdate();
-        },
-        onManageDevices: () => {
-          this.callbacks.onClose();
-          this.read().context?.navigate("devices");
-        },
+    return renderConnectMachineDialog({
+      open: this.connectMachine.open && this.read().open && (this.draft?.place.isAdmin() ?? false),
+      loading: this.connectMachine.loading,
+      error: this.connectMachine.error,
+      setup: this.connectMachine.setup,
+      onRefresh: () => void this.connectMachine.refresh(),
+      onClose: () => {
+        this.connectMachine.close();
+        this.host.requestUpdate();
       },
-    )}`;
+      onManageDevices: () => {
+        this.callbacks.onClose();
+        this.read().context?.navigate("devices");
+      },
+    });
   }
 
   private bindOwner(url: string, scope: string) {

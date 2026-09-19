@@ -25,7 +25,7 @@ class PaletteDraftHost extends OpenClawLightDomElement {
   );
   override render() {
     return html`<textarea aria-label="Palette prompt" .value=${this.draft.message}></textarea
-      >${this.draft.renderControls()}${this.draft.renderAuxiliary()}`;
+      >${this.draft.renderControls()}${this.draft.renderRecovery()}${this.draft.renderAuxiliary()}`;
   }
 }
 customElements.define("test-palette-session-draft", PaletteDraftHost);

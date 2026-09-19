@@ -532,60 +532,34 @@ approve_clawhub_bootstrap_environments() {
 }
 
 guard_existing_public_release() {
-  local release_version asset_name release_json is_draft has_sha has_proof has_asset has_canonical_body release_url release_body release_body_file
+  local release_json release_body release_body_file
 
   if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
     return 0
   fi
-
-  if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,assets,body,url 2>/dev/null)"; then
+  if ! release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,body 2>/dev/null)"; then
     return 0
   fi
   release_body="$(printf '%s' "${release_json}" | jq -er '.body | strings')" || return 1
   assert_initial_release_body "${release_body}" || return 1
-
-  is_draft="$(printf '%s' "${release_json}" | jq -r '.isDraft')"
-  if [[ "${is_draft}" == "true" ]]; then
+  if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" == "true" ]]; then
     return 0
   fi
 
-  release_version="${RELEASE_TAG#v}"
-  asset_name="openclaw-${release_version}-dependency-evidence.zip"
-  has_sha="$(printf '%s' "${release_json}" | jq --arg sha "${TARGET_SHA}" -r '.body | contains($sha)')"
-  has_proof="$(printf '%s' "${release_json}" | jq -r '.body | contains("### Release verification")')"
-  has_asset="$(printf '%s' "${release_json}" | jq --arg name "${asset_name}" -r 'any(.assets[]?; .name == $name)')"
-  release_url="$(printf '%s' "${release_json}" | jq -r '.url')"
-  release_body="$(printf '%s' "${release_json}" | jq -r '.body')"
   release_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
   printf '%s' "${release_body}" > "${release_body_file}"
-  has_canonical_body="false"
-  if canonical_release_body_matches "${release_body_file}"; then
-    has_canonical_body="true"
+  if ! canonical_release_body_matches "${release_body_file}"; then
+    echo "Public release notes are no longer canonical; refusing to overwrite them." >&2
+    return 1
   fi
-
-  if [[ "${has_asset}" == "true" &&
-    "${has_sha}" == "true" &&
-    "${has_proof}" == "true" &&
-    "${has_canonical_body}" == "true" ]]; then
-    return 0
+  if [[ "${release_body}" != "$(cat "${prepared_release_notes_file}")" ]] &&
+    ! grep -Fqx -- "- release SHA: \`${TARGET_SHA}\`" "${release_body_file}"; then
+    echo "Public release verification does not match release SHA ${TARGET_SHA}." >&2
+    return 1
   fi
-
-  # The renderer omits the verification tail when the canonical body
-  # already reaches GitHub's limit. A canonical proofless body with
-  # intact dependency evidence is retry-safe: postpublish re-attempts
-  # the proof append on this run.
-  if [[ "${has_asset}" == "true" &&
-    "${has_canonical_body}" == "true" &&
-    "${has_proof}" != "true" ]]; then
-    return 0
-  fi
-
-  {
-    echo "Release ${RELEASE_TAG} already has a public GitHub release page without complete postpublish evidence for ${TARGET_SHA}."
-    echo "Refusing to reuse a public prerelease tag after publication started: ${release_url}"
-    echo "Create a new beta tag or delete/draft the incomplete public release before retrying."
-  } >&2
-  exit 1
+  # A partial public release is resumable. The upload owner compares existing
+  # immutable evidence and attaches missing assets after registry verification.
+  echo "- GitHub release: resuming canonical public page; evidence will be verified and completed" >> "$GITHUB_STEP_SUMMARY"
 }
 
 resolve_openclaw_npm_publish_state() {

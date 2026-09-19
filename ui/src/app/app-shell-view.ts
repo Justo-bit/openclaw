@@ -24,12 +24,12 @@ import {
   renderLazyDevicePairSetup,
   type DevicePairSetupHost,
 } from "./app-shell-device-pair-setup.ts";
+import { renderShellDocks } from "./app-shell-docks.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
-import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   isOptionalElementDefined,
@@ -47,12 +47,7 @@ import {
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import {
-  isBrowserPanelAvailable,
-  isBrowserPanelSurfaceAvailable,
-  isDesktopPanelAvailable,
-  isHomePanelAvailable,
-} from "./panel-availability.ts";
+import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import { createUpdateProgressWatcher } from "./update-confirmation.ts";
@@ -122,7 +117,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
-  const browserPanelAvailable = isBrowserPanelSurfaceAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
@@ -568,34 +562,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .themeMode=${context.theme.resolvedMode}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      ${
-        sessionRoute
-          ? nothing
-          : html`
-              <openclaw-browser-panel
-                ?inert=${navDrawerOpen}
-                data-chat-autotype-exempt
-                .client=${gatewayConnected ? gatewaySnapshot.client : null}
-                .available=${browserPanelAvailable}
-                .remoteAvailable=${isBrowserPanelAvailable(gatewaySnapshot)}
-                .suppressed=${settingsTakeover || nativeEmbed}
-                .resourceBasePath=${context.resourceBasePath}
-                .authToken=${resolveControlUiAuthToken({
-                  hello: gatewaySnapshot.hello,
-                  settings: { token: context.gateway.connection.token },
-                  password: context.gateway.connection.password,
-                })}
-              ></openclaw-browser-panel>
-              <openclaw-desktop-panel
-                ?inert=${navDrawerOpen}
-                data-chat-autotype-exempt
-                .client=${gatewayConnected ? gatewaySnapshot.client : null}
-                .available=${desktopPanelAvailable}
-                .suppressed=${settingsTakeover || nativeEmbed || activeRoute === "systems"}
-                .basePath=${context.basePath}
-              ></openclaw-desktop-panel>
-            `
-      }
+      ${sessionRoute ? nothing : renderShellDocks(context, navDrawerOpen, settingsTakeover || nativeEmbed, selectedAgentId, activeRoute)}
       <openclaw-assistant-panel
         ?inert=${navDrawerOpen}
         .custodianAvailable=${custodianPanelAvailable && !nativeEmbed}

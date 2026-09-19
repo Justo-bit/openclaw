@@ -362,6 +362,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             : nothing
         }
         <div id="cmd-palette-keys" class="cmd-palette__footer">
+          ${props.draft.renderRecovery()}
           ${
             items.length > 0 && !props.query.includes("\n")
               ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
