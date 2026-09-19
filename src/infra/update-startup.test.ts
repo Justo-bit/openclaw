@@ -2802,7 +2802,7 @@ describe("update-startup", () => {
         ]),
       });
       expect(log.info).toHaveBeenCalledWith("automatic update handoff failed", {
-        error: String(startupError),
+        error: startupError.message,
       });
     },
   );

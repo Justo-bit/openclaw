@@ -171,14 +171,15 @@ describe("update campaign apply exception boundary", () => {
 
     const runId = listUpdateRuns()[0]?.runId ?? "";
     const run = getUpdateRun(runId);
+    const diagnostic = code ? `${message} | ${code}` : message;
     expect(run).toMatchObject({
       status: "failed",
       reason: code ?? "unexpected-error",
       steps: expect.arrayContaining([
         expect.objectContaining({
           status: "failed",
-          detail: message,
-          failureFacts: [expect.objectContaining({ code: code ?? "Error", message })],
+          detail: diagnostic,
+          failureFacts: [expect.objectContaining({ code: code ?? "Error", message: diagnostic })],
         }),
       ]),
       target: { kind: "git", installationMethod: "git-checkout" },
