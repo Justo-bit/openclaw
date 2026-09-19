@@ -93,6 +93,16 @@ const PROCESS_ENV: Record<string, true> = {
   PROGRAMW6432: true,
   ALLUSERSPROFILE: true,
   CI: true,
+  // The shared state fixture replaces these; extraEnv must not erase its replacements.
+  HOME: true,
+  USERPROFILE: true,
+  HOMEDRIVE: true,
+  HOMEPATH: true,
+  OPENCLAW_HOME: true,
+  OPENCLAW_STATE_DIR: true,
+  OPENCLAW_CONFIG_PATH: true,
+  OPENCLAW_AGENT_DIR: true,
+  PI_CODING_AGENT_DIR: true,
 };
 
 /** Run the ordinary shipped agent command, not the auth-binding/isolated-exec path. */
@@ -114,6 +124,13 @@ export async function runClaudeCliNativeSpawnProof(
     },
   });
   try {
+    if (
+      instance.env.HOME !== instance.homeDir ||
+      instance.env.OPENCLAW_STATE_DIR !== instance.stateDir ||
+      instance.env.OPENCLAW_CONFIG_PATH !== instance.configPath
+    ) {
+      throw new Error("CLI proof environment lost its isolated state owner");
+    }
     const prefix = instance.state.path("npm-prefix");
     const packageDir = path.join(prefix, "node_modules", "@anthropic-ai", "claude-code");
     const entrypoint = path.join(packageDir, "cli.js");
