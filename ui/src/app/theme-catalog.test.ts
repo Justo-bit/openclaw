@@ -54,6 +54,7 @@ beforeEach(() => {
   patchSettings({ theme: descriptor.id, themeMode: "light" });
 });
 afterEach(() => {
+  localStorage.clear();
   document.getElementById("openclaw-custom-theme")?.remove();
   document.documentElement.removeAttribute("style");
   vi.unstubAllGlobals();
@@ -212,3 +213,44 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
     gateway.stop();
   }
 });
+
+it.each(["Appearance discovery", "profile selection"] as const)(
+  "leaves built-in presentation quiet until %s needs the catalog",
+  async (trigger) => {
+    patchSettings({ theme: "claw" });
+    const { gateway, current } = createGatewayStoreTestStore();
+    const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+    const published = vi.fn();
+    const unsubscribe = applicationTheme.subscribe(published);
+    gateway.start();
+    current().request.mockResolvedValue(catalog());
+    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    try {
+      await vi.dynamicImportSettled();
+      expect(current().request).not.toHaveBeenCalled();
+      expect(published).not.toHaveBeenCalled();
+      expect(document.documentElement.dataset.themeId).toBe("claw");
+
+      if (trigger === "Appearance discovery") {
+        expect(applicationTheme.catalog).toBeUndefined();
+        expect(applicationTheme.catalog).toBeUndefined();
+      } else {
+        patchSettings({ theme: descriptor.id });
+      }
+      await vi.waitFor(() =>
+        expect(current().request).toHaveBeenCalledExactlyOnceWith("themes.list", {}),
+      );
+      if (trigger === "profile selection") {
+        await vi.waitFor(() =>
+          expect(document.documentElement.dataset.themeId).toBe(descriptor.id),
+        );
+      }
+      await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
+      expect(current().request).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      applicationTheme.dispose();
+      gateway.stop();
+    }
+  },
+);

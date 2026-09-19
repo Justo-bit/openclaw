@@ -1120,7 +1120,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
-      themeCatalog: this.context.theme.catalog,
+      themeCatalog: this.pageId === "appearance" ? this.context.theme.catalog : undefined,
       onRetryThemeCatalog: () => this.context.theme.retryCatalog?.(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),

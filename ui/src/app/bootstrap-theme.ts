@@ -66,6 +66,7 @@ export function createApplicationTheme(
   let presentationGeneration = 0;
   let catalog: ReturnType<typeof createThemeCatalog> | undefined;
   let catalogLoading = false;
+  let catalogRequested = false;
   let catalogLoadError: ThemeCatalogSnapshot | undefined;
   let disposed = false;
   const publish = () => {
@@ -85,7 +86,13 @@ export function createApplicationTheme(
   };
 
   const loadCatalog = async () => {
-    if (disposed || catalog || catalogLoading || gateway.snapshot.phase !== "connected") {
+    if (
+      disposed ||
+      catalog ||
+      catalogLoading ||
+      gateway.snapshot.phase !== "connected" ||
+      (!catalogRequested && !settings.theme.includes("/"))
+    ) {
       return;
     }
     catalogLoading = true;
@@ -153,6 +160,7 @@ export function createApplicationTheme(
       return;
     }
     settings = next;
+    void loadCatalog();
     publish();
     syncSystemThemeListener();
   };
@@ -178,6 +186,10 @@ export function createApplicationTheme(
 
   return {
     get catalog() {
+      if (!catalogRequested) {
+        catalogRequested = true;
+        void loadCatalog();
+      }
       return catalog?.snapshot ?? catalogLoadError;
     },
     get settings() {
