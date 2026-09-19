@@ -23,6 +23,7 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof input.location === "string" &&
     typeof input.checkFreshAdmission === "boolean" &&
     (input.expectedIdentity === undefined || typeof input.expectedIdentity === "string") &&
+    (input.snapshotRoot === undefined || typeof input.snapshotRoot === "string") &&
     (input.context.existingSchemaPath === undefined ||
       typeof input.context.existingSchemaPath === "string") &&
     isRecord(environment) &&
@@ -86,6 +87,7 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
           input.location,
           undefined,
           input.expectedIdentity,
+          input.snapshotRoot,
         );
       }),
     );
