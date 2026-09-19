@@ -678,7 +678,7 @@ extensions/matrix/src/setup-config.ts	6
 extensions/matrix/src/setup-contract.ts	1
 extensions/matrix/src/setup-core.ts	5
 extensions/matrix/src/setup-dm-policy.ts	5
-extensions/matrix/src/test-runtime.ts	10
+extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
@@ -1142,7 +1142,7 @@ extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	4
-extensions/telegram/src/action-runtime.ts	6
+extensions/telegram/src/action-runtime.ts	3
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
 extensions/telegram/src/audit-membership-runtime.ts	1
@@ -1184,7 +1184,7 @@ extensions/telegram/src/group-history-window.ts	1
 extensions/telegram/src/inline-buttons.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/lane-delivery-text-deliverer.ts	1
-extensions/telegram/src/message-cache.ts	10
+extensions/telegram/src/message-cache.ts	2
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
@@ -2629,7 +2629,7 @@ src/gateway/node-command-policy.ts	2
 src/gateway/node-invoke-system-run-approval.ts	1
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
-src/gateway/node-registry.ts	4
+src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/openai-http.ts	22
 src/gateway/operator-approval-snapshot.ts	4
@@ -3150,8 +3150,7 @@ src/plugin-sdk/status-helpers.ts	7
 src/plugin-sdk/tool-payload.ts	2
 src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
-src/plugin-state/plugin-state-store.sqlite.ts	2
-src/plugin-state/plugin-state-store.ts	6
+src/plugin-state/plugin-state-store.ts	5
 src/plugin-state/plugin-store-validation.ts	1
 src/plugin-state/runtime-health-store.ts	1
 src/plugins/agent-tool-result-middleware.ts	1

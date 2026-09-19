@@ -6,10 +6,10 @@ type RowsReader = {
   assertCurrent: () => void;
 };
 
-export class AuthProfileRuntimeReadInvalidatedError extends Error {
+export class AuthProfileRuntimeReadStaleError extends Error {
   constructor() {
     super("Auth profile store changed during its runtime read; retry resolution");
-    this.name = "AuthProfileRuntimeReadInvalidatedError";
+    this.name = "AuthProfileRuntimeReadStaleError";
   }
 }
 
@@ -48,7 +48,7 @@ export function createRuntimeAuthProfileRowsCache(
         reader.assertCurrent();
         // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
         if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new AuthProfileRuntimeReadInvalidatedError();
+          throw new AuthProfileRuntimeReadStaleError();
         }
       };
       return {

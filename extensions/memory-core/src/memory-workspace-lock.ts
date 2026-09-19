@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   PluginStateCompareIntent,
@@ -23,6 +24,32 @@ const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS = 40;
 const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
 const activeMemoryWorkspaceLockOwners = new Map<string, string>();
+const releasedMemoryWorkspaceLockOwners = new Map<string, string>();
+
+type MemoryWorkspaceLockAcquisitionFailure =
+  | { kind: "held"; holder: { owner: string; epoch: number } }
+  | { kind: "store-unavailable"; reason: "storage-error" | "holder-unobserved" };
+
+class MemoryWorkspaceLockAcquisitionError extends Error {
+  readonly code: "MEMORY_WORKSPACE_LOCK_HELD" | "MEMORY_WORKSPACE_LOCK_STORE_UNAVAILABLE";
+
+  constructor(
+    lockRef: string,
+    readonly outcome: MemoryWorkspaceLockAcquisitionFailure,
+    cause?: unknown,
+  ) {
+    super(
+      outcome.kind === "held"
+        ? `Timed out waiting for memory workspace lock at ${lockRef} (held by ${outcome.holder.owner})`
+        : `Memory workspace lock store unavailable at ${lockRef}: ${outcome.reason}`,
+      { cause },
+    );
+    this.code =
+      outcome.kind === "held"
+        ? "MEMORY_WORKSPACE_LOCK_HELD"
+        : "MEMORY_WORKSPACE_LOCK_STORE_UNAVAILABLE";
+  }
+}
 
 type MemoryWorkspaceLease = { key: string; active: boolean };
 type MemoryWorkspaceLockScope = {
@@ -82,6 +109,10 @@ export function isShortTermLockStealable(
   existing: ShortTermLockEntry,
   nowMs: number,
 ): boolean {
+  // A failed cleanup does not keep a settled local task alive for the stale interval.
+  if (releasedMemoryWorkspaceLockOwners.get(lockKey) === existing.owner) {
+    return true;
+  }
   if (nowMs - existing.acquiredAt <= SHORT_TERM_LOCK_STALE_MS) {
     return false;
   }
@@ -172,27 +203,47 @@ export async function withMemoryWorkspaceLock<T>(
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   return await inProcessMemoryWorkspaceLocks.enqueue(lockKey, async () => {
-    const startedAt = Date.now();
+    const lockEntry = await acquireMemoryWorkspaceLock(lockStore, lockKey, lockRef);
+    const lease = { key: lockKey, active: true };
+    activeMemoryWorkspaceLockOwners.set(lockKey, lockEntry.owner);
+    try {
+      return await runWorkspaceLockScope(lease, task);
+    } finally {
+      lease.active = false;
+      activeMemoryWorkspaceLockOwners.delete(lockKey);
+      await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry).catch(() => {
+        releasedMemoryWorkspaceLockOwners.set(lockKey, lockEntry.owner);
+        if (releasedMemoryWorkspaceLockOwners.size > SHORT_TERM_LOCK_MAX_ENTRIES) {
+          const oldest = releasedMemoryWorkspaceLockOwners.keys().next().value;
+          if (oldest) {
+            releasedMemoryWorkspaceLockOwners.delete(oldest);
+          }
+        }
+      });
+    }
+  });
+}
 
-    while (true) {
+async function acquireMemoryWorkspaceLock(
+  lockStore: PluginStateKeyedStore<ShortTermLockEntry>,
+  lockKey: string,
+  lockRef: string,
+): Promise<ShortTermLockEntry> {
+  const startedAt = Date.now();
+  while (true) {
+    let outcome: MemoryWorkspaceLockAcquisitionFailure;
+    try {
       const acquiredAt = Date.now();
       const ownerStartTime = getFileLockProcessStartTime(process.pid);
       const lockEntry: ShortTermLockEntry = {
-        owner: `${process.pid}:${acquiredAt}`,
+        owner: `${process.pid}:${randomUUID()}`,
         acquiredAt,
         ...(ownerStartTime === null ? {} : { ownerStartTime }),
       };
       const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry);
       if (acquired) {
-        const lease = { key: lockKey, active: true };
-        activeMemoryWorkspaceLockOwners.set(lockKey, lockEntry.owner);
-        try {
-          return await runWorkspaceLockScope(lease, task);
-        } finally {
-          lease.active = false;
-          activeMemoryWorkspaceLockOwners.delete(lockKey);
-          await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry).catch(() => false);
-        }
+        releasedMemoryWorkspaceLockOwners.delete(lockKey);
+        return lockEntry;
       }
 
       const existing = await lockStore.lookup(lockKey);
@@ -202,11 +253,19 @@ export async function withMemoryWorkspaceLock<T>(
         }
       }
 
-      if (Date.now() - startedAt >= MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for memory workspace lock at ${lockRef}`);
-      }
-
-      await sleep(MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS);
+      outcome = existing
+        ? { kind: "held", holder: { owner: existing.owner, epoch: existing.acquiredAt } }
+        : { kind: "store-unavailable", reason: "holder-unobserved" };
+    } catch (cause) {
+      throw new MemoryWorkspaceLockAcquisitionError(
+        lockRef,
+        { kind: "store-unavailable", reason: "storage-error" },
+        cause,
+      );
     }
-  });
+    if (Date.now() - startedAt >= MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS) {
+      throw new MemoryWorkspaceLockAcquisitionError(lockRef, outcome);
+    }
+    await sleep(MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS);
+  }
 }

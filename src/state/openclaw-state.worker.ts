@@ -7,6 +7,7 @@ import {
   listNativeHookRelayBridgeSnapshotsInDatabase,
 } from "../agents/harness/native-hook-relay-store.kernel.js";
 import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
+import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -117,6 +118,7 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
+import { executeUserProfileReadCommand } from "./user-profiles.worker.js";
 
 export function createSqliteWorkerBackend(
   _input: undefined,
@@ -169,6 +171,9 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (command.type === "audit.events.list") {
+        return listAuditEventsInDatabase(open().db, command.input);
       }
       if (
         command.type === "authProfiles.read" ||
@@ -349,6 +354,13 @@ function createSharedStateWorkerBackend(
       }
       if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
         return executeUserPreferenceCommand(command, {
+          database: open(),
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        });
+      }
+      if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
+        return executeUserProfileReadCommand(command, {
           database: open(),
           path: context.databasePath,
           env: getSqliteWorkerStateContext().environment,

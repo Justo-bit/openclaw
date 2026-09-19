@@ -2,7 +2,6 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
-import { AuthProfileRuntimeReadInvalidatedError } from "../../auth-profiles/runtime-persisted-rows.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
@@ -213,33 +212,21 @@ export async function resolveEmbeddedRunModelSetup(params: {
       config: runParams.config,
       workspaceDir: params.workspaceDir,
     });
-    const resolve = () =>
-      resolveTieredModel({
-        assertCurrent: params.assertCurrent,
-        provider: selectedRuntimeProvider,
-        ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
-        modelId,
-        agentDir: params.agentDir,
-        requestedRouteResolution: modelSelectionChangedByHook
-          ? "raw"
-          : runParams.requestedRouteResolution,
-        config: runParams.config,
-        workspaceDir: params.workspaceDir,
-        authProfileId: runParams.authProfileId,
-        preparedModelRuntime: params.preparedModelRuntime,
-        staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
-      });
-    let tieredResolution: Awaited<ReturnType<typeof resolve>>;
-    try {
-      tieredResolution = await resolve();
-    } catch (error) {
-      if (!(error instanceof AuthProfileRuntimeReadInvalidatedError)) {
-        throw error;
-      }
-      // Concurrent auth publication can invalidate preparation before any inference starts.
-      params.assertCurrent();
-      tieredResolution = await resolve();
-    }
+    const tieredResolution = await resolveTieredModel({
+      assertCurrent: params.assertCurrent,
+      provider: selectedRuntimeProvider,
+      ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
+      modelId,
+      agentDir: params.agentDir,
+      requestedRouteResolution: modelSelectionChangedByHook
+        ? "raw"
+        : runParams.requestedRouteResolution,
+      config: runParams.config,
+      workspaceDir: params.workspaceDir,
+      authProfileId: runParams.authProfileId,
+      preparedModelRuntime: params.preparedModelRuntime,
+      staticCatalogOwnsTransport: pluginHarnessOwnsTransport,
+    });
     resolvedModelProvider = tieredResolution.provider;
     modelResolution = tieredResolution.resolution;
     if (modelResolution.model) {

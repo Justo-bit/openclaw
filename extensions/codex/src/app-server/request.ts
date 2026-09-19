@@ -393,7 +393,7 @@ export async function withCodexAppServerJsonClient<T>(
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
                 ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
-                ...(params.catalogPreview && method === "thread/list"
+                ...(params.catalogPreview
                   ? {
                       catalogPreview: true as const,
                       catalogPreviewCache: params.catalogPreviewCache,

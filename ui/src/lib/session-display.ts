@@ -66,6 +66,7 @@ export function resolveChannelSessionInfo(
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
   repository?: { url: string; branch: string };
+  placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;
   spawnedWorkspaceDir?: string;
@@ -73,7 +74,7 @@ type SessionWorktreeDisplayRow = {
 };
 
 export type SessionWorkContext =
-  | { kind: "project"; name: string; path: string; branch?: string }
+  | { kind: "project"; name: string; path: string; cwd?: string; branch?: string }
   | { kind: "workspace"; name: string; path: string };
 
 /** Basename shown for a repository path on every Control UI surface. */
@@ -84,23 +85,39 @@ export function repoName(repoRoot: string): string {
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
 ): SessionWorkContext | undefined {
+  // Cloud repository identity is not a Gateway filesystem path. A bare node
+  // cwd likewise must not borrow repository facts from a local worktree.
+  const repoRoot =
+    normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
+    (row.execNode ? undefined : normalizeOptionalString(row.worktree?.repoRoot));
+  if (repoRoot) {
+    const remoteDirectory =
+      row.placement && "remoteWorkspaceDir" in row.placement
+        ? normalizeOptionalString(row.placement.remoteWorkspaceDir)
+        : undefined;
+    const repositoryDirectory =
+      remoteDirectory ?? (row.execNode ? normalizeOptionalString(row.execCwd) : undefined);
+    const branch =
+      normalizeOptionalString(row.repository?.branch) ??
+      normalizeOptionalString(row.worktree?.branch);
+    return {
+      kind: "project",
+      name: repoName(repoRoot),
+      // Project grouping uses the source repository, not this task checkout.
+      path: repoRoot,
+      cwd: row.repository ? repositoryDirectory : normalizeOptionalString(row.spawnedCwd),
+      branch:
+        !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+          ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+          : branch,
+    };
+  }
+
   if (row.execNode) {
     const workspacePath = normalizeOptionalString(row.execCwd);
     return workspacePath
       ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
       : undefined;
-  }
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  if (repoRoot) {
-    const branch = normalizeOptionalString(row.worktree?.branch);
-    return {
-      kind: "project",
-      name: repoName(repoRoot),
-      path: repoRoot,
-      branch: branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-        ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-        : branch,
-    };
   }
 
   // Match the chat workspace owner: local spawned sessions own their recorded
@@ -128,9 +145,10 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   const rawBranch =
     normalizeOptionalString(row.repository?.branch) ??
     normalizeOptionalString(row.worktree?.branch);
-  const branch = rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
-    ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
-    : rawBranch;
+  const branch =
+    !row.repository && rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
+      ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
+      : rawBranch;
   const checkout = repoRoot
     ? branch
       ? `${repoName(repoRoot)} ⎇ ${branch}`

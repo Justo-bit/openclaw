@@ -75,7 +75,6 @@ async function createFixture(
     config,
   });
   publishCurrentModelGeneration(generation);
-  const runAttempt = vi.fn<AgentHarness["runAttempt"]>();
   const harness: AgentHarness = {
     id: "codex",
     label: "Native fixture",
@@ -87,7 +86,7 @@ async function createFixture(
           ? { supported: false, fallbackRuntime: "openclaw" }
           : { supported: true },
     ...(nativeOwner ? { resolveSessionRuntimeOwnership: nativeOwner } : {}),
-    runAttempt,
+    runAttempt: vi.fn<AgentHarness["runAttempt"]>(),
   };
   registerAgentHarness(harness);
   const runParams: RunEmbeddedAgentParams = {
@@ -178,7 +177,7 @@ async function createFixture(
       admission.close();
     }
   };
-  return { state, generation, harness, runAttempt, target, entry, runParams, resolve, withRuntime };
+  return { state, generation, harness, target, entry, runParams, resolve, withRuntime };
 }
 
 describe("model chat and native model ownership", () => {
@@ -186,6 +185,7 @@ describe("model chat and native model ownership", () => {
     "reacquires initial model preparation after a shared OAuth refresh while authority is %s",
     async (outcome) => {
       const fixture = await createFixture();
+      fixture.generation.resolveDynamicModel.mockClear();
       const profileId = "openai:refresh-race";
       const credential = {
         type: "oauth" as const,
@@ -243,12 +243,13 @@ describe("model chat and native model ownership", () => {
             throw new Error("Model setup completed before the shared auth read barrier");
           }),
         ]);
-        expect(fixture.runAttempt).not.toHaveBeenCalled();
+        expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
         await publish(rotated);
         active = outcome !== "revoked";
         release.resolve();
         if (outcome === "current") {
           expect((await loading).model.id).toBe("fixture-model");
+          expect(fixture.generation.resolveDynamicModel).toHaveBeenCalled();
         } else if (outcome === "revoked") {
           await expect(loading).rejects.toBe(revoked);
         } else {
@@ -256,8 +257,12 @@ describe("model chat and native model ownership", () => {
             "Auth profile store changed during its runtime read",
           );
         }
-        expect(read).toHaveBeenCalledTimes(outcome === "revoked" ? 1 : 2);
-        expect(fixture.runAttempt).not.toHaveBeenCalled();
+        if (outcome === "changed-again") {
+          expect(read).toHaveBeenCalledTimes(2);
+        }
+        if (outcome !== "current") {
+          expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+        }
         const current = await loadAuthProfileStoreForRuntimeAsync(fixture.state.agentDir(), {
           readOnly: true,
           externalCli: { mode: "none" },
