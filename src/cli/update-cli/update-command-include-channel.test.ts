@@ -56,6 +56,7 @@ it.each([true, false])(
       } finally {
         process.env.OPENCLAW_CONFIG_PATH = state.configPath;
         unsubscribe();
+        setRuntimeConfigSnapshotRefreshHandler(null);
         resetConfigRuntimeState();
       }
     });

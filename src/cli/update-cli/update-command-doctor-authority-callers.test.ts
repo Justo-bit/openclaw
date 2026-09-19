@@ -157,6 +157,10 @@ describe("unproved Doctor authority callers", () => {
         status: "skipped",
       });
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      // Modern parents own completion; exercise the deferred-retirement Doctor,
+      // not the earlier migration Doctor required by legacy parents.
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.statePath("post-core-result.json"));
+      await state.writeJson("handoff.json", { completionOwner: "parent" });
       if (boundary === "first-refusal") {
         mocks.entrypoint.mockImplementationOnce(async () => {
           await Promise.resolve();

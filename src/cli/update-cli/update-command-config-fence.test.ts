@@ -2,7 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as postCoreConvergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import * as config from "../../config/config.js";
 import { CONFIG_AUDIT_SCOPE } from "../../config/io.audit.js";
@@ -30,7 +30,10 @@ import * as commandExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   persistRequestedUpdateChannel,
@@ -46,10 +49,12 @@ import { shouldResumePostCoreUpdateInFreshProcess } from "./update-command-post-
 import * as postCoreResume from "./update-command-resume.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+const dirs = createTempDirTracker();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
+  dirs.cleanup();
 });
 
 it.each(
@@ -83,6 +88,10 @@ it.each(
     await fs.mkdir(root);
     await fs.mkdir(control);
     await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}\n');
+    if (flow === "prepare") {
+      // Exercise modern parent-owned completion before the config preparation boundary.
+      await fs.writeFile(path.join(home, "handoff.json"), '{"completionOwner":"parent"}\n');
+    }
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     await withEnvAsync(
       {
@@ -100,7 +109,8 @@ it.each(
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(Date.now()),
         [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: undefined,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: undefined,
-        [POST_CORE_UPDATE_RESULT_PATH_ENV]: undefined,
+        [POST_CORE_UPDATE_RESULT_PATH_ENV]:
+          flow === "prepare" ? path.join(home, "post-core-result.json") : undefined,
       },
       async () => {
         const env = { ...process.env };

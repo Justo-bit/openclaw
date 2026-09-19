@@ -293,9 +293,98 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
     testTimeout,
   );
 
-  it.each(["parent", "same-byte-file"] as const)(
-    "does not write a %s replacement after opening its native rollback destination",
-    async (replacement) => {
+  it(
+    "preserves the open rollback destination when Windows denies a parent-directory move",
+    async () => {
+      const f = fixture();
+      const { prepared, guarded } = await prepare(f);
+      try {
+        prepared.publish();
+      } finally {
+        await prepared[Symbol.asyncDispose]();
+      }
+      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
+      const parentBefore = fs.lstatSync(f.dir, { bigint: true });
+      const movedParent = `${f.dir}-owned`;
+      let observed: ReturnType<typeof identity> | undefined;
+      let destinationWrites = 0;
+      await withNativeSharingViolation(f.target, async (io) => {
+        let destinationFd: number | undefined;
+        const instrumented: typeof fs = {
+          ...io,
+          openSync(name, flags, mode) {
+            const fd = fs.openSync(name, flags, mode);
+            try {
+              if (
+                String(name) === f.target &&
+                typeof flags === "number" &&
+                flags & fs.constants.O_EXCL
+              ) {
+                destinationFd = fd;
+                observed = identity(f.target);
+                // Windows denies this move while the atomic stage/destination is open.
+                // The cross-platform effect matrix separately proves the parent guard.
+                fs.renameSync(f.dir, movedParent);
+              }
+              return fd;
+            } catch (error) {
+              // The production adapter cannot adopt the descriptor until this call returns.
+              try {
+                fs.closeSync(fd);
+              } catch (closeError) {
+                throw new AggregateError(
+                  [error, closeError],
+                  "Native parent-move injection and descriptor close failed",
+                  { cause: closeError },
+                );
+              }
+              throw error;
+            }
+          },
+          writeSync: new Proxy(fs.writeSync, {
+            apply(fn, self, args) {
+              if (args[0] === destinationFd) {
+                destinationWrites++;
+              }
+              return Reflect.apply(fn, self, args);
+            },
+          }),
+        };
+        await expect(
+          rollbackConfigFileWriteIfUnchanged({
+            configPath: f.target,
+            previousSnapshot: f.options.snapshot,
+            committedHash: hashConfigRaw(content),
+            fsModule: instrumented,
+            ...rollbackProof,
+            durable: true,
+            destinationHardlinks: "reject",
+          }),
+        ).rejects.toMatchObject({
+          code: "EPERM",
+          syscall: "rename",
+          path: f.dir,
+          dest: movedParent,
+        });
+      });
+      expect(observed).toBeDefined();
+      expect(observed?.raw).toBe("");
+      expect(destinationWrites).toBe(0);
+      expect(identity(f.target)).toEqual(observed);
+      expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
+        dev: parentBefore.dev,
+        ino: parentBefore.ino,
+      });
+      expect(fs.existsSync(movedParent)).toBe(false);
+      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    },
+    testTimeout,
+  );
+
+  it(
+    "does not write a same-byte-file replacement after opening its native rollback destination",
+    async () => {
       const f = fixture();
       const { prepared, guarded } = await prepare(f);
       try {
@@ -320,12 +409,7 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
               ) {
                 destinationFd = fd;
                 const raw = fs.readFileSync(f.target, "utf8");
-                if (replacement === "parent") {
-                  fs.renameSync(f.dir, `${f.dir}-owned`);
-                  fs.mkdirSync(f.dir);
-                } else {
-                  fs.renameSync(f.target, `${f.target}.owned`);
-                }
+                fs.renameSync(f.target, `${f.target}.owned`);
                 fs.writeFileSync(f.target, raw);
                 observed = identity(f.target);
               }
@@ -368,9 +452,8 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
       expect(observed).toBeDefined();
       expect(replacementWrites).toBe(0);
       expect(identity(f.target)).toEqual(observed);
-      const ownedTarget =
-        replacement === "parent" ? path.join(`${f.dir}-owned`, "channel.json") : f.target;
-      expect(fs.readFileSync(`${ownedTarget}.bak`, "utf8")).toBe(original);
+      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
+      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     },
     testTimeout,
   );
