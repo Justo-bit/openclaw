@@ -69,6 +69,7 @@ type FetchWithRetryResult = {
 
 type WorkflowRunSummary = {
   id: string;
+  runAttempt?: number;
   label: string;
   url?: string;
   durationSeconds?: number;
@@ -517,6 +518,11 @@ class PostpublishDiagnostics {
       diagnosticValue(diagnosticSchema.shape.children.valueType.shape.status, run.status) ??
       "unknown";
     child.conclusion = diagnosticValue(diagnosticOutcome, run.conclusion) ?? "unknown";
+    child.runAttempt =
+      diagnosticValue(
+        diagnosticId,
+        typeof run.attempt === "number" ? String(run.attempt) : run.attempt,
+      ) ?? child.runAttempt;
     child.failedJobCount = Math.min(10000, failedJobCount);
     this.save();
   }
@@ -1248,6 +1254,8 @@ function verifyWorkflowRun(params: {
   repo: string;
   expectedWorkflowName: string;
   expectedHeadBranch?: string;
+  expectedRunAttempt?: number;
+  expectedHeadSha?: string;
   allowedHeadBranches?: string[];
   advisory?: boolean;
   rerunFailed: boolean;
@@ -1260,11 +1268,24 @@ function verifyWorkflowRun(params: {
     "--repo",
     params.repo,
     "--json",
-    "workflowName,headBranch,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    "workflowName,headBranch,headSha,databaseId,attempt,event,status,conclusion,url,createdAt,updatedAt,jobs",
+    ...(params.expectedRunAttempt === undefined
+      ? []
+      : ["--attempt", String(params.expectedRunAttempt)]),
   ]);
   const run = parseJson(raw, `gh run view ${params.id}`);
   if (!isJsonRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
+  }
+  if (
+    params.expectedRunAttempt !== undefined &&
+    (run.attempt !== params.expectedRunAttempt ||
+      run.databaseId !== Number(params.id) ||
+      run.headSha !== params.expectedHeadSha)
+  ) {
+    throw new Error(
+      `${params.label}: historical publisher identity does not match its signed attempt.`,
+    );
   }
   const workflowName = normalizeOptionalString(run.workflowName);
   if (workflowName !== params.expectedWorkflowName) {
@@ -1324,6 +1345,7 @@ function verifyWorkflowRun(params: {
       : undefined;
   return {
     id: params.id,
+    ...(params.expectedRunAttempt === undefined ? {} : { runAttempt: params.expectedRunAttempt }),
     label: params.label,
     url: normalizeOptionalString(run.url),
     durationSeconds,
@@ -2151,13 +2173,25 @@ export async function verifyBetaRelease(
     }
     if (args.workflowRuns.openclawNpm !== undefined) {
       diagnostic.start("openclawNpm");
+      const originalAttempt = normalizeOptionalString(
+        process.env.OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT,
+      );
       workflowRuns.push(
         verifyWorkflowRun({
           id: args.workflowRuns.openclawNpm,
           label: "OpenClaw NPM Release",
           repo: args.repo,
           expectedWorkflowName: "OpenClaw NPM Release",
-          expectedHeadBranch: args.workflowRef,
+          expectedRunAttempt:
+            originalAttempt === undefined
+              ? undefined
+              : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
+          expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+          expectedHeadBranch:
+            process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(
+              /^refs\/(?:tags|heads)\//u,
+              "",
+            ) ?? args.workflowRef,
           rerunFailed: false,
           observe: (run, count) => diagnostic.observeRun("openclawNpm", run, count),
         }),

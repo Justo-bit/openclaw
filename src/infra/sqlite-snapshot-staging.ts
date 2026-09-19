@@ -4,6 +4,7 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -286,6 +287,7 @@ export function sqliteSnapshotStagingError(
   cause: unknown,
   allocation = false,
 ): unknown {
+  markSqliteInspectionOperation(cause, "snapshot");
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
     const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
