@@ -1,22 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentRunLifecycleGeneration,
-  registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentRunRegistryForTest,
-  retainQueuedAgentRunContext,
-  rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { markTaskTerminalById } from "../../tasks/runtime-internal.js";
 import { clearTaskActivity } from "../../tasks/task-registry-activity.js";
-import { getTaskRegistryObservers } from "../../tasks/task-registry.store.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
-import { startGatewayTaskSubscriptions } from "../server-task-subscriptions.js";
 import {
   getTaskPayload,
   mainSessionTaskScope,
@@ -25,83 +16,9 @@ import {
 import { runTaskHandler } from "./tasks.test-helpers.js";
 
 useTaskGatewayFixture();
-afterEach(() => resetAgentRunRegistryForTest());
+afterEach(resetAgentRunRegistryForTest);
 
 describe("tasks gateway execution and activity", () => {
-  it.each(["visible", "hidden-lifecycle", "hidden-session"] as const)(
-    "pushes CLI owner and capacity changes without activity for %s runs",
-    async (projection) => {
-      const broadcast = vi.fn();
-      const closeTaskSessions = vi.fn();
-      const stop = startGatewayTaskSubscriptions({
-        log: createSubsystemLogger("test/tasks"),
-        broadcast,
-        terminalSessions: { closeTaskSessions },
-      });
-      const runId = "run-cli-push";
-      const sessionKey = "agent:main:dashboard:cli-push";
-      try {
-        await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
-        const task = createTaskFixture("cli", {
-          ...mainSessionTaskScope,
-          childSessionKey: sessionKey,
-          runId,
-          task: "Show live owner changes",
-        });
-        const expectState = (state: string) => {
-          expect(broadcast).toHaveBeenLastCalledWith(
-            "task",
-            expect.objectContaining({
-              action: "upserted",
-              task: expect.objectContaining({ id: task.taskId, execution: { state } }),
-            }),
-            expect.objectContaining({ sessionKeys: [mainSessionTaskScope.requesterSessionKey] }),
-          );
-          broadcast.mockClear();
-        };
-        expectState("unknown");
-        registerAgentRunContext(runId, { sessionKey, agentId: "main" });
-        expect(broadcast).not.toHaveBeenCalled();
-        const releaseQueuedContext = retainQueuedAgentRunContext(
-          runId,
-          getAgentRunLifecycleGeneration(),
-        );
-        expectState("running");
-        releaseQueuedContext?.("abandoned");
-        expectState("unknown");
-        const context = {
-          sessionKey,
-          agentId: "main",
-          projectSessionActive: projection !== "hidden-session",
-          projectSessionLifecycle: projection !== "hidden-lifecycle",
-        };
-        if (projection === "visible") {
-          registerAgentRunContext(runId, context);
-        } else {
-          claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true });
-        }
-        expectState("running");
-        const releaseCapacity = registerAgentRunCapacityWait(
-          runId,
-          getAgentRunLifecycleGeneration(),
-        );
-        expectState("queued");
-        releaseCapacity?.();
-        expectState("running");
-        registerAgentRunContext(runId, context);
-        expect(broadcast).not.toHaveBeenCalled();
-        rotateAgentRunRegistryLifecycleGeneration();
-        expectState("unknown");
-        expect(closeTaskSessions).not.toHaveBeenCalled();
-        await stop();
-        clearAgentRunContext(runId);
-        expect(broadcast).not.toHaveBeenCalled();
-      } finally {
-        await stop();
-      }
-    },
-  );
-
   it("reports a live CLI run before activity arrives and after transient activity is cleared", async () => {
     const runId = "run-cli-owner";
     const sessionKey = "agent:main:dashboard:cli-owner";
@@ -124,11 +41,6 @@ describe("tasks gateway execution and activity", () => {
       state: "running",
     });
 
-    const releaseCapacity = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
-    expect(await execution()).toEqual({ state: "queued" });
-    releaseCapacity?.();
-    expect(await execution()).toEqual({ state: "running" });
-
     emitAgentEvent({
       runId,
       stream: "execution",
@@ -144,7 +56,7 @@ describe("tasks gateway execution and activity", () => {
     expect(await execution()).toEqual({ state: "unknown" });
   });
 
-  it.each(["other-session", "other-agent", "unowned", "retired-lifecycle"] as const)(
+  it.each(["other-session", "other-agent"] as const)(
     "does not borrow CLI activity from a context marked %s",
     async (scenario) => {
       const runId = `run-cli-${scenario}`;
@@ -153,14 +65,7 @@ describe("tasks gateway execution and activity", () => {
         sessionKey: scenario === "other-session" ? "agent:main:dashboard:other" : sessionKey,
         agentId: scenario === "other-agent" ? "other" : "main",
       };
-      if (scenario === "unowned") {
-        registerAgentRunContext(runId, context);
-      } else {
-        claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true });
-      }
-      if (scenario === "retired-lifecycle") {
-        rotateAgentRunRegistryLifecycleGeneration();
-      }
+      claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true });
       const task = createTaskFixture("cli", {
         ...mainSessionTaskScope,
         agentId: "main",

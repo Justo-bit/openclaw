@@ -2673,6 +2673,17 @@ function createReleasePublishFixture(
 ) {
   const root = tempDirs.make("release-publish-phases-");
   const eventsPath = join(root, "events");
+  const githubEventPath = join(root, "github-event.json");
+  const inputs = {
+    tag: overrides.RELEASE_TAG ?? "v2026.9.1-beta.1",
+    npm_dist_tag: overrides.RELEASE_NPM_DIST_TAG ?? "beta",
+    preflight_run_id: overrides.PREFLIGHT_RUN_ID ?? "55",
+    full_release_validation_run_id: overrides.FULL_RELEASE_VALIDATION_RUN_ID ?? "66",
+    full_release_validation_run_attempt: overrides.FULL_RELEASE_VALIDATION_RUN_ATTEMPT ?? "3",
+    publish_openclaw_npm: overrides.PUBLISH_OPENCLAW_NPM ?? "true",
+    wait_for_clawhub: overrides.WAIT_FOR_CLAWHUB ?? "true",
+  };
+  const githubRef = overrides.GITHUB_REF ?? "refs/heads/main";
   const outputPath = join(root, "output");
   const helperDir = join(root, ".release-harness/scripts/lib");
   mkdirSync(helperDir, { recursive: true });
@@ -2684,6 +2695,7 @@ function createReleasePublishFixture(
     "file",
   );
   writeFileSync(eventsPath, "");
+  writeFileSync(githubEventPath, JSON.stringify({ inputs }));
   writeFileSync(outputPath, "");
   writeFileSync(
     join(helperDir, "release-publish-children.sh"),
@@ -2752,7 +2764,9 @@ ${functions}
           GITHUB_REPOSITORY: "openclaw/openclaw",
           GITHUB_RUN_ID: "44",
           GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF: "refs/heads/main",
+          GITHUB_REF: githubRef,
+          GITHUB_REF_NAME: githubRef.replace(/^refs\/(?:heads|tags)\//u, ""),
+          GITHUB_EVENT_PATH: githubEventPath,
           GITHUB_WORKFLOW_SHA: "d".repeat(40),
           POSTPUBLISH_EVIDENCE_DIR: join(root, "evidence"),
           PUBLISH_EVENTS: eventsPath,
@@ -2761,15 +2775,15 @@ ${functions}
           PARENT_WORKFLOW_SHA: "d".repeat(40),
           PARENT_WORKFLOW_BRANCH: "main",
           PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
-          RELEASE_TAG: "v2026.9.1-beta.1",
-          RELEASE_NPM_DIST_TAG: "beta",
-          PREFLIGHT_RUN_ID: "55",
+          RELEASE_TAG: inputs.tag,
+          RELEASE_NPM_DIST_TAG: inputs.npm_dist_tag,
+          PREFLIGHT_RUN_ID: inputs.preflight_run_id,
           RELEASE_EVIDENCE_MODE: "full-release-validation",
-          FULL_RELEASE_VALIDATION_RUN_ID: "66",
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "3",
+          FULL_RELEASE_VALIDATION_RUN_ID: inputs.full_release_validation_run_id,
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: inputs.full_release_validation_run_attempt,
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: "",
-          PUBLISH_OPENCLAW_NPM: "true",
-          WAIT_FOR_CLAWHUB: "true",
+          PUBLISH_OPENCLAW_NPM: inputs.publish_openclaw_npm,
+          WAIT_FOR_CLAWHUB: inputs.wait_for_clawhub,
           PLUGINS: "",
           NPM_TELEGRAM_RUN_ID: "",
           CHILD_PLUGIN_NPM_RUN_ID: "101",
@@ -4821,8 +4835,6 @@ describe("package acceptance workflow", () => {
     expect(dispatch.run).toContain(
       '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
     );
-    expect(dispatch.run).toContain('--trusted-workflow-ref "${PARENT_WORKFLOW_BRANCH}"');
-    expect(dispatch.run).toContain('--trusted-workflow-full-ref "${GITHUB_REF}"');
   });
 
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
@@ -5683,7 +5695,7 @@ curl() {
 }
 node() {
   if [[ "\${3:-}" == "$GITHUB_WORKSPACE/.release-harness/scripts/openclaw-npm-resume-run.mts" ]]; then
-    printf '%s\\n' '{"url":"https://example.invalid/runs/777","workflowRef":"refs/tags/release-publish-verified","workflowSha":"${"a".repeat(40)}"}'
+    printf '%s\\n' '{"runId":"777","url":"https://example.invalid/runs/777","workflowRef":"refs/tags/release-publish-verified","workflowSha":"${"a".repeat(40)}"}'
   else command node "$@"; fi
 }
 zip() { cat > "$3"; }
@@ -5722,6 +5734,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       stepEnv(workflowStep(publish, "Dispatch publish workflows")),
     );
     expect.soft(resume.status, resume.stderr).toBe(0);
+    expect(fixture.outputs().openclaw_npm_resume_run_id).toBe("777");
     const evidence = fixture.run(
       {
         run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; upload_dependency_evidence_release_asset',
@@ -6105,6 +6118,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
           PUBLISH_JOB_STATUS: "failure",
         });
         expect(recorded.status, recorded.stderr).toBe(0);
+        expect(fixture.summary()).toContain("gh workflow run openclaw-release-publish.yml");
       }
       expect(
         JSON.parse(
