@@ -620,11 +620,11 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageQueryDraft = "";
             this.usageQuery = "";
           },
-          onSelectDay: (day, shiftKey) => {
+          onSelectDay: (day, shiftKey, orderedDays) => {
             this.usageSelectedDays = toggleUsageRangeSelection(
               this.usageSelectedDays,
               day,
-              (this.usageCostSummary?.daily ?? []).map((entry) => entry.date),
+              orderedDays,
               shiftKey,
               false,
             );

@@ -6,7 +6,7 @@ import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatUsageCost, formatUsageTokens, formatDayLabel, formatFullDate } from "./metrics.ts";
-import type { CostDailyEntry, UsageTotals } from "./types.ts";
+import type { CostDailyEntry, UsageProps, UsageTotals } from "./types.ts";
 
 function tokenCategory<Key extends "output" | "input" | "cacheWrite" | "cacheRead">(
   key: Key,
@@ -42,17 +42,18 @@ function formatAnalysisCost(value: number): string {
 function handleDailyBarKeydown(
   event: KeyboardEvent,
   day: string,
-  onSelectDay: (day: string, shiftKey: boolean) => void,
+  orderedDays: string[],
+  onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"],
 ) {
   if (event.key !== "Enter" && event.key !== " ") {
     return;
   }
 
   event.preventDefault();
-  onSelectDay(day, event.shiftKey);
+  onSelectDay(day, event.shiftKey, orderedDays);
 }
 
-export type UsageChartRange = { startDate: string; endDate: string; complete: boolean };
+type UsageChartRange = { startDate: string; endDate: string; complete: boolean };
 
 function calendarDaily(daily: CostDailyEntry[], range: UsageChartRange): CostDailyEntry[] {
   const start = Date.parse(range.startDate);
@@ -76,7 +77,7 @@ export function renderDailyChartCompact(
   chartMode: "tokens" | "cost",
   dailyChartMode: "total" | "by-type",
   onDailyChartModeChange: (mode: "total" | "by-type") => void,
-  onSelectDay: (day: string, shiftKey: boolean) => void,
+  onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"],
   range: UsageChartRange,
 ) {
   const daily = calendarDaily(dailyEntries, range);
@@ -89,6 +90,7 @@ export function renderDailyChartCompact(
     `;
   }
 
+  const orderedDays = daily.map((entry) => entry.date);
   const isTokenMode = chartMode === "tokens";
   const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
   const scaleMaximum = Math.max(...values, 0);
@@ -213,8 +215,8 @@ export function renderDailyChartCompact(
                     tabindex="0"
                     aria-pressed=${isSelected ? "true" : "false"}
                     aria-label=${`${dateLabel}: ${tokensLabel}, ${costLabel}`}
-                    @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
-                    @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
+                    @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, orderedDays, onSelectDay)}
+                    @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey, orderedDays)}
                   >
                     ${
                       dailyChartMode === "by-type"

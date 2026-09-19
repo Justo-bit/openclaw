@@ -208,6 +208,21 @@ export function renderUsage(props: UsageProps) {
   const activeAggregates = hasAggregateFilters
     ? buildAggregatesFromSessions(aggregateSessions)
     : buildAggregatesFromSessions([], data.aggregates);
+  if (selectedDaySet.size > 0) {
+    activeAggregates.byCreator = buildAggregatesFromSessions(
+      aggregateSessions.map((session) => ({
+        ...session,
+        usage: session.usage
+          ? {
+              ...session.usage,
+              ...computeTotals(
+                session.usage.dailyBreakdown?.filter((day) => selectedDaySet.has(day.date)) ?? [],
+              ),
+            }
+          : session.usage,
+      })),
+    ).byCreator;
+  }
   const insightsUseVisiblePage = data.sessionsLimitReached && !hasAggregateFilters;
   const insightTotals = insightsUseVisiblePage
     ? computeTotals(aggregateSessions.map((session) => session.usage))

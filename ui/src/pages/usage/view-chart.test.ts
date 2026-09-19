@@ -10,7 +10,7 @@ afterEach(() => document.body.replaceChildren());
 
 function renderDailyChart(
   daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
+  onSelectDay = vi.fn<(day: string, shiftKey: boolean, orderedDays: string[]) => void>(),
 ) {
   const container = document.createElement("div");
   document.body.append(container);
@@ -66,10 +66,10 @@ describe("renderDailyChartCompact", () => {
     const bar = expectDefined(bars[0], "daily usage bar");
 
     bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
+    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
 
     bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
+    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false, ["2026-05-04"]);
 
     const space = new KeyboardEvent("keydown", {
       bubbles: true,
@@ -79,7 +79,7 @@ describe("renderDailyChartCompact", () => {
     });
     bar.dispatchEvent(space);
     expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
+    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
   });
 
   it("labels the chart scale with the selected metric", () => {
