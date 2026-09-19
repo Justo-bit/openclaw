@@ -19940,8 +19940,8 @@ it("pins simple release admission owners before selected checkout and preserves 
           (job as { permissions?: { contents?: string } }).permissions?.contents === "write",
       )
       .map(([name]) => name),
-  ).toEqual(["publish", "mirror_legacy"]);
-  expect(linux.jobs.publish.permissions).toEqual({ actions: "read", contents: "write" });
+  ).toEqual(["mirror_legacy"]);
+  expect(linux.jobs.publish.permissions).toEqual({ actions: "read", contents: "read" });
   expect(
     Object.entries(linux.jobs)
       .filter(([, job]) => JSON.stringify(job).includes("${{ secrets.TAURI_SIGNING_PRIVATE_KEY"))
@@ -20434,6 +20434,20 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(publishLinuxMetadata.run).toContain(
     '--assets dist/release --signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig"',
   );
+  const publicationToken = expectDefined(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(({ id }) => id === "publication_token"),
+    "Linux release-owner token for protected control-tag creation",
+  );
+  expect(publicationToken.with).toMatchObject({
+    "client-id": "Iv23liOECG0slfuhz093",
+    "private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+    owner: "openclaw",
+    repositories: "openclaw",
+    "permission-actions": "read",
+    "permission-contents": "write",
+    "permission-workflows": "write",
+  });
+  expect(publishLinuxMetadata.env?.GH_TOKEN).toBe("${{ steps.publication_token.outputs.token }}");
   const appImageToolsPath = "apps/linux/scripts/tauri-appimage-tools.sh";
   const appImageTools = readFileSync(appImageToolsPath, "utf8");
   const appImageToolsManifest = readFileSync(

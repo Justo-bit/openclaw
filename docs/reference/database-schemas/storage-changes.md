@@ -46,6 +46,18 @@ verified descriptors and post-render thumbnail checks remain in place. Inserts, 
 promotion, cleanup claim/deletion transactions, Doctor imports, and native session
 metadata reads keep their existing owners and remain separate worker migrations.
 
+Profile enumeration for user lists, session-member pickers, and human-mention
+directories runs in the same shared-state worker. Ordered profile metadata,
+tombstones, emails, and verified GitHub handles retain their existing query owner;
+avatar bytes are not part of enumeration. Mention directory preparation respects
+the existing profile-version invalidation, then evaluates current requester,
+session, and role policy and publishes the RPC response in one synchronous step.
+Prepared directory rows are descriptive
+facts, never permission or current alias authority. Project recents retain a narrow
+fresh canonical-profile and alias query for their disclosure scope. Profile
+mutations, avatar storage, identity merges, and final identity/permission lookups
+keep their existing native owners.
+
 Explicit promotion notice and claim annotations execute in the shared-state
 worker. The CLI awaits their best-effort completion before reporting results;
 storage failures still do not fail a promotion claim. Notice recording retains
@@ -212,8 +224,10 @@ completed imports and unrelated files. Device backfill remains nonblocking at st
 monitor retirement cancels and joins it before releasing storage. Hosts without
 data-only comparison support retain the existing native metadata and import decisions
 under the declared plugin API floor. Worker failures never select that fallback.
-Synchronous credential readiness and package auth-presence probes retain their
-separate SDK contracts.
+Approval actor and reaction approver lists resolve from account configuration without
+reading credentials; native delivery eligibility still checks enabled and configured
+account readiness. Synchronous credential readiness and package auth-presence probes
+retain their separate SDK contracts.
 
 Reef registration binding reads, reservations, finalization, release, and setup-session
 persistence use the shared-state worker. Reservation mutations compare the current
@@ -432,6 +446,14 @@ admitted reads before their resource, reference, and handle cleanup phases.
 A cached reader records shared maintenance ownership only after the worker enters
 its schema-validated query callback, including when that query later fails.
 Startup and schema refusals do not transfer ownership.
+
+Node-host configuration loads for connection, runner startup, and node-only status
+use the same independent read-only worker. Both readers preserve missing-store
+noncreation and existing JSON, metadata, and configuration validation. They capture
+the selected state environment before waiting and recheck retired-file refusal on
+that original root before accepting the worker reply. Managed nodes retain the
+canonical existing-schema scope without taking over schema repair. Configuration
+replacement retains its synchronous transaction owner.
 
 The host captures the database path, state environment, and current admission
 before awaited work. The shared worker owns its canonical connection and schema

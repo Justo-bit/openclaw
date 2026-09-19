@@ -49,14 +49,16 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     indexes: { byKey, byStore, byAgent },
     scope,
   } = params;
+  const storePaths =
+    !query.key && query.storePath
+      ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+      : undefined;
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
-    : query.storePath
-      ? new Set(
-          (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath]).flatMap(
-            (storePath) => Array.from(byStore.get(storePath) ?? []),
-          ),
-        )
+    : storePaths
+      ? storePaths.length === 1
+        ? byStore.get(storePaths[0]!)
+        : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
         : rows.keys();
@@ -205,8 +207,12 @@ export function selectSessionRowEntries(
     : parent
       ? [...children].map((id) => rows.get(id))
       : matching(query);
-  const selected = candidates
-    .map((row) => (row && !sessionIdOrKey && dirty.has(records.identity(row)) ? acquire(row) : row))
-    .filter((row): row is records.EntryRow => records.hasEntry(row) && matches(row));
+  const acquired =
+    sessionIdOrKey || dirty.size === 0
+      ? candidates
+      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+  const selected = acquired.filter(
+    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
+  );
   return records.sort(selected, query.sortBy);
 }
