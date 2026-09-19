@@ -17,7 +17,7 @@ source scripts/e2e/lib/upgrade-survivor/paths.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 WORKER_CELL=0
-if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
+if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ] || [ "$SCENARIO" = "progress-receipt-restoration" ]; then
   WORKER_CELL=1
 fi
 
@@ -2088,12 +2088,18 @@ if [ "$WORKER_CELL" = "1" ]; then
     phase assert-project-worktree-import node scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs assert-import "$ARTIFACT_ROOT/worktree-import.json"
     phase snapshot-published-worktree node scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs snapshot published-import "$(package_root)" -
     phase prepare-independent-worktree-startup prepare_project_worktree_startup_fixture
+  elif [ "$SCENARIO" = "progress-receipt-restoration" ]; then
+    phase seed-progress-receipt node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs seed "$(package_root)"
   else
     phase seed-taskflow node scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs seed --package-root "$(package_root)"
   fi
   phase validate-baseline-config validate_baseline_config
   phase resolve-worker-candidate resolve_candidate_version
   phase worker-candidate-identity prepare_worker_cell_package
+  if [ "$SCENARIO" = "progress-receipt-restoration" ]; then
+    phase prepare-progress-receipt-backup node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs prepare-backup "$CANDIDATE_SPEC"
+    phase capture-backup-rollback capture_backup_rollback
+  fi
   phase update-worker-candidate update_candidate
   phase assert-worker-installed-identity assert_worker_cell_update
   if [ "$SCENARIO" = "projects-doctor" ]; then
@@ -2138,6 +2144,12 @@ if [ "$WORKER_CELL" = "1" ]; then
           snapshot after-doctor "$(package_root)" "$OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS"
       fi
     done
+  elif [ "$SCENARIO" = "progress-receipt-restoration" ]; then
+    phase observe-progress-receipt-migration node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs after-update "$initial_update_observation_root"
+    phase write-progress-receipt-snapshot node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs write-snapshot "$(package_root)"
+    phase reopen-progress-receipt-snapshot node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs reopen "$(package_root)"
+    phase verify-backup-rollback verify_backup_rollback
+    phase read-published-restored-receipt node scripts/e2e/lib/upgrade-survivor/progress-receipt-restoration.mjs rollback
   else
     phase gateway-start start_gateway
     phase gateway-probes check_gateway_probes

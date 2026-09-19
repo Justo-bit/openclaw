@@ -28,7 +28,9 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
-export type GatewayChatUserTurnPersist = (options?: { contextFreeCommand?: true }) => Promise<void>;
+export type GatewayChatUserTurnPersist = (options?: {
+  contextFreeCommand?: true;
+}) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
@@ -235,7 +237,7 @@ export function createGatewayChatUserTurnController(params: {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
     }
-    await measureDiagnosticsTimelineSpan(
+    return await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
       {
@@ -249,7 +251,7 @@ export function createGatewayChatUserTurnController(params: {
     baseInput,
     persist,
     persistBestEffort: async (options) => {
-      await persist(options).catch(() => undefined);
+      return await persist(options).catch(() => undefined);
     },
     recorder,
     replyContextFieldsPromise,

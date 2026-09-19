@@ -5002,7 +5002,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPendingContinuation).toHaveBeenCalledOnce();
     const metadata = getReplyPayloadMetadata(requireRecord(result, "waiting status"));
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(metadata?.continuationStatus === true).toBe(implicit);
+    expect(metadata?.continuationStatus).toBe(true);
     expect(onPendingContinuation.mock.calls[0]).toEqual(
       implicit ? [{ settle: expect.any(Function) }] : [],
     );

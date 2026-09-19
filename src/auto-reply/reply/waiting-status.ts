@@ -5,6 +5,7 @@ export function buildWaitingStatusPayload(params: {
   yielded: boolean;
   continuationPending?: boolean;
   yieldAcknowledgment?: string;
+  preparedAcknowledgment?: string;
   isInteractive: boolean;
   isHeartbeat?: boolean;
   silentExpected?: boolean;
@@ -27,11 +28,12 @@ export function buildWaitingStatusPayload(params: {
     {
       text:
         params.yieldAcknowledgment?.trim() ||
+        params.preparedAcknowledgment?.trim() ||
         "I’m continuing this work and will send the result when it is ready.",
     },
     {
       deliverDespiteSourceReplySuppression: true,
-      ...(params.continuationPending ? { continuationStatus: true } : {}),
+      continuationStatus: true,
     },
   );
 }

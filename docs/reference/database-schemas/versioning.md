@@ -153,6 +153,27 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+Conversation progress continuations use the bare nullable
+`conversation_deliveries.progress_snapshot_json TEXT` column without a schema
+version bump. Writable database open and Doctor's existing additive migration
+install it; read-only inspection accepts its absence without writing. Existing
+receipts retain `NULL`, with no inferred or backfilled presentation state.
+
+The receipt row owns both the known platform message identity and its bounded,
+data-only prepared presentation. Recording that association is one guarded
+transaction. Later snapshot updates preserve the delivery status and original
+message hash: desired presentation is not proof that a platform edit was delivered
+or that work completed. Snapshots are limited to 64 KiB of JSON, 4,096 characters
+per string, 128 rolling lines, and 64 checklist steps or prepared blocks. Invalid
+optional stored snapshots are ignored without hiding the delivery receipt.
+
+Older same-version readers and writers ignore the nullable column and preserve
+the fields they do not update. They cannot resume the newer presentation flow.
+Binary rollback leaves the column and receipts intact; after re-upgrade, restore
+still requires the existing task and requester authority, not just a snapshot.
+The column follows the receipt's existing cleanup lifecycle and adds no separate
+store, retry owner, or completion credit.
+
 Transcript context eligibility uses a bare nullable
 `session_transcript_active_events.context_eligible INTEGER` column without
 changing agent schema 18. Database open installs the column and a non-unique

@@ -1679,9 +1679,12 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
   if (
-    ["projects-doctor", "projects-startup-migration", "taskflow-restoration"].includes(
-      getScenario(),
-    )
+    [
+      "projects-doctor",
+      "projects-startup-migration",
+      "taskflow-restoration",
+      "progress-receipt-restoration",
+    ].includes(getScenario())
   ) {
     assertStrict.equal(
       result.before?.version,

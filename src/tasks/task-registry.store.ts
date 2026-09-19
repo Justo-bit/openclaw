@@ -134,8 +134,9 @@ export function deliverTaskRegistryObserverEvent(
   ) {
     return;
   }
+  let event: TaskRegistryObserverEvent | undefined;
   try {
-    const event = createEvent();
+    event = createEvent();
     recordPublication(event);
     observers?.onEvent?.(event);
   } catch (error) {
@@ -143,7 +144,7 @@ export function deliverTaskRegistryObserverEvent(
   } finally {
     for (const listener of state.changeListeners) {
       try {
-        listener();
+        listener(event);
       } catch (error) {
         storeLog.warn("Task registry change listener failed", { error });
       }

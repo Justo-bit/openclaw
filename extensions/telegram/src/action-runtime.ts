@@ -15,6 +15,9 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
   sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -31,14 +34,16 @@ import {
   createTelegramActionGate,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
+  resolveTelegramAccount,
 } from "./accounts.js";
-import { TELEGRAM_CALLBACK_DATA_MAX_BYTES } from "./approval-callback-data.js";
+import { resolveTelegramStreamMode } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
-  resolveTelegramInlineButtons,
-  type TelegramButtonBuildOptions,
+  buildTelegramControlDegradation,
+  resolveTelegramButtonsFromParams,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import type { TelegramDraftPreview } from "./draft-stream.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -52,6 +57,7 @@ import {
 } from "./message-topic-binding.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
+import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -236,20 +242,6 @@ function readTelegramSendMediaUrls(params: Record<string, unknown>) {
   return mediaUrls;
 }
 
-function resolveTelegramButtonsFromParams(
-  params: Record<string, unknown>,
-  presentation = normalizeMessagePresentation(params.presentation),
-  options?: TelegramButtonBuildOptions,
-) {
-  return resolveTelegramInlineButtons(
-    {
-      presentation,
-      interactive: params.interactive,
-    },
-    options,
-  );
-}
-
 function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
@@ -295,31 +287,6 @@ function readTelegramSendContent(params: {
   return {
     content: content ?? "",
     hasExplicitContent: explicitContent != null,
-  };
-}
-
-function buildTelegramControlDegradation(
-  controls: readonly TelegramDroppedControl[],
-  fallbackDelivered: boolean,
-) {
-  if (controls.length === 0) {
-    return undefined;
-  }
-  const reasons = [...new Set(controls.map((control) => control.reason))];
-  const hasOverflow = reasons.includes("callback_data_too_long");
-  return {
-    warning: fallbackDelivered
-      ? `Telegram delivered ${controls.length} unencodable control${controls.length === 1 ? "" : "s"} as readable text.`
-      : `Telegram could not deliver ${controls.length} control${controls.length === 1 ? "" : "s"}.`,
-    degradedDelivery: {
-      droppedControls: controls.length,
-      fallback: fallbackDelivered ? "text" : "not_delivered",
-      reasons,
-      ...(hasOverflow ? { callbackDataLimitBytes: TELEGRAM_CALLBACK_DATA_MAX_BYTES } : {}),
-      guidance: hasOverflow
-        ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
-        : "Retry with a supported control action if clickable controls are required.",
-    },
   };
 }
 
@@ -441,6 +408,7 @@ export async function handleTelegramAction(
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
+    progressSnapshot?: ChannelMessageActionContext["progressSnapshot"];
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
@@ -924,6 +892,22 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     // Telegram treats an explicit empty caption as a request to remove it.
     let caption = readStringParam(params, "caption", { allowEmpty: true });
+    let progressPreview: TelegramDraftPreview | undefined;
+    if (options?.progressSnapshot) {
+      const telegramCfg = resolveTelegramAccount({ cfg, accountId }).config;
+      const streamMode = resolveTelegramStreamMode(telegramCfg);
+      progressPreview = renderTelegramProgressDraftPreview(options.progressSnapshot, {
+        richMessages: telegramCfg.richMessages === true,
+        toolProgress: resolveChannelStreamingPreviewToolProgress(
+          telegramCfg,
+          streamMode !== "progress",
+          streamMode,
+        ),
+        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        maxLineChars: resolveChannelProgressDraftMaxLineChars(telegramCfg),
+      });
+      content = progressPreview.text;
+    }
     const droppedControls: TelegramDroppedControl[] = [];
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
@@ -970,6 +954,7 @@ export async function handleTelegramAction(
           token,
           accountId: accountId ?? undefined,
           gatewayClientScopes: options?.gatewayClientScopes,
+          assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
         },
       );
       return jsonResult({
@@ -979,17 +964,27 @@ export async function handleTelegramAction(
         ...buildTelegramControlDegradation(droppedControls, false),
       });
     }
+    // Draft previews use <br>; the edit HTML sanitizer requires Bot API newlines.
     const result = await telegramActionRuntime.editMessageTelegram(
       authorizedChatId,
       messageId ?? 0,
-      caption ?? content ?? "",
+      progressPreview?.parseMode === "HTML"
+        ? progressPreview.text.replaceAll("<br>", "\n")
+        : (progressPreview?.text ?? caption ?? content ?? ""),
       {
         cfg,
         token,
         accountId: accountId ?? undefined,
         buttons,
-        editMode: caption != null ? "caption" : "auto",
+        editMode: progressPreview ? "text" : caption != null ? "caption" : "auto",
+        ...(progressPreview
+          ? {
+              textMode: progressPreview.parseMode === "HTML" ? "html" : "markdown",
+              richMessage: progressPreview.richMessage,
+            }
+          : {}),
         gatewayClientScopes: options?.gatewayClientScopes,
+        assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       },
     );
     return jsonResult({

@@ -208,6 +208,7 @@ function describeTelegramMessageTool({
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
+  writeAuthorityActions: ["edit"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -237,6 +238,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     action,
     params,
     reply,
+    progressSnapshot,
     cfg,
     accountId,
     mediaAccess,
@@ -293,6 +295,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
         ...(reply ? { reply } : {}),
+        ...(progressSnapshot ? { progressSnapshot } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

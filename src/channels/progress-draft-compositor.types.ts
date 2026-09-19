@@ -35,6 +35,8 @@ export type ChannelProgressDraftCompositorParams = {
   mode: StreamingMode;
   active: boolean;
   seed: string;
+  /** Display data only; hydration neither starts publishing nor proves visibility. */
+  initialSnapshot?: ChannelProgressDraftCompositorSnapshot;
   update: (
     text: string,
     options: ChannelProgressDraftUpdateOptions,

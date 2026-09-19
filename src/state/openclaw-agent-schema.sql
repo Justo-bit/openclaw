@@ -320,6 +320,7 @@ CREATE TABLE IF NOT EXISTS conversation_deliveries (
   status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'rejected', 'unknown', 'replied')),
   prepared_message_id TEXT,
   platform_message_id TEXT,
+  progress_snapshot_json TEXT,
   queue_id TEXT,
   rejection_error TEXT,
   reply_message_id TEXT,

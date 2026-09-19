@@ -1,6 +1,8 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { onSubagentRegistryPersisted } from "../agents/subagents/registry/subagent-registry-state.js";
+import { onAgentEvent, registerAgentEventLifecycleRotationHandler } from "../infra/agent-events.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
 import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
@@ -13,15 +15,21 @@ import {
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { updateTask } from "./task-registry-mutation.js";
-import { scheduleYieldedSubagentTaskProgress } from "./task-registry-progress.js";
+import {
+  reconcileTaskProgressBatches,
+  retireTaskProgressForSession,
+  scheduleYieldedSubagentTaskProgress,
+} from "./task-registry-progress.js";
 import {
   withTaskRegistryMutation,
   claimTaskRegistryListenerStart,
   getTasksByRunScope,
+  onTaskRegistryChange,
   restoreTaskRegistryOnce,
   setTaskRegistryListenerStarter,
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
+import { clearTaskProgressBatches } from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 import { getTaskRunOwner } from "./task-run-owner.js";
 
@@ -35,6 +43,9 @@ function ensureListener() {
   const stop = onAgentEvent((evt) =>
     withTaskRegistryMutation(() => {
       restoreTaskRegistryOnce();
+      if (evt.stream === "lifecycle" && evt.data.phase === "start") {
+        reconcileTaskProgressBatches();
+      }
       const scopedTasks = getTasksByRunScope({
         runId: evt.runId,
         sessionKey: evt.sessionKey,
@@ -70,8 +81,8 @@ function ensureListener() {
           continue;
         }
         const phase = evt.stream === "lifecycle" ? evt.data?.phase : undefined;
-        recordTaskActivityEvent(current, evt);
-        scheduleYieldedSubagentTaskProgress(current, evt);
+        const prepared = recordTaskActivityEvent(current, evt);
+        scheduleYieldedSubagentTaskProgress(current, evt, prepared);
         // An abort event starts cancellation; only the live producer knows when work has settled.
         if ((phase === "end" || phase === "error") && getTaskRunOwner(current)) {
           continue;
@@ -150,7 +161,18 @@ function ensureListener() {
       }
     }),
   );
-  setTaskRegistryListenerStop(stop);
+  const stopTasks = onTaskRegistryChange(reconcileTaskProgressBatches);
+  const stopRuns = onSubagentRegistryPersisted(() => reconcileTaskProgressBatches());
+  const stopIdentity = onSessionIdentityMutation(retireTaskProgressForSession);
+  setTaskRegistryListenerStop(() => {
+    stop();
+    stopTasks();
+    stopRuns();
+    stopIdentity();
+  });
+  // Initial task restoration can publish before these listeners attach.
+  reconcileTaskProgressBatches({ kind: "restored" });
 }
 
 setTaskRegistryListenerStarter(ensureListener);
+registerAgentEventLifecycleRotationHandler("tasks:progress", clearTaskProgressBatches);

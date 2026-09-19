@@ -12,13 +12,31 @@ describe("buildWaitingStatusPayload", () => {
     hasVisibleMessageDelivery: false,
   } as const;
 
-  it("builds an explicit waiting status", () => {
-    const payload = buildWaitingStatusPayload(baseParams);
-
-    expect(payload).toEqual({
-      text: "Research started; results will follow.",
+  it("prefers an explicit acknowledgment over prepared task progress", () => {
+    const payload = buildWaitingStatusPayload({
+      ...baseParams,
+      preparedAcknowledgment: "Index worker: checking database boundaries.",
     });
+
+    expect(payload?.text).toBe(baseParams.yieldAcknowledgment.trim());
     expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("uses prepared task progress for an implicit continuation and preserves its receipt marker", () => {
+    const preparedAcknowledgment = "Index worker: checking database boundaries.";
+    const payload = buildWaitingStatusPayload({
+      ...baseParams,
+      yielded: false,
+      continuationPending: true,
+      yieldAcknowledgment: " ",
+      preparedAcknowledgment,
+    });
+
+    expect(payload?.text).toBe(preparedAcknowledgment);
+    expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
+      continuationStatus: true,
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it.each([
@@ -32,7 +50,12 @@ describe("buildWaitingStatusPayload", () => {
   ])("suppresses the status for a $label", ({ overrides }) => {
     expect(buildWaitingStatusPayload({ ...baseParams, ...overrides })).toBeUndefined();
     expect(
-      buildWaitingStatusPayload({ ...baseParams, yieldAcknowledgment: undefined, ...overrides }),
+      buildWaitingStatusPayload({
+        ...baseParams,
+        yieldAcknowledgment: undefined,
+        preparedAcknowledgment: "Index worker: checking database boundaries.",
+        ...overrides,
+      }),
     ).toBeUndefined();
   });
 });

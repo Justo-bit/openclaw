@@ -119,7 +119,9 @@ export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObs
 }
 
 /** Subscribe to the existing publication owner; readers recheck current task authority. */
-export function onTaskRegistryChange(listener: () => void): () => void {
+export function onTaskRegistryChange(
+  listener: (event?: TaskRegistryObserverEvent) => void,
+): () => void {
   taskRegistryProcessState.changeListeners.add(listener);
   return () => taskRegistryProcessState.changeListeners.delete(listener);
 }

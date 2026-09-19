@@ -91,6 +91,7 @@ export interface ConversationDeliveries {
   operation_kind: string;
   platform_message_id: string | null;
   prepared_message_id: string | null;
+  progress_snapshot_json: string | null;
   queue_id: string | null;
   rejection_error: string | null;
   reply_message_id: string | null;
