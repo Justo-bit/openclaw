@@ -103,6 +103,8 @@ export type SandboxContext = {
   enabled: boolean;
   /** Immutable creator policy: this session may never escape to a host execution target. */
   required?: true;
+  /** Core-prepared execution projection; ordinary rw sandboxes retain the requested workspace. */
+  workspaceSource?: "managed-worktree";
   backendId: SandboxBackendId;
   sessionKey: string;
   workspaceDir: string;

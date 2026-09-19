@@ -818,6 +818,26 @@ export interface GithubRepositoryPublicationRequests {
   workspace_tree: string | null;
 }
 
+export interface LocalWorkspaceProjections {
+  agent_id: string;
+  base_commit: string;
+  baseline_json: string | null;
+  baseline_ref: string | null;
+  created_at_ms: number;
+  journal_json: string | null;
+  journal_pack: Uint8Array | null;
+  lifecycle_revision: string | null;
+  paused_runtimes_json: string | null;
+  pending_ref: string | null;
+  pending_target: string | null;
+  projection_path: string;
+  revision: Generated<number>;
+  session_id: string;
+  session_key: string;
+  source_paths_json: string;
+  worktree_id: string;
+}
+
 export interface MacosPortGuardianRecords {
   command: string;
   mode: string;
@@ -1791,6 +1811,7 @@ export interface DB {
   github_publication_requests: GithubPublicationRequests;
   github_publication_session_lifecycles: GithubPublicationSessionLifecycles;
   github_repository_publication_requests: GithubRepositoryPublicationRequests;
+  local_workspace_projections: LocalWorkspaceProjections;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;

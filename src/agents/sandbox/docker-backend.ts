@@ -94,6 +94,8 @@ async function createContainerSandboxBackend(
     ...(podmanTarget ? { podmanTarget } : {}),
     scopeKey: params.scopeKey,
     workspaceDir: params.workspaceDir,
+    workspaceSource: params.workspaceSource,
+    assertCurrent: params.assertRuntimeCurrent,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     readOnlyResourceMounts: params.readOnlyResourceMounts,

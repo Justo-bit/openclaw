@@ -223,6 +223,7 @@ async function ensureDockerNetwork(
 }
 
 type EnsureSandboxBrowserParams = {
+  assertCurrent?: () => void;
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -231,6 +232,8 @@ type EnsureSandboxBrowserParams = {
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
+  /** Joins managed workspace custody for late browser starts as well as allocation. */
+  withWorkspace?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export async function ensureSandboxBrowser(
@@ -254,9 +257,29 @@ export async function ensureSandboxBrowser(
   // Independent agent runs can converge on one Docker resource. Serialize the
   // full lifecycle so followers re-read container and bridge state after the
   // preceding create, start, or replacement has settled.
-  return await browserContainerLifecycleQueue.enqueue(containerName, async () => {
-    return await ensureSandboxBrowserContainer(params, containerName);
-  });
+  let provisioning = true;
+  const withWorkspace = params.withWorkspace;
+  const provision = () =>
+    browserContainerLifecycleQueue.enqueue(
+      containerName,
+      async () =>
+        await ensureSandboxBrowserContainer(
+          {
+            ...params,
+            // Initial bridge warmup already owns the lease. Later attach requests
+            // rejoin it before starting a stopped writer.
+            withWorkspace: withWorkspace
+              ? (operation) => (provisioning ? operation() : withWorkspace(operation))
+              : undefined,
+          },
+          containerName,
+        ),
+    );
+  try {
+    return await (withWorkspace ? withWorkspace(provision) : provision());
+  } finally {
+    provisioning = false;
+  }
 }
 
 async function ensureSandboxBrowserContainer(
@@ -278,6 +301,8 @@ async function ensureSandboxBrowserContainer(
   const mountPlan = await prepareSandboxMountPlan({
     engine: DOCKER_SANDBOX_ENGINE,
     workspaceDir: params.workspaceDir,
+    ...(params.withWorkspace ? { workspaceSource: "managed-worktree" as const } : {}),
+    assertCurrent: params.assertCurrent,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
@@ -366,6 +391,21 @@ async function ensureSandboxBrowserContainer(
         running = false;
       }
     }
+  }
+
+  if (params.withWorkspace) {
+    // Reserve the mount before allocation; a bridge/port failure must not hide
+    // an already-running writer from reconciliation or lifecycle cleanup.
+    await updateBrowserRegistry({
+      containerName,
+      sessionKey: params.scopeKey,
+      workspaceDir: params.workspaceDir,
+      createdAtMs: now,
+      lastUsedAtMs: now,
+      image: browserImage,
+      configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+      cdpPort: 0,
+    });
   }
 
   if (!hasContainer) {
@@ -466,6 +506,8 @@ async function ensureSandboxBrowserContainer(
   const evaluateMatches =
     !existing || existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled;
   const canReuse = Boolean(
+    // Managed restart callbacks retain one admitted turn, not a later turn's authority.
+    !params.withWorkspace &&
     existing &&
     existing.bridge.server.listening &&
     existing.containerName === containerName &&
@@ -486,24 +528,25 @@ async function ensureSandboxBrowserContainer(
       return bridge;
     }
 
+    const startTarget = async () => {
+      const currentState = await dockerContainerState(containerName);
+      if (currentState.exists && !currentState.running) {
+        await execDocker(["start", containerName]);
+      }
+      const ok = await waitForSandboxCdp({
+        cdpPort: mappedCdp,
+        authToken: cdpAuthToken,
+        timeoutMs: params.cfg.browser.autoStartTimeoutMs,
+      });
+      if (!ok) {
+        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        throw new Error(
+          `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+        );
+      }
+    };
     const onEnsureAttachTarget = params.cfg.browser.autoStart
-      ? async () => {
-          const currentState = await dockerContainerState(containerName);
-          if (currentState.exists && !currentState.running) {
-            await execDocker(["start", containerName]);
-          }
-          const ok = await waitForSandboxCdp({
-            cdpPort: mappedCdp,
-            authToken: cdpAuthToken,
-            timeoutMs: params.cfg.browser.autoStartTimeoutMs,
-          });
-          if (!ok) {
-            await execDocker(["rm", "-f", containerName], { allowFailure: true });
-            throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
-            );
-          }
-        }
+      ? () => (params.withWorkspace ? params.withWorkspace(startTarget) : startTarget())
       : undefined;
 
     return await startBrowserBridgeServer({
@@ -534,6 +577,7 @@ async function ensureSandboxBrowserContainer(
 
   await updateBrowserRegistry({
     containerName,
+    workspaceDir: params.workspaceDir,
     sessionKey: params.scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,

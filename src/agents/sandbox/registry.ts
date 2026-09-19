@@ -36,6 +36,8 @@ type SandboxRegistry = {
 };
 
 export type SandboxBrowserRegistryEntry = {
+  /** Exact workspace mount retained before browser allocation for local reconciliation. */
+  workspaceDir?: string;
   containerName: string;
   sessionKey: string;
   createdAtMs: number;
@@ -160,6 +162,7 @@ function browserEntryToRow(
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
     configHash: entry.configHash ?? existing?.configHash,
+    workspaceDir: entry.workspaceDir ?? existing?.workspaceDir,
   };
   return {
     registry_kind: "browser",
@@ -533,6 +536,21 @@ export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
       .map((row) => rowToBrowserEntry(row))
       .filter((entry): entry is SandboxBrowserRegistryEntry => entry != null),
   };
+}
+
+/** Validate the exact browser workspace owner before local reconciliation effects. */
+export function assertSandboxBrowserRegistryEntryCurrent(entry: SandboxBrowserRegistryEntry): void {
+  const row = readRegistryRow("browser", entry.containerName);
+  const current = row ? rowToBrowserEntry(row) : null;
+  if (
+    !current ||
+    current.sessionKey !== entry.sessionKey ||
+    current.createdAtMs !== entry.createdAtMs ||
+    current.workspaceDir !== entry.workspaceDir ||
+    current.configHash !== entry.configHash
+  ) {
+    throw new Error("Sandbox browser workspace owner changed");
+  }
 }
 
 /** Inserts one browser sandbox registry entry without replacing an existing entry. */

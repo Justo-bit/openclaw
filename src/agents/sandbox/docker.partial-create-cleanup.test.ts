@@ -106,6 +106,49 @@ async function expectPartialRuntimeCleanup(params: {
 }
 
 describe("fresh sandbox container cleanup", () => {
+  it("persists a managed mount before allocation and retains ambiguous failures", async () => {
+    const workspaceDir = tempDirs.make("openclaw-managed-runtime-custody-");
+    containerMocks.execContainer.mockImplementation(async (_engine, args: string[]) => {
+      if (args[0] === "inspect") {
+        return { code: 1, stdout: "", stderr: "No such object" };
+      }
+      if (args[0] === "create") {
+        expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
+          expect.objectContaining({ workspaceDir }),
+        );
+        throw new Error("allocation response lost");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "managed-custody",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceSource: "managed-worktree",
+        cfg: config(workspaceDir),
+      }),
+    ).rejects.toThrow("allocation response lost");
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+  });
+
+  it("never allocates a managed writer if its durable binding cannot be saved", async () => {
+    const workspaceDir = tempDirs.make("openclaw-managed-binding-failure-");
+    registryMocks.updateRegistry.mockRejectedValueOnce(new Error("binding unavailable"));
+    await expect(
+      ensureSandboxContainer({
+        scopeKey: "managed-custody",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceSource: "managed-worktree",
+        cfg: config(workspaceDir),
+      }),
+    ).rejects.toThrow("binding unavailable");
+    expect(containerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "create")).toBe(
+      false,
+    );
+  });
+
   it("removes a newly allocated runtime when setup fails before publication", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-partial-start-");
     await expectPartialRuntimeCleanup({

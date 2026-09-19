@@ -513,6 +513,8 @@ async function readContainerConfigHash(
 }
 
 type EnsureSandboxContainerParams = {
+  workspaceSource?: "managed-worktree";
+  assertCurrent?: () => void;
   engine?: SandboxContainerEngine;
   podmanTarget?: SandboxContainerEngineTarget;
   scopeKey: string;
@@ -583,6 +585,8 @@ async function ensureSandboxContainerLifecycle(
   const mountPlan = await prepareSandboxMountPlan({
     engine,
     workspaceDir: params.workspaceDir,
+    workspaceSource: params.workspaceSource,
+    assertCurrent: params.assertCurrent,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
@@ -654,12 +658,18 @@ async function ensureSandboxContainerLifecycle(
       ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
       runtimeLabel: containerName,
       sessionKey: params.scopeKey,
+      workspaceDir: params.workspaceDir,
       createdAtMs: now,
       lastUsedAtMs: now,
       image: params.cfg.docker.image,
       configLabelKind: "Image" as const,
       configHash: expectedHash,
     };
+    // Persist managed mount custody before provider allocation. A process crash
+    // must not leave a writer invisible to workspace quiescence and retirement.
+    if (params.workspaceSource === "managed-worktree") {
+      await updateRegistry(readyEntry);
+    }
     let allocated = false;
     try {
       await createSandboxContainer({
@@ -679,7 +689,9 @@ async function ensureSandboxContainerLifecycle(
           allocated = true;
         },
       });
-      await updateRegistry(readyEntry);
+      if (params.workspaceSource !== "managed-worktree") {
+        await updateRegistry(readyEntry);
+      }
       return containerName;
     } catch (creationError) {
       if (!allocated) {
@@ -700,6 +712,7 @@ async function ensureSandboxContainerLifecycle(
     ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
     runtimeLabel: containerName,
     sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
