@@ -27,6 +27,7 @@ import {
   captureGatewayServiceDefinitionBackup,
   restoreGatewayServiceDefinitionBackup,
 } from "./service-definition-backup.js";
+import { readRetainedReceipt } from "./service-definition-backup.test-support.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   publishServiceFile,
@@ -334,9 +335,7 @@ describe("service definition backup receipts", () => {
       vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
         await rename(...args);
         if (!injected && args[1] === checkpoint) {
-          const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
-            JSON.parse(await fs.readFile(checkpoint!, "utf8")),
-          );
+          const receipt = await readRetainedReceipt(f.capture.backupPaths);
           if (receipt.files.some((file) => file.sourcePath === target && file.prepared)) {
             injected = true;
             await fs.writeFile(target, edited);
@@ -394,10 +393,7 @@ describe("service definition backup receipts", () => {
       });
       await expect(f.install()).rejects.toThrow("interrupted after operator replacement");
       const bytes = await fs.readFile(f.sourcePath);
-      const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"))!;
-      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
-        JSON.parse(await fs.readFile(checkpoint, "utf8")),
-      );
+      const receipt = await readRetainedReceipt(f.capture.backupPaths);
       await expect(restoreGatewayServiceDefinitionBackup({ ...f, receipt })).rejects.toThrow(
         "Service definition changed",
       );
@@ -462,9 +458,7 @@ describe("service definition backup receipts", () => {
       expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
       expect(await readScheduledTaskCommand(f.env)).toEqual(originalCommand);
       expect(checkpoint).toBeDefined();
-      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
-        JSON.parse(await fs.readFile(checkpoint!, "utf8")),
-      );
+      const receipt = await readRetainedReceipt(f.capture.backupPaths);
       await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
       expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
     },
@@ -494,9 +488,7 @@ describe("service definition backup receipts", () => {
       await expect(f.install()).rejects.toThrow("interrupted after rename");
       const checkpoint = f.capture.backupPaths.find((file) => file.endsWith(".receipt.bak"));
       expect(checkpoint).toBeDefined();
-      const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
-        JSON.parse(await fs.readFile(checkpoint!, "utf8")),
-      );
+      const receipt = await readRetainedReceipt(f.capture.backupPaths);
       await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
       expect(await Promise.all(f.files.map((file) => fs.readFile(file)))).toEqual(before);
     },
@@ -603,14 +595,7 @@ describe("service definition backup receipts", () => {
         );
         expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
         expect(loaded).toContain("EnvironmentFile=");
-        receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(
-          JSON.parse(
-            await fs.readFile(
-              f.capture.backupPaths.find((p) => p.endsWith(".receipt.bak"))!,
-              "utf8",
-            ),
-          ),
-        );
+        receipt = await readRetainedReceipt(f.capture.backupPaths);
       }
       await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
       expect(loaded).toBe(f.original.toString("utf8"));
@@ -841,11 +826,7 @@ describe("service definition backup receipts", () => {
           : f.install(),
       ).rejects.toThrow("interrupted task publication");
       native.task.mockImplementation(execute);
-      const checkpoint = f.capture.backupPaths.find((p) => p.endsWith(".receipt.bak"))!;
-      const readReceipt = async () =>
-        GatewayServiceDefinitionBackupReceiptSchema.parse(
-          JSON.parse(await fs.readFile(checkpoint, "utf8")),
-        );
+      const readReceipt = () => readRetainedReceipt(f.capture.backupPaths);
       const receipt = await readReceipt();
       if (phase === "foreign") {
         const files = await Promise.all(f.files.map((file) => fs.readFile(file)));
