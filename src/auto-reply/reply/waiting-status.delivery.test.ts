@@ -176,6 +176,7 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.meta.yieldAcknowledgment = "Still waiting.";
         context.execution.result.payloads = [selected];
       } else {
+        context.execution.result.acceptedSessionSpawns = undefined;
         context.execution = {
           ...context.execution,
           status: "failed",
