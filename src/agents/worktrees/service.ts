@@ -48,6 +48,7 @@ import {
   snapshotProvisionedFiles,
   SNAPSHOT_CHUNK_BYTES,
 } from "./provisioned-files.js";
+import { readRegistryWorktrees } from "./registry-read.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   deleteRegistryWorktree,
@@ -742,9 +743,7 @@ export class ManagedWorktreeService {
   }
 
   /** Returns persisted worktree facts without probing paths or mutating lifecycle state. */
-  listRegistryRecords(): ManagedWorktreeRecord[] {
-    return listRegistryWorktrees(this.env);
-  }
+  listRegistryRecords = (): Promise<ManagedWorktreeRecord[]> => readRegistryWorktrees(this.env);
 
   findLiveByOwner(
     ownerKind: ManagedWorktreeOwnerKind,

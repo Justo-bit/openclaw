@@ -11,6 +11,7 @@ import type {
 import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
@@ -21,6 +22,8 @@ import type {
 } from "./session-accessor.sqlite-model-context.js";
 import type {
   SessionAccessScope,
+  SessionEntryListScope,
+  SessionEntrySummary,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
@@ -78,6 +81,17 @@ export type SessionMembersWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+export type SessionEntryListWorkerInput = {
+  kind: "session-entry-list";
+  database: { agentId: string; path: string };
+  scope: SessionEntryListScope;
+};
+
+export type SessionEntryListWorkerResult = {
+  kind: "session-entry-list";
+  entries: SessionEntrySummary[];
+};
+
 export type SessionUsageCacheWorkerInput = {
   kind: "usage-cache";
   database: { agentId: string; path: string };
@@ -95,6 +109,7 @@ type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-row-presence": boolean;
   "session-members": SessionMember[];
+  "session-entry-list": SessionEntryListWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "session-entry": {
@@ -174,9 +189,23 @@ serveWorkerTasks(
       | SessionTranscriptHistoryWorkerInput
       | SessionRowPresenceWorkerInput
       | SessionMembersWorkerInput
+      | SessionEntryListWorkerInput
       | SessionUsageCacheWorkerInput
       | SessionBranchSummaryWorkerInput;
     try {
+      if (request.kind === "session-entry-list") {
+        const { listSessionEntriesReadOnly } = await import("./session-accessor.sqlite-entry.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-entry-list" as const,
+            entries: listSessionEntriesReadOnly({
+              ...request.scope,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            }),
+          }))),
+        };
+      }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =
           await import("../../infra/session-cost-usage-cache-read.js");
