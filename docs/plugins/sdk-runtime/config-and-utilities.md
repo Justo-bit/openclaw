@@ -95,6 +95,14 @@ for the terminal's exit before releasing its backend resources.
 Sandbox command adapters retain the sandbox owner's per-stream output bound,
 `SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
 
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
+unconsumed inputs when termination fails. Retry `close()` on that same pool;
+dispose dependent files only after closure is acknowledged. The optional
+`onRetirementFailure(error)` observer runs synchronously when termination fails.
+It may return `void` or `Promise<void>`; observer throws and rejections do not
+replace the termination error or release custody, and closure does not wait for
+the observer.
+
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
 This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent

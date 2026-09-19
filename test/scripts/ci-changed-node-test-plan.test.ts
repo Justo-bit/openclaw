@@ -361,7 +361,7 @@ describe("CI changed Node test plan", () => {
     (runnerBackend) => {
       const yieldTest = "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts";
       const siblings = [
-        "src/agents/embedded-agent-runner/model.test.ts",
+        "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
         "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
         "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       ];

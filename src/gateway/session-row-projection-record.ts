@@ -123,11 +123,17 @@ function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEn
 }
 
 export function first(candidates: Row[], storePaths: Iterable<string>) {
-  return candidates.length < 2
-    ? candidates[0]
-    : [...storePaths].flatMap((sourcePath) =>
-        candidates.filter((row) => row.storeTarget.storePath === sourcePath),
-      )[0];
+  if (candidates.length < 2) {
+    return candidates[0];
+  }
+  for (const sourcePath of storePaths) {
+    for (const row of candidates) {
+      if (row.storeTarget.storePath === sourcePath) {
+        return row;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function present(

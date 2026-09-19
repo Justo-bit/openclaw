@@ -201,7 +201,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
               Object.entries(io).map(([key, value]) => [key, value / 100]),
             ),
             scope:
-              "Explicit local Codex host through the real Gateway handler, registered provider, session accessor and plugin stores. Main-thread SQL counts include freshness and binding authority reads; worker read operations are reported separately. File counts cover sync, callback and promise fs read/open APIs.",
+              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Main-thread SQL counts include freshness and binding authority reads; worker read operations are reported separately. File counts cover sync, callback and promise fs read/open APIs.",
           }),
         );
         expect(cpuSamples.totalCpuSamples).toBeGreaterThan(0);
@@ -213,10 +213,10 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         expect(io.pluginStateWorkerReadOperations).toBe(0);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // Revalidate all three adopted bindings without adding work to the resident list path.
+        // Each adopted binding needs six reads for freshness, schema admission, and authority.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 20,
+            sqliteReadCalls: 18,
             bindingAuthorityReads: 3,
             pluginStateWorkerOperations: 0,
           });

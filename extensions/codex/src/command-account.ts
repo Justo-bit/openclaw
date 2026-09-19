@@ -58,6 +58,9 @@ export async function readCodexAccountAuthOverview(params: {
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
+  if (!params.account.ok && !params.limits.ok) {
+    return undefined;
+  }
   const config = params.ctx.config;
   const agentDir = params.agentDir;
   const store = ensureAuthProfileStore(agentDir, {
@@ -95,10 +98,6 @@ export async function readCodexAccountAuthOverview(params: {
           now,
         })
       : activeUsage;
-  if (!params.account.ok && !params.limits.ok && !subscriptionUsage) {
-    return undefined;
-  }
-
   const rows = order.map((profileId) =>
     buildProfileRow({
       store,

@@ -627,7 +627,7 @@ test.each([
             expect(resolveProviderIdForAuth("arcee", { config: cfg, storedCredential: true })).toBe(
               "arcee",
             );
-            const model = resolveModelWithRegistry({
+            const model = await resolveModelWithRegistry({
               cfg,
               provider: "arcee",
               modelId,
