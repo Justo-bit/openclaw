@@ -1,7 +1,12 @@
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
+import type {
+  TaskAgentEventInput,
+  TaskAgentEventReceipt,
+} from "./task-registry-agent-event.operation.js";
 import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
@@ -17,6 +22,7 @@ import {
   upsertTaskWithDeliveryStateToSqlite,
   upsertTaskDeliveryStateToSqlite,
   withTaskRegistrySqliteMutation,
+  settleTaskRegistrySqliteWrites,
 } from "./task-registry.store.sqlite.js";
 import type {
   TaskExecutionRestoreStore,
@@ -31,6 +37,13 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  runAgentEventMutationAsync(
+    context: OpenClawStateWorkerContext,
+    input: TaskAgentEventInput,
+    assertCurrent: () => void,
+    onGranted: (owner: SqliteWorkerNativeSettlementOwner) => void,
+  ): Promise<TaskAgentEventReceipt | null>;
+  settleAgentEventWrites(join: (deadlineMs: number) => void): void;
   runInitialMutationAsync<Key extends keyof TaskInitialWorkerOperations>(
     context: OpenClawStateWorkerContext,
     command: { type: Key; input: TaskInitialWorkerOperations[Key]["input"] },
@@ -66,9 +79,19 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(
+      context,
+      { type: "tasks.observeAgentEvent", input },
+      assertCurrent,
+      onGranted,
+    );
+  },
+  settleAgentEventWrites: settleTaskRegistrySqliteWrites,
   async runInitialMutationAsync(context, command, assertCurrent) {
-    const { runTaskInitialWorkerOperation } = await import("./task-initial-worker-operation.js");
-    return runTaskInitialWorkerOperation(context, command, assertCurrent);
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(context, command, assertCurrent);
   },
   async syncLiveTaskFlowAsync(context, params, authority) {
     const { syncLiveTaskFlowWithWorker } = await import("./task-registry-live-flow-sync.js");

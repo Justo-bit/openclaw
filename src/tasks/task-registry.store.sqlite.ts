@@ -4,6 +4,7 @@ import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import {
@@ -66,6 +67,13 @@ export function withTaskRegistrySqliteMutation<T>(operation: () => T): T {
     { databasePath: database.path, existing: database.db, operationLabel: "task.mutation" },
     operation,
   );
+}
+
+/** A native compatibility caller joins already-granted worker writes before selecting rows. */
+export function settleTaskRegistrySqliteWrites(join: (deadlineMs: number) => void): void {
+  const deadlineMs = performance.now() + readSqliteBusyTimeout(openTaskRegistryDatabase().db);
+  runOpenClawStateWriteTransaction(() => {}, undefined, { operationLabel: "task.event.settle" });
+  join(deadlineMs);
 }
 
 export function loadTaskRegistryMutationStateFromSqlite(

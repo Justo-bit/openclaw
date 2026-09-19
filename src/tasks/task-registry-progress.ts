@@ -7,9 +7,14 @@ import {
   resolveProjectedAgentRunProgressState,
 } from "../infra/agent-run-registry.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
-import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
+import {
+  hasAuthoritativeTaskBacking,
+  hasResidentTaskBacking,
+  readTaskBackingInstance,
+} from "./task-backing-authority.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
+import { readResidentTaskFlow } from "./task-flow-runtime-internal.js";
 import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
@@ -28,7 +33,12 @@ const MAX_PROGRESS_BATCHES = 128;
 const MAX_PROGRESS_BATCH_MEMBERS = 32;
 const MAX_PROGRESS_DISPLAY_MEMBERS = 8;
 
-function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
+function resolveYieldedTaskProgress(
+  task: TaskRecord,
+  runId: string,
+  hasBacking = hasAuthoritativeTaskBacking,
+  readFlow?: Parameters<typeof resolveTaskDeliveryOwner>[1],
+) {
   if (task.runtime !== "subagent" || !shouldAutoDeliverTaskStateChange(task)) {
     return undefined;
   }
@@ -54,11 +64,11 @@ function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
     wake.status !== "pending" ||
     wake.rearmGeneration === undefined ||
     !wake.batchRunIds?.includes(runId) ||
-    !hasAuthoritativeTaskBacking(task)
+    !hasBacking(task)
   ) {
     return undefined;
   }
-  const owner = resolveTaskDeliveryOwner(task);
+  const owner = resolveTaskDeliveryOwner(task, readFlow);
   if (!owner.sessionKey || !canDeliverToRequesterOrigin(owner.requesterOrigin)) {
     return undefined;
   }
@@ -77,7 +87,7 @@ export function scheduleYieldedSubagentTaskProgress(task: TaskRecord, event: Age
   if (event.stream !== "tool" && event.stream !== "approval" && event.stream !== "execution") {
     return;
   }
-  enqueueYieldedTaskProgress(task, event.runId);
+  enqueueYieldedTaskProgress(task, event.runId, hasResidentTaskBacking, readResidentTaskFlow);
 }
 
 /** The handoff itself may be the last event before a child's long-running tool returns. */
@@ -87,8 +97,13 @@ export function scheduleYieldedSubagentRunProgress(entry: SubagentRunRecord) {
   }
 }
 
-function enqueueYieldedTaskProgress(task: TaskRecord, runId: string) {
-  const progress = resolveYieldedTaskProgress(task, runId);
+function enqueueYieldedTaskProgress(
+  task: TaskRecord,
+  runId: string,
+  hasBacking = hasAuthoritativeTaskBacking,
+  readFlow?: Parameters<typeof resolveTaskDeliveryOwner>[1],
+) {
+  const progress = resolveYieldedTaskProgress(task, runId, hasBacking, readFlow);
   if (!progress) {
     return;
   }

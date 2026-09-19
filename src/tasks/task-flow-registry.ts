@@ -92,6 +92,11 @@ type TaskFlowRegistryRestoreState =
     };
 let taskFlowRegistryRestoreState: TaskFlowRegistryRestoreState = { status: "uninitialized" };
 
+/** Event overlays use recorded facts without entering a synchronous projection refresh. */
+export function readResidentTaskFlow(flowId: string): Readonly<TaskFlowRecord> | undefined {
+  return flows.get(flowId);
+}
+
 function emitFlowRegistryObserverEvent(createEvent: () => FlowRegistryPublication): void {
   const observers = getTaskFlowRegistryObservers();
   if (!observers?.onEvent && pendingFlowWrites.size === 0) {

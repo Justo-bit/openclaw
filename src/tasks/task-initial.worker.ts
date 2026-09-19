@@ -34,7 +34,7 @@ export function executeTaskInitialMutation(
     requestSqliteWorkerOperationAdmission({
       stage: "transaction",
       facts: {
-        kind: "task-initial-mutation",
+        kind: "task-registry-mutation",
         operation: command.type,
         taskId: command.input.taskId,
       },

@@ -338,6 +338,22 @@ it does not become a permanent restore failure.
 Task observation waits for each acknowledged row's required flow effects.
 Acknowledged task mutations are never replayed.
 
+Agent-event task progress uses the same shared-state worker and publication owner.
+Ingestion retains exact task, run, and backing identities without waiting for a native
+coordinator. Bounded progress batches preserve every tool-start count and the latest
+diagnostic and liveness fields, with ordered start and terminal transitions. Worker
+admission rechecks live ownership after waiting; committed receipts publish separately
+from cleanup errors, and accepted work remains tracked through Gateway drainage.
+Synchronous task APIs consume ungranted batches under their existing mutation owner.
+They join already-granted transactions before reading the task, so a terminal write
+cannot overwrite an in-flight count. Registered Gateway task reads also use these
+synchronous APIs and retain their native wait budget; event ingestion does not invoke
+their projection refresh.
+Queued task identities advance across timestamp normalization only from the same
+operation's confirmed commit receipt. The private admission channel distinguishes
+native settlement from committed facts, including when a synchronous caller joins
+before the worker result is delivered.
+
 An externally registered legacy runtime preserves synchronous creation before
 Gateway setup and synchronous run-scoped terminal finalization, including command
 failure before execution starts. This operation retains the original live registration;

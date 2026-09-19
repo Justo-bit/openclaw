@@ -101,6 +101,7 @@ async function createTaskRun(
     {
       scope,
       admission: context.admission,
+      taskRowsWritten: () => committed?.persisted ?? false,
       publicationRecords: () =>
         new Map<string, TaskRecord>(
           committed && committed.mutation !== "reused"
@@ -200,6 +201,7 @@ async function settleUnstartedTask(
     {
       scope,
       admission: context.admission,
+      taskRowsWritten: () => committed?.persisted ?? false,
       publicationRecords: () =>
         new Map<string, TaskRecord>(committed ? [[committed.task.taskId, committed.task]] : []),
       beforeObservers: async () => {
@@ -263,7 +265,7 @@ async function settleUnstartedTask(
   return settled !== null;
 }
 
-async function finishTaskMutation(
+export async function finishTaskMutation(
   context: OpenClawStateWorkerContext,
   store: TaskRegistryStore,
   flowStore: FlowStore,
@@ -338,7 +340,7 @@ async function finishManagedTaskCancellation(
   }
 }
 
-function retainTaskMutationFlowEffects(
+export function retainTaskMutationFlowEffects(
   context: OpenClawStateWorkerContext,
   store: TaskRegistryStore,
   flowStore: FlowStore,

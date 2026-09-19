@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort, type MessagePort } from "node:worker_threads";
+import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { drainProcessOutput } from "../process/output-drain.js";
@@ -18,6 +18,8 @@ import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import {
   withSqliteWorkerOperationAdmission,
   requestSqliteWorkerOperationAdmission,
+  settleSqliteWorkerOperationContext,
+  type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-admission.js";
 import {
   runWithSqliteWorkerStateContext,
@@ -58,7 +60,7 @@ const gatewayFences = new Map<
   Awaited<ReturnType<typeof attachGatewaySchemaFenceDelegate>>
 >();
 let sourceLoaderRegistered = false;
-let operationAdmission: { actor: number; port: MessagePort } | undefined;
+let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 // Input and result continuations retain the original job's delegation.
 let lifecycle:
   | {
@@ -76,7 +78,7 @@ let maintenanceFence:
 function runInActorContext<T>(actor: number, operation: () => T): T {
   const runAdmitted = () =>
     operationAdmission?.actor === actor
-      ? withSqliteWorkerOperationAdmission(operationAdmission.port, operation)
+      ? withSqliteWorkerOperationAdmission(operationAdmission.context, operation)
       : operation();
   const context = stateContexts.get(actor);
   if (!context) {
@@ -106,7 +108,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         if (operationAdmission) {
           throw new Error("SQLite operation admission still belongs to the preceding operation");
         }
-        operationAdmission = { actor: request.actor, port: request.operationAdmission };
+        operationAdmission = {
+          actor: request.actor,
+          context: { port: request.operationAdmission },
+        };
       }
       if (request.stateContext) {
         stateContexts.set(request.actor, request.stateContext);
@@ -187,7 +192,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             }
             throw new Error("SQLite worker settlement checks must remain synchronous");
           }
+          return backend.assertSettled !== undefined;
         } catch (error) {
+          if (operationAdmission) {
+            settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
+          }
           // The broker joins native exit before settling this operation's admission.
           retire = true;
           if (failure && failure.error !== error) {
@@ -217,20 +226,35 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           ),
         ).result;
       } catch (error) {
-        assertSettled({ error });
+        const verified = assertSettled({ error });
+        if (operationAdmission) {
+          settleSqliteWorkerOperationContext(
+            operationAdmission.context,
+            verified ? "completed" : "unknown",
+          );
+        }
         throw error;
       }
       executed = true;
       completeResult = true;
       if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
         retire = true;
+        if (operationAdmission) {
+          settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
+        }
         if (isPromise(value)) {
           // Retirement owns the failure; consume rejection while native exit is joined.
           void value.catch(() => {});
         }
         throw new Error("SQLite worker operations must remain synchronous");
       }
-      assertSettled();
+      const verified = assertSettled();
+      if (operationAdmission) {
+        settleSqliteWorkerOperationContext(
+          operationAdmission.context,
+          verified ? "completed" : "unknown",
+        );
+      }
     };
     if (request.type === "result-next") {
       if (
@@ -405,7 +429,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     maintenanceFence = undefined;
     lifecycle?.delegate.close();
     lifecycle = undefined;
-    operationAdmission?.port.close();
+    operationAdmission?.context.port.close();
     operationAdmission = undefined;
   }
   if (request.type === "close" && reply.ok && actors.size === 0) {

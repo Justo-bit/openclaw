@@ -30,6 +30,7 @@ import {
 } from "./task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import { executeTaskInitialMutation } from "./task-initial.worker.js";
+import { observeTaskAgentEventInDatabase } from "./task-registry-agent-event.worker.js";
 import { syncLiveTaskFlowInDatabase } from "./task-registry-live-flow.worker.js";
 import {
   restoreTaskRegistryInDatabase,
@@ -57,6 +58,9 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "tasks.observeAgentEvent") {
+    return observeTaskAgentEventInDatabase(open(), command.input);
+  }
   if (
     command.type === "tasks.createRecord" ||
     command.type === "tasks.settleUnstarted" ||

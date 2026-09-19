@@ -8,7 +8,11 @@ import {
   selectCurrentCanonicalTaskBacking,
   type TaskBackingInstance,
 } from "./task-backing-records.js";
-import { getTaskFlowById, getTaskMirroredFlowIds } from "./task-flow-runtime-internal.js";
+import {
+  getTaskFlowById,
+  getTaskMirroredFlowIds,
+  readResidentTaskFlow,
+} from "./task-flow-runtime-internal.js";
 import {
   ensureTaskRegistryReady,
   taskIdsByRelatedSessionKey,
@@ -121,5 +125,23 @@ export function hasAuthoritativeTaskBacking(task: TaskRecord): boolean {
   return hasAuthoritativeTaskBackingFromRecords(task, {
     isManagedFlow: (flowId) => getTaskFlowById(flowId)?.syncMode === "managed",
     resolveCurrentCanonicalBacking,
+  });
+}
+
+/** Presentation ingestion consumes recorded facts; durable mutations recheck the canonical rows. */
+export function hasResidentTaskBacking(task: TaskRecord): boolean {
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking: (scope) =>
+      selectCurrentCanonicalTaskBacking({
+        ...scope,
+        candidates: [...(taskIdsByRelatedSessionKey.get(scope.childSessionKey) ?? [])].flatMap(
+          (taskId) => {
+            const candidate = tasks.get(taskId);
+            return candidate ? [candidate] : [];
+          },
+        ),
+        isTaskMirroredFlow: (flowId) => readResidentTaskFlow(flowId)?.syncMode === "task_mirrored",
+      }),
   });
 }

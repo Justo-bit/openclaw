@@ -18,8 +18,8 @@ import {
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
+import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import * as deliveryRuntime from "./task-registry-runtime-loaders.js";
-import { resetTaskRegistryListenerState } from "./task-registry-state.js";
 import {
   createTaskRecord,
   getTaskById,

@@ -18,6 +18,10 @@ import type {
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import {
+  captureTaskAgentEventLineage,
+  prepareTaskAgentEventUpdate,
+} from "../tasks/task-registry-agent-event.operation.js";
 import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
 import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
 import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
@@ -93,6 +97,27 @@ export function createInMemoryTaskRegistryStore(
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    settleAgentEventWrites(join) {
+      join(performance.now() + 5_000);
+    },
+    async runAgentEventMutationAsync(_context, input, assertCurrent, onGranted) {
+      const current = this.loadSnapshot().tasks.get(input.taskId);
+      const receipt = current ? prepareTaskAgentEventUpdate(current, input) : null;
+      if (!receipt) {
+        return null;
+      }
+      assertCurrent();
+      this.upsertTaskWithDeliveryState({
+        task: receipt.task,
+        deliveryState: this.loadSnapshot().deliveryStates.get(input.taskId),
+      });
+      const settlement = {
+        kind: "completed" as const,
+        committed: { facts: captureTaskAgentEventLineage(receipt) },
+      };
+      onGranted({ settlement, waitForSettlement: () => settlement });
+      return receipt;
+    },
     async runInitialMutationAsync(context, command, assertCurrent) {
       const unsupported = (): never => {
         throw new Error("Initial flow mutations require the isolated worker fixture.");

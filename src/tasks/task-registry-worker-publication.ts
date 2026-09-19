@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
@@ -18,6 +19,17 @@ import type {
   TaskRegistryObserverEvent,
 } from "./task-registry.store.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+export type TaskRegistryWorkerMutationContext = {
+  scope: TaskRegistryMutationScope;
+  admission: OpenClawStateDatabaseReadAdmission;
+  publicationRecords: () => ReadonlyMap<string, TaskRecord>;
+  taskRowsWritten?: () => boolean;
+  beforeObservers?: (assertCurrent: () => void) => Promise<void>;
+  recoverPublication?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined;
+  onPublished?: (task: TaskRecord) => void;
+  forcePublish?: () => TaskRecord | undefined;
+};
 
 function* currentTasksInScope(scope: TaskRegistryMutationScope): Iterable<TaskRecord> {
   const { tasks } = getTaskRegistryProcessState();
@@ -43,6 +55,39 @@ function captureTaskRegistryWorkerSnapshot(
     }
   }
   return captured;
+}
+
+export function createTaskRegistryPublicationRecovery(
+  pending: PendingTaskRegistryMutation,
+  recover: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined,
+) {
+  const witness = { writtenTaskIds: new Set<string>(), replaced: false };
+  pending.recoveryWitness = witness;
+  let expected: TaskRecord | undefined;
+  return {
+    begin() {
+      witness.writtenTaskIds.clear();
+      witness.replaced = false;
+    },
+    recover,
+    bindExpected(record: TaskRecord | undefined) {
+      expected = record;
+    },
+    assertCurrent() {
+      if (!expected) {
+        return;
+      }
+      const current = getTaskRegistryProcessState().tasks.get(expected.taskId);
+      if (
+        witness.replaced ||
+        witness.writtenTaskIds.has(expected.taskId) ||
+        !current ||
+        !isEquivalentTaskRecord(current, expected)
+      ) {
+        throw new Error("Task publication was superseded by a current write");
+      }
+    },
+  };
 }
 
 /** Preserve committed projection writes, including ABA, without restarting the settled mutation. */
@@ -101,7 +146,9 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
   pending: PendingTaskRegistryMutation;
   assertCurrent: () => void;
   read: () => Promise<TaskRegistryStoreSnapshot>;
-  install: (snapshot: TaskRegistryStoreSnapshot) => void;
+  install: (snapshot: TaskRegistryStoreSnapshot, records?: ReadonlyMap<string, TaskRecord>) => void;
+  recoverPublication?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined;
+  taskRowsWritten?: boolean;
 }): Promise<{ conflicted: boolean }> {
   const { pending, assertCurrent, read, install } = params;
   const projection = getTaskRegistryProcessState().projection;
@@ -123,7 +170,32 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
       snapshot,
       witness,
     });
-    install(merged.snapshot);
+    const recovery = pending.recoveryWitness;
+    if (
+      params.recoverPublication &&
+      recovery &&
+      !recovery.replaced &&
+      !recovery.writtenTaskIds.has(pending.scope.taskId)
+    ) {
+      const recovered = params.recoverPublication(merged.snapshot);
+      if (recovered) {
+        if (recovered.taskId !== pending.scope.taskId) {
+          throw new Error("Recovered publication differs from its committed task target");
+        }
+        claimTaskRegistryPublication(pending, new Map([[recovered.taskId, recovered]]));
+      }
+    }
+    // This owner's synchronous install is not a competing write. Keep tracking
+    // replacements across the awaited flow effects that follow it.
+    delete pending.recoveryWitness;
+    try {
+      install(
+        merged.snapshot,
+        params.taskRowsWritten === false ? undefined : pending.publication?.records,
+      );
+    } finally {
+      pending.recoveryWitness = recovery;
+    }
     const { tasks } = getTaskRegistryProcessState();
     for (const [taskId, expected] of pending.publication?.records ?? []) {
       const current = tasks.get(taskId);
@@ -146,6 +218,7 @@ export function publishTaskRegistryWorkerMutation(params: {
   pending: PendingTaskRegistryMutation;
   forced?: TaskRecord;
   emit: (event: () => TaskRegistryObserverEvent) => void;
+  onPublished?: (task: TaskRecord) => void;
 }): void {
   const { pending, forced, emit } = params;
   const publication = pending.publication;
@@ -171,6 +244,14 @@ export function publishTaskRegistryWorkerMutation(params: {
         task: cloneTaskRecordForObserver(next),
         ...(previous ? { previous } : {}),
       }));
+      const current = tasks.get(taskId);
+      if (
+        current &&
+        !publication.invalidated.has(taskId) &&
+        isEquivalentTaskRecord(expected, current)
+      ) {
+        params.onPublished?.(current);
+      }
     }
   }
 }

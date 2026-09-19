@@ -9,6 +9,7 @@ import { isActiveTaskStatus } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
+import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
@@ -35,7 +36,6 @@ import {
   getTasksByRunId,
   taskRegistryLog,
   readTaskRegistryRevision,
-  resetTaskRegistryListenerState,
   resetTaskRegistryRestoreState,
   taskDeliveryStates,
   taskIdsByOwnerKey,

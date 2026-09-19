@@ -23,6 +23,7 @@ export type PendingTaskRegistryMutation = {
     invalidated: Set<string>;
   };
   readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
+  recoveryWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
 };
 
 export type TaskRunOwner = {
@@ -65,6 +66,11 @@ export type TaskProgressBatch = {
   overflow: boolean;
 };
 
+export type TaskRegistryEventMutations = {
+  prepare: () => { consume: () => void; release: () => void } | undefined;
+  pending: () => boolean;
+};
+
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
 type TaskRegistryProcessState = {
   tasks: Map<string, TaskRecord>;
@@ -81,7 +87,10 @@ type TaskRegistryProcessState = {
   /** Live owners survive store reloads, but are never persisted or restored after restart. */
   runOwners: Map<string, TaskRunOwner>;
   // Listener ownership must survive module reloads alongside the task indexes it updates.
-  listenerStop?: (() => void) | null;
+  listener?: {
+    stop: (() => void) | null;
+    events: TaskRegistryEventMutations;
+  };
   changeListeners: Set<() => void>;
   projection: {
     epoch: number;
@@ -262,11 +271,26 @@ export function matchesScope(task: TaskRecord, scope: TaskRegistryMutationScope)
 
 /** A committed projection write supersedes held reads even when its value returns to the original. */
 export function recordTaskRegistryProjectionWrite(
-  source: "task" | "snapshot" | "delivery",
+  source: "task" | "snapshot" | "refresh" | "delivery" | ReadonlyMap<string, TaskRecord>,
   taskId?: string,
   deleted = false,
 ): void {
+  // A writer's readback can refresh peers outside its committed receipt.
+  const kind =
+    typeof source === "string"
+      ? source
+      : taskId !== undefined && source.has(taskId)
+        ? "snapshot"
+        : "refresh";
   for (const pending of indexState.projection.pending) {
+    const recovery = pending.recoveryWitness;
+    if (recovery && kind !== "delivery" && kind !== "refresh") {
+      if (taskId === undefined) {
+        recovery.replaced = true;
+      } else if (taskId === pending.scope.taskId) {
+        recovery.writtenTaskIds.add(taskId);
+      }
+    }
     const witness = pending.readWitness;
     if (witness) {
       const current = taskId === undefined ? undefined : indexState.tasks.get(taskId);
@@ -281,13 +305,16 @@ export function recordTaskRegistryProjectionWrite(
       }
     }
     const publication = pending.publication;
-    if (!publication || source === "delivery") {
+    if (!publication || kind === "delivery") {
       continue;
     }
     for (const id of taskId === undefined ? publication.records.keys() : [taskId]) {
       // A predecessor's snapshot cannot supersede a receipt still waiting for its own read.
       const expected = publication.records.get(id);
-      if (!expected || (source === "snapshot" && !witness && !publication.ready.has(id))) {
+      if (
+        !expected ||
+        ((kind === "snapshot" || kind === "refresh") && !witness && !publication.ready.has(id))
+      ) {
         continue;
       }
       const current = deleted ? undefined : indexState.tasks.get(id);
