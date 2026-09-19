@@ -160,7 +160,11 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
 describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1")(
   "ordinary Claude CLI executable launch",
   () => {
-    it.each(["native", "node-leading", "npm-shim"] as const)(
+    it.each(
+      process.platform === "win32"
+        ? (["native", "node-leading", "npm-shim"] as const)
+        : (["npm-shim"] as const),
+    )(
       "completes an ordinary agent turn through %s",
       async (kind) => {
         const proof = await runClaudeCliNativeSpawnProof(kind);
@@ -175,10 +179,16 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
               phase: "run",
               platform: process.platform,
               entrypoint: proof.entrypoint,
-              ...(kind === "node-leading" ? { execArgv: ["--no-warnings"] } : {}),
             }),
           ]),
         );
+        if (kind === "native") {
+          expect(proof.launches).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ phase: "native-launch", platform: "win32" }),
+            ]),
+          );
+        }
       },
       360_000,
     );

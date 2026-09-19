@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runUtf8CommandWithTimeout } from "../../src/process/exec.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 export type ClaudeCliSpawnProofKind = "native" | "node-leading" | "npm-shim";
@@ -75,6 +76,42 @@ IF EXIST "%dp0%\node.exe" (
 endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*
 `;
 
+const NATIVE_LAUNCHER = String.raw`
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+class ClaudeFixture {
+  static string Quote(string value) {
+    var result = new StringBuilder("\"");
+    int slashes = 0;
+    foreach (char c in value) {
+      if (c == '\\') { slashes++; continue; }
+      result.Append('\\', c == '"' ? slashes * 2 + 1 : slashes);
+      result.Append(c);
+      slashes = 0;
+    }
+    result.Append('\\', slashes * 2);
+    return result.Append('"').ToString();
+  }
+  static int Main(string[] args) {
+    File.AppendAllText(Environment.GetEnvironmentVariable("CLAUDE_SPAWN_PROOF_LOG"),
+      "{\"phase\":\"native-launch\",\"platform\":\"win32\",\"pid\":" +
+      Process.GetCurrentProcess().Id + "}\n");
+    var argv = new List<string>();
+    argv.Add(Quote(Environment.GetEnvironmentVariable("CLAUDE_SPAWN_PROOF_ENTRY")));
+    foreach (string arg in args) argv.Add(Quote(arg));
+    var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("CLAUDE_SPAWN_PROOF_NODE"),
+      String.Join(" ", argv)) { UseShellExecute = false };
+    using (var child = Process.Start(start)) {
+      child.WaitForExit();
+      return child.ExitCode;
+    }
+  }
+}
+`;
+
 const PROCESS_ENV: Record<string, true> = {
   PATH: true,
   PATHEXT: true,
@@ -145,23 +182,49 @@ export async function runClaudeCliNativeSpawnProof(
         bin: { claude: "cli.js" },
       }),
     );
-    await fs.writeFile(path.join(prefix, "claude.cmd"), NPM_CMD.replaceAll("\n", "\r\n"));
-    await fs.writeFile(
-      path.join(prefix, "claude"),
-      '#!/bin/sh\nexec node "$(dirname "$0")/node_modules/@anthropic-ai/claude-code/cli.js" "$@"\n',
-      { mode: 0o755 },
-    );
+    if (kind !== "native") {
+      await fs.writeFile(path.join(prefix, "claude.cmd"), NPM_CMD.replaceAll("\n", "\r\n"));
+    }
+    if (kind === "npm-shim") {
+      await fs.writeFile(
+        path.join(prefix, "claude"),
+        '#!/bin/sh\nexec node "$(dirname "$0")/node_modules/@anthropic-ai/claude-code/cli.js" "$@"\n',
+        { mode: 0o755 },
+      );
+    }
     const pathKey = Object.keys(instance.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
     instance.env[pathKey] = `${prefix}${path.delimiter}${instance.env[pathKey] ?? ""}`;
     instance.env.CLAUDE_SPAWN_PROOF_LOG = logPath;
+    instance.env.CLAUDE_SPAWN_PROOF_NODE = process.execPath;
+    instance.env.CLAUDE_SPAWN_PROOF_ENTRY = entrypoint;
     instance.env.CLAUDE_CONFIG_DIR = instance.state.path("claude-home");
     instance.env.APPDATA = instance.state.path("appdata");
     instance.env.LOCALAPPDATA = instance.state.path("local-appdata");
-    const command = kind === "npm-shim" ? "claude" : process.execPath;
-    const args =
-      kind === "npm-shim"
-        ? undefined
-        : [...(kind === "node-leading" ? ["--no-warnings"] : []), entrypoint];
+    const command = "claude";
+    if (kind === "native") {
+      const windowsRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+      if (!windowsRoot) {
+        throw new Error("Native Windows fixture requires SystemRoot");
+      }
+      const compiler = path.join(
+        windowsRoot,
+        "Microsoft.NET",
+        "Framework64",
+        "v4.0.30319",
+        "csc.exe",
+      );
+      const source = instance.state.path("ClaudeFixture.cs");
+      await fs.writeFile(source, NATIVE_LAUNCHER);
+      const compiled = await runUtf8CommandWithTimeout(
+        [compiler, "/nologo", "/target:exe", `/out:${path.join(prefix, "claude.exe")}`, source],
+        { baseEnv: instance.env, timeoutMs: 30_000, killProcessTree: true },
+      );
+      if (compiled.code !== 0) {
+        throw new Error(
+          `Native fixture compilation failed: ${compiled.stdout}\n${compiled.stderr}`,
+        );
+      }
+    }
     await instance.state.writeConfig({
       plugins: { entries: { anthropic: { enabled: true } } },
       agents: {
@@ -169,7 +232,6 @@ export async function runClaudeCliNativeSpawnProof(
           workspace: instance.state.workspaceDir,
           model: { primary: "claude-cli/claude-sonnet-4-6" },
           models: { "claude-cli/claude-sonnet-4-6": {} },
-          cliBackends: { "claude-cli": { command, ...(args ? { args } : {}) } },
         },
       },
     });
