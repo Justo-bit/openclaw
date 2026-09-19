@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteWorkerAdmissionCleanup } from "../infra/sqlite-worker-broker.types.js";
@@ -43,7 +44,8 @@ type OperationOptions = {
   createAdmission?: SqliteWorkerAdmissionFactory;
 };
 const log = createSubsystemLogger("state/worker");
-const SHARED_STATE_WORKER_IDLE_RETIRE_MS = 60_000;
+const SHARED_STATE_WORKER_IDLE_INSPECT_MS = 60_000;
+const SHARED_STATE_WORKER_IDLE_RETIRE_MS = 30 * 60_000;
 
 function createSharedStateWorkerOwner() {
   type IdleTimer = ReturnType<typeof setTimeout> & { unref?: () => void };
@@ -55,6 +57,7 @@ function createSharedStateWorkerOwner() {
     bound?: boolean;
     cleanup?: SqliteWorkerAdmissionCleanup;
     activeOperations: number;
+    operationGeneration: number;
     idleTimer?: IdleTimer;
   };
   const stores = new Set<Entry>();
@@ -112,22 +115,67 @@ function createSharedStateWorkerOwner() {
     ) {
       return;
     }
-    const timer: IdleTimer = setTimeout(() => {
-      if (entry.idleTimer !== timer) {
-        return;
-      }
-      entry.idleTimer = undefined;
-      if (entry.activeOperations === 0 && stores.has(entry)) {
-        void retire(entry).catch((error: unknown) => {
+    const store = entry.store;
+    const generation = entry.operationGeneration;
+    const deadline = performance.now() + SHARED_STATE_WORKER_IDLE_RETIRE_MS;
+    const arm = (delay: number, inspect: boolean) => {
+      const isCurrentIdle = () =>
+        entry.idleTimer === timer &&
+        entry.operationGeneration === generation &&
+        entry.activeOperations === 0 &&
+        stores.has(entry);
+      const settle = async () => {
+        if (!isCurrentIdle()) {
+          return;
+        }
+        let healthy = false;
+        if (inspect) {
+          try {
+            healthy =
+              (await runWithCapturedWorkerContext(entry.context, () =>
+                runWithOpenClawStateWorkerStore(
+                  store,
+                  entry.context,
+                  (scope) => scope.execute({ type: "database.inspectIdle", input: undefined }),
+                  () => {
+                    if (!isCurrentIdle()) {
+                      throw new Error("Shared-state worker resumed before idle inspection");
+                    }
+                  },
+                  undefined,
+                  true,
+                ),
+              )) === "healthy";
+            entry.context.admission.assertCurrent();
+          } catch {
+            // Unavailable inspection cannot justify retaining a potentially pinned native reader.
+            healthy = false;
+          }
+        }
+        if (!isCurrentIdle()) {
+          return;
+        }
+        entry.idleTimer = undefined;
+        const remaining = deadline - performance.now();
+        if (healthy && remaining > 0) {
+          // Inspection is maintenance, not activity: retain the original real-operation deadline.
+          arm(remaining, false);
+        } else {
+          await retire(entry);
+        }
+      };
+      const timer: IdleTimer = setTimeout(() => {
+        void settle().catch((error: unknown) => {
           log.warn("Idle shared-state worker retirement failed", {
             path: entry.context.admission.databasePath,
             error,
           });
         });
-      }
-    }, SHARED_STATE_WORKER_IDLE_RETIRE_MS);
-    entry.idleTimer = timer;
-    timer.unref?.();
+      }, delay);
+      entry.idleTimer = timer;
+      timer.unref?.();
+    };
+    arm(SHARED_STATE_WORKER_IDLE_INSPECT_MS, true);
   };
   const retainOperation = (store: Store) => {
     const entry = [...stores].find((candidate) => candidate.store === store);
@@ -135,6 +183,7 @@ function createSharedStateWorkerOwner() {
       throw new Error("Shared-state worker operation lost its actor owner");
     }
     clearIdleRetirement(entry);
+    entry.operationGeneration += 1;
     entry.activeOperations += 1;
     let released = false;
     return () => {
@@ -224,6 +273,7 @@ function createSharedStateWorkerOwner() {
           context,
           existingOnly,
           activeOperations: 0,
+          operationGeneration: 0,
           opening: openSharedStateSqliteWorkerStore<StoreOperations>(
             {
               moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),

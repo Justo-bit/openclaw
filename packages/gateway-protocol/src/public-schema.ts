@@ -672,3 +672,5 @@ export {
   SessionsActivitySummaryEnsureParamsSchema,
   SessionsActivitySummaryEnsureResultSchema,
 } from "./schema/sessions-activity-summary.js";
+
+export * from "./schema/sessions-involvement.js";

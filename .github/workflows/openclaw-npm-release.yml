@@ -892,7 +892,14 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
             exit 1
           fi
-          if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]; then
+          if [[ "$PERFORMANCE_BLOCKING" != "true" && -n "${STABLE_SOAK_WAIVER//[[:space:]]/}" ]]; then
+            if ! jq -e '.childRuns.productPerformance.conclusion == "success"' "$MANIFEST_FILE" >/dev/null; then
+              echo "Waiving blocking product performance requires a successful product performance child run." >&2
+              exit 1
+            fi
+            echo "::warning::Blocking product performance waived by operator stable soak waiver; advisory performance child passed."
+            echo "stable_soak_waiver=$(jq -cn --arg reason "$STABLE_SOAK_WAIVER" '$reason')" >> "$GITHUB_OUTPUT"
+          elif [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi
