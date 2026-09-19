@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { serialize } from "node:v8";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -32,9 +33,13 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
-  it.each(["observe", "compareDelete"] as const)(
-    "delegates an existing host lifecycle owner during %s",
-    async (operation) => {
+  it.each(
+    (["observe", "compareDelete"] as const).flatMap((operation) =>
+      [false, true].map((parentHeld) => ({ operation, parentHeld })),
+    ),
+  )(
+    "keeps required lifecycle custody for $operation (parent held: $parentHeld)",
+    async ({ operation, parentHeld }) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
         const store = createPluginStateKeyedStore<string>("memory-core", {
           namespace: "lock-custody",
@@ -45,10 +50,13 @@ describe("worker plugin state", () => {
         const observation = await store.observe("workspace");
         // Only custody held before broker preparation delegates to the worker.
         // Fresh operations instead acquire their own lifecycle lease off-thread.
-        const held = acquireStateDatabaseCoordinator({
-          databasePath: resolveOpenClawStateSqlitePath(state.env),
-          busyTimeoutMs: 0,
-        });
+        const held = parentHeld
+          ? acquireStateDatabaseCoordinator({
+              databasePath: resolveOpenClawStateSqlitePath(state.env),
+              busyTimeoutMs: 0,
+            })
+          : undefined;
+        const messages = vi.spyOn(Worker.prototype, "postMessage");
         try {
           if (operation === "observe") {
             await expect(store.observe("workspace")).resolves.toMatchObject({ value: "owner" });
@@ -60,8 +68,18 @@ describe("worker plugin state", () => {
               }),
             ).resolves.toEqual({ status: "applied" });
           }
+          if (!parentHeld) {
+            expect(messages).toHaveBeenCalledWith(
+              expect.objectContaining({
+                type: "execute",
+                workerStateLifecycle: { deadlineNs: expect.any(BigInt) },
+              }),
+              expect.any(Array),
+            );
+          }
         } finally {
-          held.release();
+          messages.mockRestore();
+          held?.release();
         }
         expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
       });
