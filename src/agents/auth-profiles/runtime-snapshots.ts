@@ -176,7 +176,10 @@ function recordMetadataRevision(
   }
   advanceRuntimeAuthStoreMetadataRevision(
     key,
-    !isDeepStrictEqual(snapshotPersistedReadState(previous), snapshotPersistedReadState(next)),
+    // A first cache publication has no prior view to supersede. Durable writes
+    // and explicit clears fence the read independently, even before publication.
+    previous !== undefined &&
+      !isDeepStrictEqual(snapshotPersistedReadState(previous), snapshotPersistedReadState(next)),
   );
   return true;
 }

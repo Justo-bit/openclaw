@@ -109,7 +109,9 @@ admission and closes its SQLite handles before returning.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish
 their snapshots. Materializing persisted/local provenance annotations still
 refreshes catalog metadata, but does not revoke a persisted-row read that
-reconstructs those annotations from its own admitted rows. Credential, selection,
+reconstructs those annotations from its own admitted rows. First publication of
+a derived snapshot likewise cannot supersede an admitted persisted read; durable
+writes and explicit clears retain their independent invalidation generations. Credential, selection,
 physical ownership, and lifecycle changes still invalidate in-flight preparation.
 Workers certify committed SQLite visibility before rows enter the cache. Reads
 with unpublished or trailing WAL frames return normally without being retained.

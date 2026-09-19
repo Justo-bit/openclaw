@@ -201,8 +201,12 @@ describe("model resolution auth row snapshots", () => {
     { change: "usage", cached: true, published: false },
     { change: "usage", cached: false, published: true },
     { change: "usage", cached: true, published: true },
+    { change: "usage", cached: false, published: "during" },
+    { change: "usage", cached: true, published: "during" },
     { change: "order", cached: true, published: false },
     { change: "disabled", cached: false, published: false },
+    { change: "order", cached: true, published: "during" },
+    { change: "disabled", cached: false, published: "during" },
     { change: "unrelated-order", cached: true, published: false },
   ] as const)(
     "handles concurrent $change changes (cached=$cached, published=$published)",
@@ -213,7 +217,7 @@ describe("model resolution auth row snapshots", () => {
         if (change === "unrelated-order") {
           await state.writeAuthProfiles(store, "other");
         }
-        if (published) {
+        if (published === true) {
           setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
         }
         const resolve = modelResolver(state);
@@ -251,6 +255,9 @@ describe("model resolution auth row snapshots", () => {
               throw new Error("Model resolution completed before the usage-write barrier");
             }),
           ]);
+          if (published === "during") {
+            setRuntimeAuthProfileStoreSnapshot(store, state.agentDir());
+          }
           const updated: AuthProfileStore =
             change === "order" || change === "unrelated-order"
               ? { ...store, order: { [PROVIDER]: [PROFILE_ID] } }
