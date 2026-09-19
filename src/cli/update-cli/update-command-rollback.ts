@@ -28,6 +28,7 @@ import {
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -552,17 +553,23 @@ export async function rollbackFailedUpdate(params: {
       failureReason = error.reason;
     }
     assertCurrent();
-    if (opts.run) {
-      recordUpdateRunStep(
-        opts.run.runId,
-        {
-          step: "package rollback",
-          status: "failed",
-          endedAtMs: Date.now(),
-          detail,
-        },
-        { env: opts.run.env },
-      );
+    const step = {
+      name: "package rollback",
+      command: "restore previous generation",
+      cwd: params.previousRoot,
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: detail,
+      warnings: failureReason === "service-definition-rollback-unverified" ? [detail] : [],
+    };
+    if (step.warnings.length) {
+      result.steps.push(step);
+    }
+    if (run) {
+      const endedAtMs = Date.now();
+      for (const row of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, { env: run.env });
+      }
     }
     return failed(failureReason);
   }

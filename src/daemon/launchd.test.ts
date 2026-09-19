@@ -2543,21 +2543,27 @@ describe("launchd install", () => {
     expect(rewriteIndex).toBeLessThan(bootstrapIndex);
   });
 
-  it("tightens writable bits on launch agent dirs and plist", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.dirs.add(env.HOME!);
-    state.dirModes.set(env.HOME!, 0o777);
-    state.dirs.add("/Users/test/Library");
-    state.dirModes.set("/Users/test/Library", 0o777);
+  it.each([
+    { mode: 0o777, expected: 0o755 },
+    { mode: 0o700, expected: 0o700 },
+  ])(
+    "tightens directory mode $mode without widening private directories",
+    async ({ mode, expected }) => {
+      const env = createDefaultLaunchdEnv();
+      state.dirs.add(env.HOME!);
+      state.dirModes.set(env.HOME!, mode);
+      state.dirs.add("/Users/test/Library");
+      state.dirModes.set("/Users/test/Library", mode);
 
-    await installLaunchAgent(defaultLaunchAgentFixture(env));
+      await installLaunchAgent(defaultLaunchAgentFixture(env));
 
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    expect(state.dirModes.get(env.HOME!)).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o644);
-  });
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      expect(state.dirModes.get(env.HOME!)).toBe(expected);
+      expect(state.dirModes.get("/Users/test/Library")).toBe(expected);
+      expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755 & ~process.umask());
+      expect(state.fileModes.get(plistPath)).toBe(0o644);
+    },
+  );
 
   it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {
     const env = createDefaultLaunchdEnv();

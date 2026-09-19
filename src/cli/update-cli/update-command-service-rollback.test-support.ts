@@ -17,6 +17,7 @@ import {
 import * as candidateState from "../../infra/update-candidate-state.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { VERSION } from "../../version.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type {
@@ -341,6 +342,22 @@ export function registerPackageRootRollbackTests(
       expect(await fs.readFile(command.sourcePath!)).toEqual(definitionBeforeRollback);
       expect(mocks.child).not.toHaveBeenCalled();
       expect(outcome.result.reason).toBe("service-definition-rollback-unverified");
+      if (scenario === "backup edited" || scenario === "backup invalid") {
+        const warning =
+          scenario === "backup edited"
+            ? `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${command.sourcePath}`
+            : "SERVICE_DEFINITION_UNKNOWN: Service backup selects different managed artifacts.";
+        expect(outcome.result.steps).toContainEqual(
+          expect.objectContaining({ warnings: [warning] }),
+        );
+        expect(getUpdateRun(run.runId, { env: run.env })?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:package rollback",
+            status: "completed",
+            detail: warning.replace(root, "~"),
+          }),
+        );
+      }
       expect(await fs.readFile(path.join(candidateRoot, "package.json"), "utf8")).toContain(
         "9999.1.1",
       );

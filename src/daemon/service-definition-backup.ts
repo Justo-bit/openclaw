@@ -401,42 +401,29 @@ export async function restoreGatewayServiceDefinitionBackup(
       await hooks.beforeWrite();
     }
   }
+  const taskXml = task?.subarray(2).toString("utf16le");
   const restoreFiles = async (native?: {
     publish: (file: string, contents: Buffer, mode: number) => Promise<void>;
     remove: (file: string) => Promise<void>;
   }) => {
-    // Restore required inputs before their primary reference; remove new inputs last.
-    const order = receipt.files
-      .map((file, index) => ({ file, index }))
-      .toSorted(
-        (a, b) =>
-          (a.index === 0 ? 1 : a.file.before ? 0 : 2) - (b.index === 0 ? 1 : b.file.before ? 0 : 2),
-      );
-    for (const { file, index } of order) {
+    // Restore inputs, then their native reference, before retiring new inputs.
+    const order = receipt.files.toSorted(
+      (a, b) => (a === primary ? 1 : a.before ? 0 : 2) - (b === primary ? 1 : b.before ? 0 : 2),
+    );
+    for (const file of order) {
       const unchanged =
         file.before?.sha256 === file.after?.sha256 && file.before?.mode === file.after?.mode;
-      if (unchanged && !(native && index === 0)) {
+      if (unchanged && !(file === primary && (native || task))) {
         continue;
       }
-      const content = contents[index]!;
+      const content = contents[receipt.files.indexOf(file)]!;
       await hooks.beforeWrite();
-      if (native) {
-        if (content) {
-          if (!unchanged) {
-            await native.publish(file.sourcePath, content, file.before!.mode);
-          }
-          if (index === 0) {
-            // Replay must reload even if a previous attempt already restored the unit.
-            await hooks.beforeWrite();
-            await assertNoSystemGatewayOwnership(params.env);
-            await reloadSystemdUserManager(params.env, undefined, hooks.assertCurrent);
-            await hooks.beforeWrite();
-          }
-        } else {
-          await native.remove(file.sourcePath);
-        }
-      } else {
-        if (content) {
+      if (!unchanged) {
+        if (native) {
+          await (content
+            ? native.publish(file.sourcePath, content, file.before!.mode)
+            : native.remove(file.sourcePath));
+        } else if (content) {
           await publishServiceFile({
             filePath: file.sourcePath,
             contents: content,
@@ -447,9 +434,33 @@ export async function restoreGatewayServiceDefinitionBackup(
           await hooks.filePrepared(file.sourcePath, null);
           hooks.assertCurrent();
           await fs.unlink(file.sourcePath);
-        }
-        if (!content) {
           await hooks.fileWritten(file.sourcePath, null);
+        }
+      }
+      if (file === primary && native) {
+        // Replay must reload even if a previous attempt already restored the unit.
+        await hooks.beforeWrite();
+        await assertNoSystemGatewayOwnership(params.env);
+        await reloadSystemdUserManager(params.env, undefined, hooks.assertCurrent);
+        await hooks.beforeWrite();
+      }
+      if (file === primary && taskXml && receipt.task!.afterPolicySha256 !== taskPolicy(taskXml)) {
+        try {
+          await restoreScheduledTaskDefinition({
+            env: params.env,
+            xml: taskXml,
+            beforeWrite: () => hooks.taskPrepared(taskXml),
+            assertCurrent: hooks.assertCurrent,
+          });
+          await hooks.taskWritten(taskXml);
+        } catch (error) {
+          const retained = receipt.files
+            .filter((entry) => !entry.before && entry.after)
+            .map((entry) => entry.sourcePath);
+          throw new Error(
+            `${String(error)} Kept new service files: ${retained.join(", ") || "none"}. Restore and verify the backed-up Scheduled Task XML at ${backupPath(`${primary.sourcePath}.task.xml`, receipt.id)} before removing them.`,
+            { cause: error },
+          );
         }
       }
     }
@@ -463,16 +474,6 @@ export async function restoreGatewayServiceDefinitionBackup(
     );
   } else {
     await restoreFiles();
-  }
-  const taskXml = task?.subarray(2).toString("utf16le");
-  if (taskXml && receipt.task!.afterPolicySha256 !== taskPolicy(taskXml)) {
-    await restoreScheduledTaskDefinition({
-      env: params.env,
-      xml: taskXml,
-      beforeWrite: () => hooks.taskPrepared(taskXml),
-      assertCurrent: hooks.assertCurrent,
-    });
-    await hooks.taskWritten(taskXml);
   }
   await hooks.beforeWrite();
 }
