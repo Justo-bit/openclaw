@@ -272,8 +272,12 @@ describe("shared missing skill ancestors", () => {
       await writeSkill(first, "first-proof");
       await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
       expect(changes).not.toContain(second.workspaceDir);
-      // Windows cannot rename an ancestor with live descendant directory watches.
-      await fs.rm(path.join(root, "left"), { recursive: true });
+      if (process.platform === "win32") {
+        // Windows cannot rename an ancestor with live descendant directory watches.
+        await fs.rm(path.join(root, "left"), { recursive: true });
+      } else {
+        await fs.rename(path.join(root, "left"), path.join(root, "left-away"));
+      }
       await expect.poll(() => read(first), { timeout: 3_000 }).toEqual([]);
       // Retiring one logical workspace must not retire the shared missing-root observer.
       ensureSkillsWatcher({
