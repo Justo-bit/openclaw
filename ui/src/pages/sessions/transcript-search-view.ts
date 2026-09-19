@@ -5,9 +5,31 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
-import type { SessionsProps } from "./view.ts";
 
 registerCommandPaletteEnglish();
+
+type TranscriptSearchState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | {
+      status: "results";
+      sessions: GatewaySessionRow[];
+      results: SessionsSearchHit[];
+      indexing: boolean;
+      truncated: boolean;
+      archivedTranscriptsExcluded: number;
+    };
+
+export type TranscriptSearchProps = {
+  transcriptSearchAvailable: boolean;
+  transcriptSearchQuery: string;
+  transcriptSearch: TranscriptSearchState;
+  onTranscriptSearchChange: (query: string) => void;
+  onTranscriptSearch: () => void;
+  onClearTranscriptSearch: () => void;
+  onNavigateToChat?: (sessionKey: string) => void;
+};
 
 function transcriptSearchSessionLabel(hit: SessionsSearchHit, rows: GatewaySessionRow[]): string {
   const row = rows.find((candidate) => candidate.key === hit.sessionKey);
@@ -18,7 +40,7 @@ function transcriptSearchSessionLabel(hit: SessionsSearchHit, rows: GatewaySessi
   );
 }
 
-export function renderTranscriptSearch(props: SessionsProps) {
+export function renderTranscriptSearch(props: TranscriptSearchProps) {
   const hasQuery = props.transcriptSearchQuery.trim().length > 0;
   const state = props.transcriptSearch;
   const results = state.status === "results" ? state.results : [];

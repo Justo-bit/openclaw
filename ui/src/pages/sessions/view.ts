@@ -4,7 +4,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
-import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -59,22 +58,9 @@ import {
 import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
-import { renderTranscriptSearch } from "./transcript-search-view.ts";
+import { renderTranscriptSearch, type TranscriptSearchProps } from "./transcript-search-view.ts";
 
-type TranscriptSearchState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | {
-      status: "results";
-      sessions: GatewaySessionRow[];
-      results: SessionsSearchHit[];
-      indexing: boolean;
-      truncated: boolean;
-      archivedTranscriptsExcluded: number;
-    };
-
-export type SessionsProps = {
+export type SessionsProps = TranscriptSearchProps & {
   loading: boolean;
   refreshing: boolean;
   result: SessionsListResult | null;
@@ -88,9 +74,6 @@ export type SessionsProps = {
   agentId: string;
   mainKey: string;
   searchQuery: string;
-  transcriptSearchAvailable: boolean;
-  transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
   agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
@@ -122,9 +105,6 @@ export type SessionsProps = {
   }) => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
-  onTranscriptSearchChange: (query: string) => void;
-  onTranscriptSearch: () => void;
-  onClearTranscriptSearch: () => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
   onGroupByChange: (mode: SessionsGroupBy) => void;
   onAssignCategory: (key: string, category: string | null) => void;
@@ -156,7 +136,6 @@ export type SessionsProps = {
   onDeselectPage: (keys: string[]) => void;
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
-  onNavigateToChat?: (sessionKey: string) => void;
   onOpenSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },

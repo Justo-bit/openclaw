@@ -15,7 +15,6 @@ import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
-import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -78,10 +77,12 @@ async function startNewSessionInTerminal(
 export async function submitDraftInTerminal(options: {
   snapshot: DraftSubmissionSnapshot;
   place: DraftPlaceState;
-  flow: Pick<
-    DraftSubmissionFlow,
-    "message" | "canSubmit" | "noteBlockedSubmitAttempt" | "setError"
-  >;
+  flow: {
+    readonly message: string;
+    canSubmit(): boolean;
+    noteBlockedSubmitAttempt(): void;
+    setError(message: string): void;
+  };
   closeTransientUi: () => void;
   capture: (client: GatewayBrowserClient) => {
     isCurrent: () => boolean;

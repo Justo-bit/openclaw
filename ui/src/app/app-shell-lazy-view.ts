@@ -4,20 +4,36 @@ import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import {
   debugOverlayTemplate,
   renderPendingDebugOverlay,
+  type DebugOverlayFrameHost,
 } from "../pages/debug/debug-overlay-frame.ts";
-import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
-import type { ShellViewHost } from "./app-shell-view.ts";
-import type { ApplicationNavigationOptions } from "./context.ts";
+import {
+  renderCommandPaletteLoading,
+  type CommandPaletteLoadingState,
+} from "./app-shell-command-palette-loading.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import {
   isOptionalElementDefined,
+  type LazyCustomElementRequestController,
+  type OptionalCustomElement,
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { normalizeChatSendShortcut } from "./settings.ts";
 
+export interface ShellLazyOverlayHost extends DebugOverlayFrameHost {
+  readonly context: ApplicationContext | undefined;
+  readonly commandPaletteElement: OptionalCustomElement;
+  readonly commandPaletteLoading: CommandPaletteLoadingState;
+  closePendingPalette(): void;
+  readonly lazyCustomElements: LazyCustomElementRequestController;
+  handleCommandPaletteSlashCommand(command: string): void;
+  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
+  selectChatSession(sessionKey: string, agentId?: string | null): void;
+}
+
 /** Shell-level optional dialogs share lazy-load recovery, not route ownership. */
 export function renderShellLazyOverlays(
-  host: ShellViewHost,
+  host: ShellLazyOverlayHost,
   desktopPanelAvailable: boolean,
   custodianPanelAvailable: boolean,
   nativeEmbed: boolean,

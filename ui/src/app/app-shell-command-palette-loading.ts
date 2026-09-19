@@ -35,25 +35,28 @@ type CommandPaletteShellHost = {
   requestUpdate(): void;
 };
 
+type CommandPaletteShellActions = {
+  request(element: OptionalCustomElement, event: LazyShellEvent, replay?: () => void): void;
+  clear(event: LazyShellEvent): void;
+  cancel(): void;
+  pending(): boolean;
+};
+
 /** Owns palette launch and dispatch; shared lazy-event persistence stays with shell chrome. */
 export class ShellCommandPaletteOwner {
   readonly loading: CommandPaletteLoadingState;
-  private scope: ReturnType<typeof gatewayPresentationScope> | undefined;
+  #scope: ReturnType<typeof gatewayPresentationScope> | undefined;
+  readonly #host: CommandPaletteShellHost;
+  readonly #actions: CommandPaletteShellActions;
 
-  constructor(
-    private readonly host: CommandPaletteShellHost,
-    private readonly actions: {
-      request(element: OptionalCustomElement, event: LazyShellEvent, replay?: () => void): void;
-      clear(event: LazyShellEvent): void;
-      cancel(): void;
-      pending(): boolean;
-    },
-  ) {
+  constructor(host: CommandPaletteShellHost, actions: CommandPaletteShellActions) {
+    this.#host = host;
+    this.#actions = actions;
     this.loading = new CommandPaletteLoadingState(host);
   }
 
   readonly open = (): void => {
-    const palette = this.host.commandPalette;
+    const palette = this.#host.commandPalette;
     // Opening is an intent, not a prompt transport. Never persist event detail.
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
     if (palette) {
@@ -69,45 +72,45 @@ export class ShellCommandPaletteOwner {
         } else {
           palette.openPalette();
         }
-        this.actions.clear(descriptor);
+        this.#actions.clear(descriptor);
       });
       return;
     }
     this.synchronizeScope();
     this.loading.begin();
-    this.actions.request(this.host.commandPaletteElement, descriptor, this.open);
+    this.#actions.request(this.#host.commandPaletteElement, descriptor, this.open);
   };
 
   closePending(): void {
-    this.actions.cancel();
-    this.host.lazyCustomElements.abandon();
-    this.host.requestUpdate();
+    this.#actions.cancel();
+    this.#host.lazyCustomElements.abandon();
+    this.#host.requestUpdate();
   }
 
   synchronizeScope(): void {
-    const gateway = this.host.context?.gateway;
+    const gateway = this.#host.context?.gateway;
     const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
-    if (this.scope && this.scope !== scope && (this.loading.active || this.actions.pending())) {
+    if (this.#scope && this.#scope !== scope && (this.loading.active || this.#actions.pending())) {
       this.closePending();
     }
-    this.scope = scope;
+    this.#scope = scope;
   }
 
   toggle(): void {
     if (
       this.loading.active ||
-      this.host.lazyCustomElements.visibleState?.element === this.host.commandPaletteElement
+      this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
-    } else if (this.host.commandPalette) {
-      this.host.commandPalette.togglePalette();
+    } else if (this.#host.commandPalette) {
+      this.#host.commandPalette.togglePalette();
     } else {
       this.open();
     }
   }
 
   handleSlashCommand(command: string): void {
-    const host = this.host;
+    const host = this.#host;
     const chatHandler = host.commandPaletteTarget?.owner.isConnected
       ? host.commandPaletteTarget.onSlashCommand
       : null;
@@ -141,38 +144,42 @@ export class ShellCommandPaletteOwner {
 /** In-memory custody of input until the real palette takes over. Never persisted. */
 export class CommandPaletteLoadingState {
   submitRequested = false;
-  private draft: CommandPaletteInputSnapshot | undefined;
-  private input: HTMLTextAreaElement | undefined;
-  private returnFocus: HTMLElement | null | undefined;
-  private composing = false;
-  private pendingHandoff: (() => void) | undefined;
-  private compositionFrame: number | undefined;
-  private handoffPending = false;
-  private generation = 0;
+  #draft: CommandPaletteInputSnapshot | undefined;
+  #input: HTMLTextAreaElement | undefined;
+  #returnFocus: HTMLElement | null | undefined;
+  #composing = false;
+  #pendingHandoff: (() => void) | undefined;
+  #compositionFrame: number | undefined;
+  #handoffPending = false;
+  #generation = 0;
 
-  constructor(private readonly host: { requestUpdate(): void }) {}
+  readonly #host: Pick<CommandPaletteShellHost, "requestUpdate">;
+
+  constructor(host: Pick<CommandPaletteShellHost, "requestUpdate">) {
+    this.#host = host;
+  }
 
   get active(): boolean {
-    return this.returnFocus !== undefined;
+    return this.#returnFocus !== undefined;
   }
 
   get waitingForComposition(): boolean {
-    return this.handoffPending;
+    return this.#handoffPending;
   }
 
   begin(): void {
     if (!this.active) {
-      this.returnFocus =
+      this.#returnFocus =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
   }
 
   get value(): string {
-    return this.draft?.value ?? "";
+    return this.#draft?.value ?? "";
   }
 
-  private snapshot(): CommandPaletteInputSnapshot | undefined {
-    const input = this.input;
+  #snapshot(): CommandPaletteInputSnapshot | undefined {
+    const input = this.#input;
     return input
       ? {
           value: input.value,
@@ -180,40 +187,40 @@ export class CommandPaletteLoadingState {
           selectionEnd: input.selectionEnd,
           selectionDirection: input.selectionDirection,
         }
-      : this.draft;
+      : this.#draft;
   }
 
   readonly captureInput = (): void => {
-    if (!this.active || !this.input) {
+    if (!this.active || !this.#input) {
       return;
     }
     // The live field owns text and selection until the render-time handoff.
-    this.draft = this.snapshot();
-    this.host.requestUpdate();
+    this.#draft = this.#snapshot();
+    this.#host.requestUpdate();
   };
 
   readonly inputRef = (element: Element | undefined): void => {
     if (!(element instanceof HTMLTextAreaElement)) {
-      if (this.active && this.input) {
-        this.draft = this.snapshot();
+      if (this.active && this.#input) {
+        this.#draft = this.#snapshot();
       }
-      this.input = undefined;
+      this.#input = undefined;
       return;
     }
     if (!this.active) {
       return;
     }
-    this.input = element;
-    const draft = this.draft;
+    this.#input = element;
+    const draft = this.#draft;
     element
       .closest<OpenClawModalDialog>("openclaw-modal-dialog")
-      ?.setReturnFocusTarget(this.returnFocus ?? null);
+      ?.setReturnFocusTarget(this.#returnFocus ?? null);
     requestAnimationFrame(() => {
-      if (this.input !== element || !element.isConnected) {
+      if (this.#input !== element || !element.isConnected) {
         return;
       }
       element.focus({ preventScroll: true });
-      if (draft && element.value === draft.value && !this.composing) {
+      if (draft && element.value === draft.value && !this.#composing) {
         element.setSelectionRange(
           draft.selectionStart,
           draft.selectionEnd,
@@ -227,10 +234,10 @@ export class CommandPaletteLoadingState {
     if (!this.active) {
       return;
     }
-    this.composing = true;
-    if (this.compositionFrame !== undefined) {
-      cancelAnimationFrame(this.compositionFrame);
-      this.compositionFrame = undefined;
+    this.#composing = true;
+    if (this.#compositionFrame !== undefined) {
+      cancelAnimationFrame(this.#compositionFrame);
+      this.#compositionFrame = undefined;
     }
   };
 
@@ -238,22 +245,22 @@ export class CommandPaletteLoadingState {
     if (!this.active) {
       return;
     }
-    this.composing = false;
-    if (this.compositionFrame !== undefined) {
-      cancelAnimationFrame(this.compositionFrame);
+    this.#composing = false;
+    if (this.#compositionFrame !== undefined) {
+      cancelAnimationFrame(this.#compositionFrame);
     }
     // compositionend can precede the final input event. Keep the live field for
     // that commit, and read it only at the synchronous render handoff below.
-    this.compositionFrame = requestAnimationFrame(() => {
-      this.compositionFrame = undefined;
-      const handoff = this.pendingHandoff;
-      this.pendingHandoff = undefined;
+    this.#compositionFrame = requestAnimationFrame(() => {
+      this.#compositionFrame = undefined;
+      const handoff = this.#pendingHandoff;
+      this.#pendingHandoff = undefined;
       handoff?.();
     });
   };
 
   readonly handleKeydown = (event: KeyboardEvent): void => {
-    if (this.composing || event.isComposing || event.keyCode === 229) {
+    if (this.#composing || event.isComposing || event.keyCode === 229) {
       event.stopPropagation();
       return;
     }
@@ -266,42 +273,42 @@ export class CommandPaletteLoadingState {
         matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)
       ) {
         this.submitRequested = true;
-        this.host.requestUpdate();
+        this.#host.requestUpdate();
       }
     }
   };
 
   handoff(open: () => void): void {
-    if (this.composing || this.compositionFrame !== undefined) {
-      this.handoffPending = true;
-      this.pendingHandoff = open;
+    if (this.#composing || this.#compositionFrame !== undefined) {
+      this.#handoffPending = true;
+      this.#pendingHandoff = open;
     } else {
       open();
     }
   }
 
   captureHandoff(): CommandPaletteInputHandoff {
-    const generation = this.generation;
-    return () => (generation === this.generation ? this.take() : undefined);
+    const generation = this.#generation;
+    return () => (generation === this.#generation ? this.#take() : undefined);
   }
 
-  private take(): CommandPaletteOpenInput | undefined {
+  #take(): CommandPaletteOpenInput | undefined {
     if (!this.active) {
       return undefined;
     }
-    const draft = this.snapshot() ?? {
+    const draft = this.#snapshot() ?? {
       value: "",
       selectionStart: 0,
       selectionEnd: 0,
       selectionDirection: "none" as const,
     };
-    const returnFocus = this.returnFocus;
+    const returnFocus = this.#returnFocus;
     const submitRequested = this.submitRequested;
     // Retiring the loader must not restore the original field between the two
     // palette inputs. The replacement dialog inherits that original target.
-    this.input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
+    this.#input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
     this.clear();
-    this.host.requestUpdate();
+    this.#host.requestUpdate();
     return {
       ...draft,
       returnFocus,
@@ -311,17 +318,17 @@ export class CommandPaletteLoadingState {
 
   clear(): void {
     this.submitRequested = false;
-    this.generation += 1;
-    this.handoffPending = false;
-    if (this.compositionFrame !== undefined) {
-      cancelAnimationFrame(this.compositionFrame);
-      this.compositionFrame = undefined;
+    this.#generation += 1;
+    this.#handoffPending = false;
+    if (this.#compositionFrame !== undefined) {
+      cancelAnimationFrame(this.#compositionFrame);
+      this.#compositionFrame = undefined;
     }
-    this.pendingHandoff = undefined;
-    this.composing = false;
-    this.input = undefined;
-    this.draft = undefined;
-    this.returnFocus = undefined;
+    this.#pendingHandoff = undefined;
+    this.#composing = false;
+    this.#input = undefined;
+    this.#draft = undefined;
+    this.#returnFocus = undefined;
   }
 }
 

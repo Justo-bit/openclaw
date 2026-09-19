@@ -5,20 +5,25 @@ import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
-import type { DraftSessionCreateOverrides } from "./create-params.ts";
+import type { NewSessionCapabilityController } from "./capability-controller.ts";
+import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
-import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import type { NewSessionPermissionSelection } from "./permission-selection.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
 /** Project the draft's explicit choices through the existing session-create parameter owner. */
 export function buildDraftSubmissionCreateParams(
   place: DraftPlaceState,
   gateway: DraftGatewayState,
-  draft: Pick<DraftSubmissionFlow, "capabilities" | "permission" | "visibility">,
+  draft: {
+    capabilities: Pick<NewSessionCapabilityController, "toolOverrides">;
+    permission: Pick<NewSessionPermissionSelection, "value">;
+    visibility: NewSessionVisibility;
+  },
   snapshot: DraftSubmissionSnapshot,
   options: DraftSessionCreateOverrides = {},
 ) {

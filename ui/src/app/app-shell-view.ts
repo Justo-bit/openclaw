@@ -16,18 +16,16 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
 import {
   renderLazyDevicePairSetup,
   type DevicePairSetupHost,
 } from "./app-shell-device-pair-setup.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
-import { renderShellLazyOverlays } from "./app-shell-lazy-view.ts";
+import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -35,7 +33,6 @@ import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   isOptionalElementDefined,
-  type LazyCustomElementRequestController,
   MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
   SIDEBAR_ATTENTION_ELEMENT,
@@ -65,18 +62,13 @@ const EMPTY_SESSION_HAS_DRAFT = () => false;
 type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
 
 export interface ShellViewHost
-  extends DevicePairSetupHost, DebugOverlayFrameHost, SettingsSidebarHost {
-  readonly context: ApplicationContext | undefined;
+  extends DevicePairSetupHost, ShellLazyOverlayHost, SettingsSidebarHost {
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
-  readonly commandPaletteElement: OptionalCustomElement;
-  readonly commandPaletteLoading: CommandPaletteLoadingState;
-  closePendingPalette(): void;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
@@ -89,12 +81,10 @@ export interface ShellViewHost
   newSessionRouteAgentId(): string;
   enabledRouteIds(): readonly RouteId[];
   exitSettings(): void;
-  handleCommandPaletteSlashCommand(command: string): void;
   handleNativeNewSession(): void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
   handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
   openApprovals(): void;
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
@@ -102,7 +92,6 @@ export interface ShellViewHost
   recoverNotFoundRoute: () => boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost;
   toggleNavigationSurface(trigger?: HTMLElement): void;
 }

@@ -58,86 +58,79 @@ function updatePaletteInputLayout(textarea: HTMLTextAreaElement) {
 }
 
 class PaletteInputLayoutDirective extends AsyncDirective {
-  private textarea: HTMLTextAreaElement | undefined;
-  private observer: ResizeObserver | undefined;
-  private frame: number | undefined;
-  private listening = false;
+  #textarea: HTMLTextAreaElement | undefined;
+  #observer: ResizeObserver | undefined;
+  #frame: number | undefined;
+  #listening = false;
 
   render(_value: string) {
     return nothing;
   }
 
   override update(part: ElementPart, [_value]: [string]) {
-    this.textarea = part.element instanceof HTMLTextAreaElement ? part.element : undefined;
-    this.scheduleLayout();
+    this.#textarea = part.element instanceof HTMLTextAreaElement ? part.element : undefined;
+    this.#scheduleLayout();
     return nothing;
   }
 
-  private readonly updateOverflow = () => {
-    if (this.textarea) {
-      updatePaletteInputOverflow(this.textarea);
+  readonly #updateOverflow = () => {
+    if (this.#textarea) {
+      updatePaletteInputOverflow(this.#textarea);
     }
   };
 
-  private readonly scheduleLayout = () => {
-    if (this.frame !== undefined) {
+  readonly #scheduleLayout = () => {
+    if (this.#frame !== undefined) {
       return;
     }
-    this.frame = requestAnimationFrame(() => {
-      this.frame = undefined;
-      if (this.isConnected && this.textarea?.isConnected) {
-        this.connect();
-        updatePaletteInputLayout(this.textarea);
+    this.#frame = requestAnimationFrame(() => {
+      this.#frame = undefined;
+      if (this.isConnected && this.#textarea?.isConnected) {
+        this.#connect();
+        updatePaletteInputLayout(this.#textarea);
       }
     });
   };
 
-  private connect() {
-    const textarea = this.textarea;
-    if (!this.isConnected || !textarea || this.listening) {
+  #connect() {
+    const textarea = this.#textarea;
+    if (!this.isConnected || !textarea || this.#listening) {
       return;
     }
-    this.listening = true;
-    textarea.addEventListener("scroll", this.updateOverflow, { passive: true });
-    window.addEventListener("resize", this.scheduleLayout);
+    this.#listening = true;
+    textarea.addEventListener("scroll", this.#updateOverflow, { passive: true });
     if (typeof ResizeObserver === "function") {
-      const widths = new WeakMap<Element, number>();
-      this.observer = new ResizeObserver((entries) => {
-        let changed = false;
-        for (const { target, contentRect } of entries) {
-          changed ||= widths.get(target) !== contentRect.width;
-          widths.set(target, contentRect.width);
-        }
-        if (changed) {
-          this.scheduleLayout();
-        }
-      });
+      // The frame guard coalesces size changes; an unchanged final box settles
+      // observation without a separate cache of element widths.
+      this.#observer = new ResizeObserver(this.#scheduleLayout);
       const root = textarea.closest(".cmd-palette__entry");
       if (root) {
-        this.observer.observe(root);
+        this.#observer.observe(root);
         const actions = root.querySelector(".cmd-palette__input-actions");
         if (actions) {
-          this.observer.observe(actions);
+          this.#observer.observe(actions);
         }
       }
+    } else {
+      window.addEventListener("resize", this.#scheduleLayout);
     }
   }
 
   protected override disconnected() {
-    this.textarea?.removeEventListener("scroll", this.updateOverflow);
-    window.removeEventListener("resize", this.scheduleLayout);
-    this.observer?.disconnect();
-    this.observer = undefined;
-    this.listening = false;
-    if (this.frame !== undefined) {
-      cancelAnimationFrame(this.frame);
-      this.frame = undefined;
+    this.#textarea?.removeEventListener("scroll", this.#updateOverflow);
+    window.removeEventListener("resize", this.#scheduleLayout);
+    this.#observer?.disconnect();
+    this.#observer = undefined;
+    this.#listening = false;
+    if (this.#frame !== undefined) {
+      cancelAnimationFrame(this.#frame);
+      this.#frame = undefined;
     }
   }
 
   protected override reconnected() {
-    this.connect();
-    this.scheduleLayout();
+    this.#connect();
+    this.#scheduleLayout();
   }
 }
 

@@ -17,6 +17,38 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     }
   });
 
+  it("preserves the selected prompt while a settings control owns focus and layout rerenders", async () => {
+    host = document.body.appendChild(document.createElement("div"));
+    host.style.cssText = "width: 740px; max-width: 100%;";
+    const props = {
+      value: "Keep this prompt and its caret while changing preferences.",
+      placeholder: "Search or start a task…",
+      onInputRef,
+      onValueChange: () => undefined,
+      actions: html`<button type="button">Settings</button>`,
+    };
+    render(renderCommandPaletteInput(props), host);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    const input = host.querySelector("textarea")!;
+    const settings = host.querySelector("button")!;
+    input.focus();
+    input.setSelectionRange(5, 11, "backward");
+    settings.focus();
+    render(renderCommandPaletteInput(props), host);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(document.activeElement).toBe(settings);
+    expect(input.value).toBe(props.value);
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
+      5,
+      11,
+      "backward",
+    ]);
+  });
+
   it("grows down through three lines, keeps actions fixed and fades clear of the far-right scrollbar", async () => {
     host = document.body.appendChild(document.createElement("div"));
     host.style.cssText = "width: 740px; max-width: 100%;";
@@ -96,5 +128,24 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     host.style.width = "320px";
     await vi.waitFor(() => expect(input.clientHeight).toBe(lineHeight * 3));
     expect(actions.getBoundingClientRect().top).toBe(actionTop);
+
+    await document.fonts.ready;
+    const nextFrame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    await nextFrame();
+    await nextFrame();
+    const styleChanges: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => styleChanges.push(...records));
+    observer.observe(input, { attributes: true, attributeFilter: ["style"] });
+    try {
+      await nextFrame();
+      await nextFrame();
+      await nextFrame();
+      expect(styleChanges).toEqual([]);
+    } finally {
+      observer.disconnect();
+    }
   });
 });

@@ -270,13 +270,18 @@ suite.define(() => {
           await page.keyboard.press("ControlOrMeta+K");
           await input.waitFor({ state: "visible" });
           await input.fill(prompt);
+          // Establish the editor selection before opening settings. Chromium 151
+          // restores its last focused range after a range is injected while blurred.
+          await input.evaluate((element: HTMLTextAreaElement) => {
+            element.focus();
+            element.setSelectionRange(5, 11);
+          });
           await openSettings();
           await expect
             .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
             .toContain("Reviewer");
           expect(await remember.isChecked()).toBe(true);
           await capture("remembered-settings");
-          await input.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(5, 11));
           await remember.uncheck();
           await expect.poll(async () => (await paletteWrites()).length).toBe(2);
           expect((await paletteWrites())[1]!.params).toMatchObject({
