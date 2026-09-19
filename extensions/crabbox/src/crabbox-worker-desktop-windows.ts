@@ -342,6 +342,7 @@ export function createCrabboxWindowsDesktopEndpoint(leaseId: string): WorkerDesk
   return {
     protocol: "rfb",
     port: 5900,
+    allowsResize: false,
     passwordFilePath: String.raw`C:\ProgramData\crabbox\vnc.password`,
     apps: [
       {

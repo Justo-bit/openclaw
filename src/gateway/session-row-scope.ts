@@ -205,8 +205,12 @@ export function selectSessionRowEntries(
     : parent
       ? [...children].map((id) => rows.get(id))
       : matching(query);
-  const selected = candidates
-    .map((row) => (row && !sessionIdOrKey && dirty.has(records.identity(row)) ? acquire(row) : row))
-    .filter((row): row is records.EntryRow => records.hasEntry(row) && matches(row));
+  const acquired =
+    sessionIdOrKey || dirty.size === 0
+      ? candidates
+      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+  const selected = acquired.filter(
+    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
+  );
   return records.sort(selected, query.sortBy);
 }

@@ -14,10 +14,7 @@ import {
 } from "../../shared/node-desktop-stream.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
-import {
-  isWorkerDesktopArdPassword,
-  isWorkerDesktopUsername,
-} from "../../shared/worker-desktop-descriptor.js";
+import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
 import { hasExactOwnKeys } from "../../worker/protocol-record.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
@@ -30,8 +27,8 @@ const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
+  /** Managed RFB password for VncAuth or ARD; never returned to a browser. */
   vncPassword?: string;
-  ardCredentials?: { username: string; password: string };
 };
 
 type AttachedNodeDesktopStream = NodeDesktopStreamMetadata & { stream: Duplex };
@@ -96,28 +93,18 @@ function parseStreamMetadata(
   if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
     throw new Error("invalid node desktop attach metadata");
   }
-  if (!hasExactOwnKeys(value, ["auth"], ["vncPassword", "ardUsername", "ardPassword"])) {
+  if (!hasExactOwnKeys(value, ["auth"], ["vncPassword"])) {
     throw new Error("invalid node desktop attach metadata");
   }
   if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
     throw new Error("invalid node desktop attach metadata");
   }
-  if (value.auth === "ard-account" && value.vncPassword !== undefined) {
+  if (
+    value.auth === "ard-account" &&
+    value.vncPassword !== undefined &&
+    !isWorkerDesktopArdPassword(value.vncPassword)
+  ) {
     throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.ardUsername !== undefined || value.ardPassword !== undefined) {
-    if (
-      value.auth !== "ard-account" ||
-      !isWorkerDesktopUsername(value.ardUsername) ||
-      !isWorkerDesktopArdPassword(value.ardPassword)
-    ) {
-      throw new Error("invalid node desktop attach metadata");
-    }
-    registerSecretValueForRedaction(value.ardPassword);
-    return {
-      auth: value.auth,
-      ardCredentials: { username: value.ardUsername, password: value.ardPassword },
-    };
   }
   const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;
   if (vncPassword) {

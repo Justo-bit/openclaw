@@ -83,6 +83,7 @@ describe("worker desktop endpoint", () => {
         port: 5900,
         passwordFilePath: `${root}/password`,
         username: "worker",
+        allowsResize: false,
         apps: [
           {
             id: "terminal",
@@ -108,6 +109,12 @@ describe("worker desktop endpoint", () => {
       expect(() =>
         normalizeWorkerDesktopEndpoint({ ...desktop, passwordFilePath: undefined }),
       ).toThrow("desktop username");
+      expect(() =>
+        normalizeWorkerDesktopEndpoint({
+          ...desktop,
+          allowsResize: "false",
+        } as WorkerDesktopEndpoint),
+      ).toThrow("allowsResize must be a boolean");
     },
   );
 });

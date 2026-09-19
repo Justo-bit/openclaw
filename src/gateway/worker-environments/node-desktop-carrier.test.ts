@@ -351,11 +351,10 @@ describe("worker node desktop carrier", () => {
       const credentials = username
         ? { username, password: "worker-password" }
         : { password: "worker-password" };
-      streamed.attachNext(
-        username
-          ? { auth: "ard-account", ardCredentials: { username, password: "worker-password" } }
-          : undefined,
-      );
+      streamed.attachNext({
+        auth: username ? "ard-account" : "vnc-password",
+        vncPassword: "worker-password",
+      });
 
       await expect(observing).resolves.toMatchObject({
         transport: "rfb",
@@ -364,7 +363,7 @@ describe("worker node desktop carrier", () => {
         control: false,
       });
       expect(await observing).not.toHaveProperty("vncPassword");
-      expect(await observing).not.toHaveProperty("ardCredentials");
+      expect(await observing).not.toHaveProperty("preauth");
       expect(mint.mock.calls[0]?.[0].preauth).toEqual({
         auth: username ? "ard-account" : "vnc-password",
         credentials,
@@ -397,31 +396,27 @@ describe("worker node desktop carrier", () => {
 
   it.each([
     { auth: "ard-account" as const },
-    { auth: "ard-account" as const, ardCredentials: { username: "other", password: "secret" } },
     { auth: "vnc-password" as const, vncPassword: "secret" },
-  ])(
-    "rejects cloud ARD metadata that does not bind its lease-owned account: %j",
-    async (metadata) => {
-      const record = support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
-      record.desktop = { ...record.desktop!, username: "worker" };
-      const transport = pendingTransport({
-        proof: nodeProof(record.nodeDeviceId!),
-        isProofCurrent: () => true,
-      });
-      const streamed = fakeBroker();
-      const carrier = createWorkerNodeDesktopCarrier({
-        store: { get: () => record },
-        desktopRegistry: createDesktopSessionRegistry(),
-      });
-      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-      const observing = carrier.observe({ record, control: false });
-      await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
-      const stream = streamed.attachNext(metadata);
-      await expect(observing).rejects.toThrow("lease-owned ARD account");
-      expect(stream.destroyed).toBe(true);
-      await carrier.stopAll();
-    },
-  );
+  ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
+    const record = support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
+    record.desktop = { ...record.desktop!, username: "worker" };
+    const transport = pendingTransport({
+      proof: nodeProof(record.nodeDeviceId!),
+      isProofCurrent: () => true,
+    });
+    const streamed = fakeBroker();
+    const carrier = createWorkerNodeDesktopCarrier({
+      store: { get: () => record },
+      desktopRegistry: createDesktopSessionRegistry(),
+    });
+    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+    const observing = carrier.observe({ record, control: false });
+    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+    const stream = streamed.attachNext(metadata);
+    await expect(observing).rejects.toThrow("managed authentication");
+    expect(stream.destroyed).toBe(true);
+    await carrier.stopAll();
+  });
 
   it("cancels and joins an admitted app launch before its first microtask", async () => {
     const record = support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");

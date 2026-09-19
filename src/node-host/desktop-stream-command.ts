@@ -129,21 +129,22 @@ async function runNodeDesktopStreamCommand(params: {
     );
   }
   try {
-    const auth = classifyRfbSecurity(probe.securityTypes);
+    const auth = params.username
+      ? probe.securityTypes.includes(30)
+        ? "ard-account"
+        : "unsupported"
+      : classifyRfbSecurity(probe.securityTypes);
     if (auth === "none") {
       throw new Error("refusing unauthenticated loopback RFB server");
     }
     if (auth === "unsupported") {
       throw new Error("loopback RFB server security is unsupported");
     }
-    if (params.username && auth !== "ard-account") {
-      throw new Error("lease-owned desktop account requires ARD authentication");
-    }
-    const password =
-      auth === "vnc-password" || params.username
+    const vncPassword =
+      auth === "vnc-password" || (auth === "ard-account" && params.username)
         ? await readVncPassword(params.passwordFile, params.signal)
         : undefined;
-    if (params.username && !isWorkerDesktopArdPassword(password)) {
+    if (params.username && !isWorkerDesktopArdPassword(vncPassword)) {
       throw new Error(
         "lease-owned desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
       );
@@ -159,13 +160,7 @@ async function runNodeDesktopStreamCommand(params: {
       attachPath: params.command.attachPath,
       expectedAttachPath: NODE_DESKTOP_ATTACH_PATH,
       target: { stream: probe.stream },
-      metadata: {
-        auth,
-        ...(auth === "vnc-password" && password ? { vncPassword: password } : {}),
-        ...(params.username && password
-          ? { ardUsername: params.username, ardPassword: password }
-          : {}),
-      },
+      metadata: { auth, ...(vncPassword ? { vncPassword } : {}) },
       streamName: "desktop",
       signal: params.signal,
       emitStatus: params.emitStatus,

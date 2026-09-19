@@ -151,6 +151,7 @@ export function createCrabboxMacosDesktopEndpoint(
   return {
     protocol: "rfb",
     port: 5900,
+    allowsResize: false,
     username: sshUser,
     passwordFilePath: `${root}/vnc.password`,
     apps: [

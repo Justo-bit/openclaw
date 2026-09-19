@@ -56,9 +56,9 @@ for the backup, retention, and re-upgrade contract.
 
 ## Desktop (interactive)
 
-Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only.
+Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only. Native desktops provision cold even when the shared profile enables warm images.
 
-The bundled Crabbox plugin supports direct AWS and Azure profiles. Coordinator-backed AWS, Azure, and Hetzner profiles are supported when the selected coordinator advertises Desktop and Browser capability. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
+The bundled Crabbox plugin supports direct AWS and Azure profiles. Coordinator-backed AWS, Azure, and Hetzner profiles are supported when the selected coordinator supports that target's desktop. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
 
 Each node connects to its desktop's authenticated RFB server through `127.0.0.1:5900`. The desktop also has a browser with loopback CDP on port `9222` and provider-owned Browser and Terminal launchers. OpenClaw installs a worker wallpaper so the disposable desktop is easy to identify. Setup is idempotent and completes before the cloud desktop becomes available, including on provisioning replay. Project image preparation keeps desktop setup before project setup and capture.
 
@@ -78,7 +78,14 @@ The Gateway sends WebSocket keepalives on desktop observer and node desktop or p
 
 When another operator takes control, your viewer reconnects in view-only mode. The notice identifies the new controller by their authenticated profile name, or their authenticated user ID when no profile name is set. Connections without an authenticated user identity show a generic takeover notice.
 
-Before downgrading to a release without native desktop support, stop macOS and Windows cloud workers using the supporting release. Older releases cannot fully reopen their desktop metadata. If you already downgraded, return to a supporting release to stop those workers first.
+Before downgrading to a version without native desktop support, stop and release
+all macOS and native Windows worker environments, including primary session
+placements and conversation attachments. Wait for confirmed lease teardown;
+closing the viewer or suspending a worker is not sufficient. Older Gateways can
+reject persisted Windows password paths or discard the macOS account metadata
+needed for authentication. Confirmed teardown clears the desktop descriptor so
+those records can be read by the older version. If you already downgraded, return
+to a supporting release to stop those workers first.
 
 ## macOS image prerequisites
 
@@ -120,6 +127,6 @@ The **Desktop size** menu is available in the panel and the standalone desktop v
 
 Match appears only after a controlling connection authenticates and the worker provider permits virtual-display resizing. View-only connections cannot request resizing. Direct host desktops do not gain this permission.
 
-The Crabbox plugin permits requests for its dedicated worker desktops. This permission does not prove server support. Match requires a VNC server that negotiates desktop resizing, such as Crabbox's dynamic Linux TigerVNC desktop. Fixed-size servers, including native platform servers without that extension, remain usable with Fit and Actual. To resize older Linux Xvfb/x11vnc workers, update Crabbox to a build with dynamic XFCE support and reprovision the desktop worker. Changing the menu alone does not upgrade an existing worker.
+The Crabbox plugin permits resize requests for its dedicated Linux XFCE desktop. Match also requires a VNC server that negotiates desktop resizing, such as Crabbox's dynamic TigerVNC desktop. Native worker desktops and older fixed-size Xvfb/x11vnc workers use Fit and Actual. To resize older Linux workers, update Crabbox to a build with dynamic XFCE support and reprovision the desktop worker. Changing the menu alone does not upgrade an existing worker.
 
 A controlled reconnect to the same source retains the sizing choice. Changing sources resets it to Fit. Losing control or resize permission also resets Match to Fit.

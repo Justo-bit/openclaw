@@ -7,7 +7,6 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
-import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -189,23 +188,9 @@ export function createWorkerDesktopTunnels(deps: {
         }
         registerSecretValueForRedaction(vncPassword);
       }
-      if (request.desktop.username && !isWorkerDesktopArdPassword(vncPassword)) {
-        throw new Error(
-          "Worker desktop ARD password must contain 1 through 63 UTF-8 bytes without NUL",
-        );
-      }
       return {
         attachment: { kind: "unix-socket", socketPath: localSocketPath },
-        ...(request.desktop.username && vncPassword
-          ? {
-              preauth: {
-                auth: "ard-account",
-                credentials: { username: request.desktop.username, password: vncPassword },
-              },
-            }
-          : vncPassword
-            ? { vncPassword }
-            : {}),
+        ...(vncPassword ? { vncPassword } : {}),
       };
     };
 
@@ -222,6 +207,11 @@ export function createWorkerDesktopTunnels(deps: {
   };
 
   async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
+    if (request.desktop.username) {
+      throw new Error(
+        "Managed desktop account authentication requires the worker node transport; reprovision with node enrollment",
+      );
+    }
     if (platform === "win32") {
       throw new WorkerDesktopUnsupportedError();
     }

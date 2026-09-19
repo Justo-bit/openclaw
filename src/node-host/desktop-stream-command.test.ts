@@ -77,11 +77,27 @@ describe("node desktop stream command", () => {
   });
 
   it.each([
-    [1, "refusing unauthenticated loopback RFB server"],
-    [19, "loopback RFB server security is unsupported"],
+    {
+      name: "unauthenticated server",
+      securityType: 1,
+      username: undefined,
+      message: "refusing unauthenticated loopback RFB server",
+    },
+    {
+      name: "unsupported scheme",
+      securityType: 19,
+      username: undefined,
+      message: "loopback RFB server security is unsupported",
+    },
+    {
+      name: "managed account without ARD",
+      securityType: 2,
+      username: "worker",
+      message: "loopback RFB server security is unsupported",
+    },
   ])(
-    "refuses security type %i and closes its connection before Gateway attach",
-    async (securityType, message) => {
+    "refuses $name and closes its connection before Gateway attach",
+    async ({ securityType, username, message }) => {
       const rfb = await listenRfbSecurity(securityType);
 
       await expect(
@@ -90,6 +106,7 @@ describe("node desktop stream command", () => {
             ticket: TICKET,
             attachPath: `/node-desktop/attach?ticket=${TICKET}`,
             port: rfb.port,
+            ...(username ? { username, passwordFilePath: path.resolve("unused-password") } : {}),
           }),
           gatewayUrl: "ws://127.0.0.1:1",
           signal: new AbortController().signal,
@@ -178,13 +195,29 @@ describe("node desktop stream command", () => {
     ).rejects.toThrow("ticket and attachPath required");
   });
 
-  it.each(
-    ["", "/openclaw-gw", "/openclaw-gw/"].flatMap((contextPath) =>
-      [2, 30].map((securityType) => ({ contextPath, securityType })),
+  it.each([
+    ...["", "/openclaw-gw", "/openclaw-gw/"].flatMap((contextPath) =>
+      [
+        { securityTypes: [2], auth: "vnc-password", username: undefined },
+        { securityTypes: [30], auth: "ard-account", username: "worker" },
+      ].map(({ securityTypes, auth, username }) => ({
+        securityTypes,
+        auth,
+        username,
+        contextPath,
+        workerAuth: auth,
+      })),
     ),
-  )(
-    "authenticates public and worker attaches through $contextPath with security $securityType and tears down on cancellation",
-    async ({ contextPath, securityType }) => {
+    {
+      contextPath: "",
+      securityTypes: [2, 30],
+      username: "worker",
+      auth: "vnc-password",
+      workerAuth: "ard-account",
+    },
+  ])(
+    "authenticates public and worker attaches through $contextPath with security $securityTypes and tears down on cancellation",
+    async ({ contextPath, securityTypes, username, auth, workerAuth }) => {
       const passwordFilePath = path.join(tempDirs.make("desktop-account-"), "password");
       await fs.writeFile(passwordFilePath, "lease-password\n");
       const rfbPeers = new Set<net.Socket>();
@@ -194,7 +227,9 @@ describe("node desktop stream command", () => {
         // Cancellation destroys the client socket; the synthetic server owns the matching reset.
         socket.on("error", handleExpectedPeerTeardownError);
         socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-        socket.once("data", () => socket.write(Buffer.from([1, securityType])));
+        socket.once("data", () =>
+          socket.write(Buffer.from([securityTypes.length, ...securityTypes])),
+        );
       });
       await new Promise<void>((resolve) => {
         rfbServer.listen(0, "127.0.0.1", resolve);
@@ -261,11 +296,7 @@ describe("node desktop stream command", () => {
             ticket: TICKET,
             attachPath: `/node-desktop/attach?ticket=${TICKET}`,
             ...(kind === "worker"
-              ? {
-                  port: rfbAddress.port,
-                  passwordFilePath,
-                  ...(securityType === 30 ? { username: "worker" } : {}),
-                }
+              ? { port: rfbAddress.port, passwordFilePath, ...(username ? { username } : {}) }
               : {}),
           }),
           gatewayUrl: `ws://127.0.0.1:${gatewayAddress.port}${contextPath}`,
@@ -296,12 +327,8 @@ describe("node desktop stream command", () => {
         expect(stream.accessHeaders).toEqual(["desktop-client-id", "desktop-client-secret"]);
         await vi.waitFor(() =>
           expect(stream.metadata).toEqual({
-            auth: securityType === 30 ? "ard-account" : "vnc-password",
-            ...(kind === "worker"
-              ? securityType === 30
-                ? { ardUsername: "worker", ardPassword: "lease-password" }
-                : { vncPassword: "lease-password" }
-              : {}),
+            auth: kind === "worker" ? workerAuth : auth,
+            ...(kind === "worker" ? { vncPassword: "lease-password" } : {}),
           }),
         );
         if (kind === "public") {

@@ -26,9 +26,14 @@ function inspectJson(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("Crabbox desktop provisioning", () => {
-  it.each(["windows/normal", "macos"] as const)(
-    "provisions a %s desktop through the enrolled node",
-    async (target) => {
+  it.each(
+    (["windows/normal", "macos"] as const).flatMap((target) => [
+      { target, osOverride: false },
+      { target, osOverride: true },
+    ]),
+  )(
+    "provisions $target with placement override=$osOverride through the enrolled node",
+    async ({ target, osOverride }) => {
       let warmed = false;
       const { provider, calls } = createWarmProvider(async ({ argv }) => {
         if (argv[1] === "warmup") {
@@ -42,20 +47,36 @@ describe("Crabbox desktop provisioning", () => {
         }
         return undefined;
       });
+      const profile = {
+        ...WARM_PROFILE,
+        desktop: true,
+        ...(osOverride ? {} : { target }),
+      };
+      const options = osOverride ? { os: target } : undefined;
+      expect(provider.supportsProjectPreparation?.(profile, "standard", options?.os)).toBe(false);
       const result = await provisionWarmProfile(
         provider,
-        { ...PROFILE, target, desktop: true },
+        profile,
         OPERATION_ID,
+        undefined,
+        options,
       );
       expect(result.node).toEqual({ deviceId: "device-1" });
       expect(result.desktop).toMatchObject({
         protocol: "rfb",
         port: 5900,
-        ...(target === "macos" ? { username: "openclaw" } : {}),
+        allowsResize: false,
+        ...(target === "macos"
+          ? {
+              username: "openclaw",
+              passwordFilePath: `/var/db/crabbox/openclaw-workers/${LEASE_ID}/vnc.password`,
+            }
+          : { passwordFilePath: String.raw`C:\ProgramData\crabbox\vnc.password` }),
         apps: [{ id: "browser", cdpPort: 9222 }, { id: "terminal" }],
       });
       const warmup = calls.find(({ argv }) => argv[1] === "warmup")!.argv;
-      expect(warmup).toEqual(expect.arrayContaining(["--desktop", "--browser"]));
+      expect(warmup).toContain("--desktop");
+      expect(warmup).not.toContain("--browser");
       expect(warmup).not.toContain("--desktop-env");
       expect(warmup).not.toContain("xfce");
       const browser = result.desktop?.apps?.find((app) => app.id === "browser");
@@ -65,6 +86,9 @@ describe("Crabbox desktop provisioning", () => {
       if (target === "windows/normal") {
         expect(browser?.args).toContain("-File");
       }
+      await provider.destroy({ ...result, profile });
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+      expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
     },
   );
 

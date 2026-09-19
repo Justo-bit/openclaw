@@ -366,7 +366,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ownerEpoch = record.ownerEpoch;
       // Node observation remains usable without its provisioning plugin. Missing
       // optional permission disables resizing, not the established transport.
-      canResize = options.resolveProvider(record.providerId)?.allowsDesktopResize === true;
+      canResize =
+        options.resolveProvider(record.providerId)?.allowsDesktopResize === true &&
+        desktop.allowsResize !== false;
       if (record.sshEndpoint) {
         if (!tunnels) {
           throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");
@@ -408,7 +410,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       control: request.control,
       requester: request.requester,
       attachment: acquired.attachment,
-      ...(acquired.preauth ? { preauth: acquired.preauth } : {}),
       nowMs: now(),
     });
     return {

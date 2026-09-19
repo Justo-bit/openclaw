@@ -25,7 +25,13 @@ export function normalizeWorkerDesktopEndpoint(
   if (!isRecord(value) || value.protocol !== "rfb") {
     throw new Error('Worker environment desktop protocol must be "rfb"');
   }
-  if (!hasExactOwnKeys(value, ["protocol", "port"], ["passwordFilePath", "username", "apps"])) {
+  if (
+    !hasExactOwnKeys(
+      value,
+      ["protocol", "port"],
+      ["passwordFilePath", "username", "apps", "allowsResize"],
+    )
+  ) {
     throw new Error("Worker environment desktop endpoint contains unknown fields");
   }
   if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
@@ -34,6 +40,9 @@ export function normalizeWorkerDesktopEndpoint(
   const passwordFilePath = value.passwordFilePath;
   if (passwordFilePath !== undefined && !isAbsoluteDesktopPath(passwordFilePath)) {
     throw new Error("Worker environment desktop password file path must be absolute");
+  }
+  if (value.allowsResize !== undefined && typeof value.allowsResize !== "boolean") {
+    throw new Error("Worker environment desktop allowsResize must be a boolean");
   }
   if (
     value.username !== undefined &&
@@ -100,6 +109,7 @@ export function normalizeWorkerDesktopEndpoint(
     port: value.port,
     ...(passwordFilePath === undefined ? {} : { passwordFilePath }),
     ...(value.username === undefined ? {} : { username: value.username }),
+    ...(value.allowsResize === undefined ? {} : { allowsResize: value.allowsResize }),
     ...(value.apps === undefined ? {} : { apps }),
   };
 }

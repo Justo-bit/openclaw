@@ -183,6 +183,7 @@ describe("Crabbox macOS desktop descriptor", () => {
     expect(createCrabboxMacosDesktopEndpoint(leaseId, "ec2-user")).toEqual({
       protocol: "rfb",
       port: 5900,
+      allowsResize: false,
       username: "ec2-user",
       passwordFilePath: `/var/db/crabbox/openclaw-workers/${leaseId}/vnc.password`,
       apps: [
