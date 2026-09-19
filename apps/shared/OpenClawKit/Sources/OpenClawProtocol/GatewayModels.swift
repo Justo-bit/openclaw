@@ -18248,6 +18248,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
     public let agentscope: String?
+    public let creatorkey: String?
     public let startdate: String?
     public let enddate: String?
     public let mode: AnyCodable?
@@ -18263,6 +18264,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         key: String? = nil,
         agentid: String? = nil,
         agentscope: String? = nil,
+        creatorkey: String? = nil,
         startdate: String? = nil,
         enddate: String? = nil,
         mode: AnyCodable? = nil,
@@ -18277,6 +18279,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.agentscope = agentscope
+        self.creatorkey = creatorkey
         self.startdate = startdate
         self.enddate = enddate
         self.mode = mode
@@ -18293,6 +18296,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case agentscope = "agentScope"
+        case creatorkey = "creatorKey"
         case startdate = "startDate"
         case enddate = "endDate"
         case mode

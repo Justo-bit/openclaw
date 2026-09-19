@@ -18,7 +18,7 @@ import {
   resolveUsageCostPricingFingerprint,
 } from "./session-cost-usage-aggregation.js";
 import {
-  listUsageCountedTranscriptStats,
+  listUsageCountedTranscriptSources,
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
   resolveExistingUsageSessionFile,
@@ -51,7 +51,7 @@ export async function discoverAllSessions(params: {
   startMs?: number;
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptStats(params.agentId, {
+  const files = await listUsageCountedTranscriptSources(params.agentId, {
     minMtimeMs: params.startMs,
   });
 

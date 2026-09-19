@@ -76,8 +76,13 @@ describe("shared/usage-aggregates", () => {
       toolUsage: { totalCalls: 2, uniqueTools: 1, tools: [{ name: "read", count: 2 }] },
     });
     const original = structuredClone([first, second]);
-    accumulator.add({ usage: first, agentId: "first", channel: "discord" });
-    accumulator.add({ usage: second, agentId: "second", channel: "telegram" });
+    accumulator.add({ usage: first, agentId: "first", channel: "discord", creatorKey: "person" });
+    accumulator.add({
+      usage: second,
+      agentId: "second",
+      channel: "telegram",
+      creatorKey: "person",
+    });
     accumulator.add({ usage: usage({ totalTokens: 30 }) });
     accumulator.add({ usage: null, agentId: "cold" });
 
@@ -119,6 +124,10 @@ describe("shared/usage-aggregates", () => {
       ["first", 13],
     ]);
     expect(aggregates.byChannel.map(({ channel }) => channel)).toEqual(["telegram", "discord"]);
+    expect(aggregates.byCreator).toMatchObject([
+      { key: "person", sessionCount: 2, totals: { totalTokens: 20, totalCost: 6 } },
+      { key: '["unknown"]', sessionCount: 0, totals: { totalTokens: 30, totalCost: 0 } },
+    ]);
     expect([first, second]).toEqual(original);
   });
 
@@ -176,7 +185,12 @@ describe("shared/usage-aggregates", () => {
         latency: quick,
         dailyLatency: [{ date: later, ...quick }],
         dailyBreakdown: [
-          { ...usage({ totalTokens: 3, totalCost: 4 }), date: later, tokens: 3, cost: 4 },
+          {
+            ...usage({ input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
+            date: later,
+            tokens: 3,
+            cost: 4,
+          },
           { ...usage({ totalTokens: 5, totalCost: 6 }), date: earlier, tokens: 5, cost: 6 },
         ],
         dailyModelUsage: [
@@ -192,7 +206,12 @@ describe("shared/usage-aggregates", () => {
           { date: earlier, ...slow },
         ],
         dailyBreakdown: [
-          { ...usage({ totalTokens: 7, totalCost: 8 }), date: later, tokens: 7, cost: 8 },
+          {
+            ...usage({ cacheRead: 7, totalTokens: 7, totalCost: 8, cacheReadCost: 8 }),
+            date: later,
+            tokens: 7,
+            cost: 8,
+          },
         ],
         dailyMessageCounts: [
           { date: later, total: 9, user: 5, assistant: 4, toolCalls: 2, toolResults: 2, errors: 1 },
@@ -219,6 +238,20 @@ describe("shared/usage-aggregates", () => {
       { date: earlier, tokens: 5, cost: 6, messages: 0, toolCalls: 0, errors: 0 },
       { date: later, tokens: 10, cost: 12, messages: 9, toolCalls: 2, errors: 1 },
     ]);
+    expect(aggregates.costDaily).toEqual([
+      { date: earlier, ...usage({ totalTokens: 5, totalCost: 6 }) },
+      {
+        date: later,
+        ...usage({
+          input: 3,
+          cacheRead: 7,
+          totalTokens: 10,
+          totalCost: 12,
+          inputCost: 4,
+          cacheReadCost: 8,
+        }),
+      },
+    ]);
     expect(aggregates.modelDaily?.map(({ date, model }) => [date, model])).toEqual([
       [earlier, "one"],
       [later, "two"],
@@ -237,6 +270,8 @@ describe("shared/usage-aggregates", () => {
       byProvider: [],
       byAgent: [],
       byChannel: [],
+      byCreator: [],
+      costDaily: [],
       latency: undefined,
       dailyLatency: [],
       modelDaily: [],

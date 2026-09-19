@@ -10,6 +10,8 @@ import type {
 } from "../infra/session-cost-usage.types.js";
 import type { SessionUsageEntry, SessionsUsageAggregates } from "./usage-types.js";
 
+export const UNKNOWN_USAGE_CREATOR_KEY = '["unknown"]';
+
 type LatencyAccumulator = {
   count: number;
   sum: number;
@@ -98,7 +100,9 @@ export function createUsageAggregateAccumulator() {
   const providers = new Map<string, SessionModelUsage>();
   const agents = new Map<string, CostUsageTotals>();
   const channels = new Map<string, CostUsageTotals>();
+  const creators = new Map<string, NonNullable<SessionsUsageAggregates["byCreator"]>[number]>();
   const days = new Map<string, SessionsUsageAggregates["daily"][number]>();
+  const costDays = new Map<string, CostUsageTotals>();
   const dailyLatency = new Map<string, LatencyAccumulator>();
   const dailyModels = new Map<string, SessionDailyModelUsage>();
   const latency = createLatencyAccumulator();
@@ -118,7 +122,9 @@ export function createUsageAggregateAccumulator() {
     usage,
     agentId,
     channel,
-  }: Pick<SessionUsageEntry, "usage" | "agentId" | "channel">) {
+    createdActor,
+    creatorKey = UNKNOWN_USAGE_CREATOR_KEY,
+  }: Pick<SessionUsageEntry, "usage" | "agentId" | "channel" | "createdActor" | "creatorKey">) {
     if (!usage) {
       return;
     }
@@ -145,6 +151,17 @@ export function createUsageAggregateAccumulator() {
     }
     mergeGroupedTotals(agents, agentId, usage);
     mergeGroupedTotals(channels, channel, usage);
+    const creator = creators.get(creatorKey) ?? {
+      key: creatorKey,
+      ...(createdActor ? { actor: createdActor } : {}),
+      totals: createEmptyCostUsageTotals(),
+      sessionCount: 0,
+    };
+    addCostUsageTotals(creator.totals, usage);
+    if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+      creator.sessionCount += 1;
+    }
+    creators.set(creatorKey, creator);
     if (usage.latency && usage.latency.count > 0) {
       mergeLatency(latency, usage.latency);
     }
@@ -157,6 +174,7 @@ export function createUsageAggregateAccumulator() {
       const existing = getDay(day.date);
       existing.tokens += day.tokens;
       existing.cost += day.cost;
+      mergeGroupedTotals(costDays, day.date, day);
     }
     for (const day of usage.dailyMessageCounts ?? []) {
       const existing = getDay(day.date);
@@ -204,6 +222,16 @@ export function createUsageAggregateAccumulator() {
         channel,
         totals: groupTotals,
       })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      byCreator: Array.from(creators.values()).toSorted(
+        (a, b) =>
+          b.totals.totalCost - a.totals.totalCost ||
+          b.totals.totalTokens - a.totals.totalTokens ||
+          a.key.localeCompare(b.key),
+      ),
+      costDaily: Array.from(costDays, ([date, groupTotals]) => ({
+        date,
+        ...groupTotals,
+      })).toSorted((a, b) => a.date.localeCompare(b.date)),
       latency: latency.count > 0 ? summarizeLatency(latency) : undefined,
       dailyLatency: Array.from(dailyLatency, ([date, value]) => ({
         date,

@@ -65,6 +65,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       error: null,
       sessions: [],
       agents: [],
+      creatorOptions: [],
       sessionsLimitReached: false,
       totals: null,
       aggregates: null,
@@ -82,6 +83,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       selectedDays: [],
       selectedHours: [],
       agentId: null,
+      creatorKey: null,
       query: "",
       queryDraft: "",
       timeZone: "local",
@@ -127,6 +129,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onEndDateChange: noop,
         onScopeChange: noop,
         onAgentChange: noop,
+        onCreatorChange: noop,
         onRefresh: noop,
         onTimeZoneChange: noop,
         onToggleHeaderPinned: noop,
@@ -169,7 +172,6 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 
 it.each([
   { query: "provider:openai" },
-  { agentId: "main" },
   { selectedSessions: ["agent:main:matched"] },
   { selectedSessions: ["agent:main:matched", "agent:main:earlier"] },
   { query: "provider:openai", selectedHours: [12] },
@@ -350,7 +352,7 @@ describe("renderUsage", () => {
     }
   });
 
-  it("keeps insight aggregates scoped to the selected agent", () => {
+  it("filters visible sessions and insight aggregates with an explicit agent query", () => {
     const container = document.createElement("div");
     const sessions = [
       usageSession("agent:main:main", "main", "openai"),
@@ -366,7 +368,11 @@ describe("renderUsage", () => {
             totals: sessions[0]?.usage ?? null,
             aggregates: buildAggregatesFromSessions(sessions),
           },
-          filters: { ...createUsageProps().filters, agentId: "research" },
+          filters: {
+            ...createUsageProps().filters,
+            query: "agent:research",
+            queryDraft: "agent:research",
+          },
         }),
       ),
       container,
@@ -375,6 +381,9 @@ describe("renderUsage", () => {
     const providers = insightCard(container, "Top Providers");
     expect(providers?.textContent).toContain("anthropic");
     expect(providers?.textContent).not.toContain("openai");
+    const rows = container.querySelectorAll(".session-bar-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("research session");
   });
 
   it("does not fall back to global insights when a query matches no sessions", () => {
@@ -614,6 +623,8 @@ describe("renderUsage", () => {
     render(renderUsage(props), container);
     expect(values()).toEqual(["second", "first"]);
     props.filters.agentId = "main";
+    // The replacement report is already scoped by the Gateway.
+    props.data.sessions = props.data.sessions.filter((session) => session.agentId === "main");
     render(renderUsage(props), container);
     expect(values()).toEqual(["first"]);
     expect(container.querySelector(".usage-query-suggestion")).toBeNull();
@@ -732,71 +743,50 @@ describe("renderUsage", () => {
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
-  it("filters visible sessions when an agent scope is selected", () => {
+  it("keeps complete agent totals and history while limiting session-derived insights to the visible page", () => {
     const container = document.createElement("div");
+    const base = createUsageProps();
+    const totals: UsageTotals = {
+      input: 1_000,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 1_000,
+      totalCost: 10,
+      inputCost: 10,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 1,
+    };
+    const visibleDay = {
+      ...totals,
+      missingCostEntries: 0,
+      date: "2026-05-14",
+      input: 10,
+      totalTokens: 10,
+      totalCost: 0.1,
+      inputCost: 0.1,
+    };
 
     render(
       renderUsage(
         createUsageProps({
           data: {
-            ...createUsageProps().data,
-            agents: ["main", "research"],
-            sessions: [
-              {
-                key: "agent:main:main",
-                agentId: "main",
-                lastUpdated: Date.now(),
-                usage: {
-                  totalTokens: 10,
-                  totalCost: 0,
-                } as UsageProps["data"]["sessions"][number]["usage"],
-              } as UsageProps["data"]["sessions"][number],
-              {
-                key: "agent:research:main",
-                agentId: "research",
-                lastUpdated: Date.now(),
-                usage: {
-                  totalTokens: 20,
-                  totalCost: 0,
-                } as UsageProps["data"]["sessions"][number]["usage"],
-              } as UsageProps["data"]["sessions"][number],
-            ],
-          },
-          filters: {
-            ...createUsageProps().filters,
-            agentId: "research",
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("agent:research:main");
-    expect(container.textContent).not.toContain("agent:main:main");
-  });
-
-  it("keeps session-derived insights scoped to the visible page when the page limit is hit", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
+            ...base.data,
             sessionsLimitReached: true,
-            totals: {
-              input: 1_000,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 1_000,
-              totalCost: 10,
-              inputCost: 10,
-              outputCost: 0,
-              cacheReadCost: 0,
-              cacheWriteCost: 0,
-              missingCostEntries: 0,
-            },
+            totals,
+            costDaily: [
+              {
+                ...totals,
+                date: "2026-05-01",
+                input: 990,
+                totalTokens: 990,
+                totalCost: 9.9,
+                inputCost: 9.9,
+              },
+              visibleDay,
+            ],
             aggregates: {
               messages: {
                 total: 100,
@@ -817,7 +807,7 @@ describe("renderUsage", () => {
               {
                 key: "agent:main:visible",
                 agentId: "main",
-                lastUpdated: Date.now(),
+                updatedAt: Date.UTC(2026, 4, 14, 12),
                 usage: {
                   input: 10,
                   output: 0,
@@ -830,6 +820,7 @@ describe("renderUsage", () => {
                   cacheReadCost: 0,
                   cacheWriteCost: 0,
                   missingCostEntries: 0,
+                  dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
                   messageCounts: {
                     total: 2,
                     user: 1,
@@ -839,8 +830,14 @@ describe("renderUsage", () => {
                     errors: 0,
                   },
                 },
-              } as UsageProps["data"]["sessions"][number],
+              },
             ],
+          },
+          filters: {
+            ...base.filters,
+            agentId: "main",
+            startDate: "2026-05-01",
+            endDate: "2026-05-14",
           },
         }),
       ),
@@ -851,6 +848,21 @@ describe("renderUsage", () => {
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
     );
     expect(messagesValue?.textContent?.trim()).toBe("2");
+    expect(container.textContent).toContain(
+      "Cost data is missing for some or all sessions in this range.",
+    );
+    expect(
+      [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
+    ).toEqual(["1.0K", "$10.00", "1"]);
+    const firstDay = container.querySelector(".daily-bar-wrapper");
+    expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
+    expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
+    expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
+    expect(
+      container
+        .querySelector(".cost-window-card--range .cost-window-card__value")
+        ?.textContent?.trim(),
+    ).toBe("$10.00");
   });
 
   it("hides range-wide cost windows when a post-load filter is active", () => {
@@ -875,7 +887,6 @@ describe("renderUsage", () => {
     };
     const filterCases: Array<Partial<UsageProps["filters"]>> = [
       { query: "provider:openai" },
-      { agentId: "main" },
       { selectedDays: ["2026-05-14"] },
       { selectedHours: [12] },
       { selectedSessions: ["agent:main:main"] },

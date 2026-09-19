@@ -1,7 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   encodeSessionArchiveContent,
@@ -150,6 +151,7 @@ describe("usage archive identity", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await state.cleanup();
   });
 
@@ -423,7 +425,15 @@ describe("usage archive identity", () => {
             generated: true,
           });
           const sourceStats = await fs.stat(sessionFile);
-          const sessions = await discoverAllSessions({ agentId });
+          const readFile = vi.spyOn(fsSync, "readFileSync");
+          let sessions: Awaited<ReturnType<typeof discoverAllSessions>>;
+          try {
+            sessions = await discoverAllSessions({ agentId });
+            // Listing needs archive identity and modification time, not transcript payloads.
+            expect(readFile.mock.calls.filter(([file]) => file === sessionFile)).toEqual([]);
+          } finally {
+            readFile.mockRestore();
+          }
           expect(sessions).toEqual([
             {
               sessionId,
@@ -500,8 +510,9 @@ describe("usage archive identity", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         { messages: [{ message: assistant(17) }], touchSessionEntry: false },
       );
-      await writeArchive({ state, manager, encoding });
+      const mainArchive = await writeArchive({ state, manager, encoding });
       const workerArchive = await writeArchive({ state, manager, encoding, agentId: "worker" });
+      const readFile = vi.spyOn(fsSync, "readFileSync");
 
       const sessions = await discoverAllSessions({ agentId: "main" });
       expect.soft(sessions).toHaveLength(1);
@@ -517,6 +528,8 @@ describe("usage archive identity", () => {
           endMs: Date.now() + 86_400_000,
         }),
       ).toMatchObject({ totals: { totalTokens: 17 } });
+      expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
+      readFile.mockRestore();
       expect(await discoverAllSessions({ agentId: "worker" })).toEqual([
         expect.objectContaining({ sessionId, sessionFile: workerArchive }),
       ]);
@@ -642,7 +655,9 @@ describe("usage archive identity", () => {
     await fs.writeFile(sessionFile, "not a zstd frame");
 
     await expect(resolveUsageCostTranscriptFile(sessionFile)).resolves.toBeUndefined();
-    await expect(discoverAllSessions({ agentId: "main" })).rejects.toThrow();
+    expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
+      { sessionId: manager.getSessionId(), sessionFile },
+    ]);
     await expect(refreshCostUsageCacheForAgent({ agentId: "main", config })).rejects.toThrow();
     expect(readSessionCostUsageRollupRows("main")).toEqual(rows);
   });
