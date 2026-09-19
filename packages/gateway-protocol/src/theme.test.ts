@@ -6,6 +6,7 @@ import {
 import {
   isThemeId,
   normalizeThemeDefinition,
+  normalizeThemeMode,
   parseThemeDefinition,
   THEME_COLOR_KEYS,
 } from "./theme.js";
@@ -85,4 +86,21 @@ describe("portable theme definition", () => {
   ])("validates catalog identity %s", (id, expected) => {
     expect(isThemeId(id)).toBe(expected);
   });
+});
+
+it.each([
+  ["system", "system"],
+  ["light", "light"],
+  ["dark", "dark"],
+  ["DARK", undefined],
+  [" light ", undefined],
+  ["", undefined],
+  [null, undefined],
+  [undefined, undefined],
+  [0, undefined],
+  [false, undefined],
+  [[], undefined],
+  [{ mode: "light" }, undefined],
+])("normalizes only exact theme mode literals: %j", (input, expected) => {
+  expect(normalizeThemeMode(input)).toBe(expected);
 });

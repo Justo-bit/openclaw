@@ -15,13 +15,14 @@ export const BUILTIN_THEME_IDS = [
 
 export type BuiltinThemeId = (typeof BUILTIN_THEME_IDS)[number];
 export type ThemeId = BuiltinThemeId | `${string}/${string}`;
+export type ThemeMode = "system" | "light" | "dark";
 export const THEME_LOCAL_ID_MAX_LENGTH = 64;
 export const THEME_LOCAL_ID_PATTERN = new RegExp(
   `^[a-z0-9][a-z0-9_-]{0,${THEME_LOCAL_ID_MAX_LENGTH - 1}}$`,
 );
 
 export function isBuiltinThemeId(value: unknown): value is BuiltinThemeId {
-  return typeof value === "string" && BUILTIN_THEME_IDS.some((id) => id === value);
+  return BUILTIN_THEME_IDS.some((id) => id === value);
 }
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -39,4 +40,8 @@ export function isThemeId(value: unknown): value is ThemeId {
     /^@?[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/i.test(owner) &&
     THEME_LOCAL_ID_PATTERN.test(value.slice(separator + 1))
   );
+}
+
+export function normalizeThemeMode(value: unknown): ThemeMode | undefined {
+  return value === "system" || value === "light" || value === "dark" ? value : undefined;
 }

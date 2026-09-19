@@ -5,13 +5,14 @@ export {
   THEME_LOCAL_ID_PATTERN,
   isBuiltinThemeId,
   isThemeId,
+  normalizeThemeMode,
   type BuiltinThemeId,
   type ThemeId,
+  type ThemeMode,
 } from "./theme-ids.js";
 
 /** Portable theme data shared by profile preferences, plugins, and the Control UI. */
 export type ThemeColorMode = "light" | "dark";
-export type ThemeMode = "system" | ThemeColorMode;
 
 export const THEME_COLOR_KEYS = [
   "background",

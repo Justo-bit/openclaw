@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { isThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
@@ -25,7 +25,6 @@ export function isAppearancePref(
     key === "fontChat"
   );
 }
-const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
   configSync?: boolean;
@@ -65,7 +64,7 @@ export const SYNCED_PREFS = {
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
-    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
+    extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,

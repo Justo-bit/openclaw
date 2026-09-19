@@ -16,6 +16,7 @@ import {
   BUILTIN_THEMES,
   isThemeId,
   normalizeThemeDefinition,
+  normalizeThemeMode,
   parseThemeDefinition,
   THEME_LOCAL_ID_PATTERN,
   type ThemeCatalogEntry,
@@ -108,10 +109,6 @@ function descriptor(entry: ThemeCatalogEntry): ThemeDescriptor {
   return metadata;
 }
 
-function readMode(value: unknown): ThemeMode | undefined {
-  return value === "system" || value === "light" || value === "dark" ? value : undefined;
-}
-
 function selectionMode(
   modes: readonly ThemeColorMode[],
   requested: ThemeMode | null | undefined,
@@ -138,11 +135,11 @@ function selection(
   profileId: string | undefined,
 ): ThemeSelection {
   const id = isThemeId(entries["ui.theme"]) ? entries["ui.theme"] : undefined;
-  const mode = readMode(entries["ui.themeMode"]);
+  const mode = normalizeThemeMode(entries["ui.themeMode"]);
   const requestedId = id ?? config.ui?.prefs?.theme ?? "claw";
   const selected = catalog.find((theme) => theme.id === requestedId);
   const effectiveTheme = selected ?? BUILTIN_THEMES[0];
-  const selectedMode = mode ?? readMode(config.ui?.prefs?.themeMode) ?? "system";
+  const selectedMode = mode ?? normalizeThemeMode(config.ui?.prefs?.themeMode) ?? "system";
   const effectiveMode =
     effectiveTheme?.modes.length === 1
       ? effectiveTheme.modes[0]
@@ -293,7 +290,8 @@ export const themeHandlers: GatewayRequestHandlers = {
               selected.modes,
               mode,
               result.current.mode,
-              readMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
+              normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ??
+                "system",
             )
           : mode;
         await writeThemes(
@@ -359,7 +357,8 @@ export const themeHandlers: GatewayRequestHandlers = {
               (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
               mode,
               current.mode,
-              readMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ?? "system",
+              normalizeThemeMode(options.context.getRuntimeConfig().ui?.prefs?.themeMode) ??
+                "system",
             )
           : undefined;
         await writeThemes(

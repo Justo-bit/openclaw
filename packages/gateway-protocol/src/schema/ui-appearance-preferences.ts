@@ -1,4 +1,4 @@
-import { isThemeId } from "../theme-ids.js";
+import { isThemeId, normalizeThemeMode } from "../theme-ids.js";
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "./ui-appearance-typefaces.js";
 
 export const UI_APPEARANCE_PREFERENCE_KEYS = {
@@ -12,7 +12,6 @@ export const UI_APPEARANCE_PREFERENCE_KEYS = {
 export type UiAppearancePreferenceKey =
   (typeof UI_APPEARANCE_PREFERENCE_KEYS)[keyof typeof UI_APPEARANCE_PREFERENCE_KEYS];
 
-const UI_APPEARANCE_THEME_MODES = new Set(["light", "dark", "system"]);
 const UI_APPEARANCE_TYPEFACES = new Set<string>(UI_APPEARANCE_TYPEFACE_VALUES);
 
 export function normalizeUiAppearancePreference(
@@ -35,5 +34,5 @@ export function normalizeUiAppearancePreference(
     // Legacy browser-local "custom" never follows a profile without its palette.
     return isThemeId(value) ? value : undefined;
   }
-  return UI_APPEARANCE_THEME_MODES.has(value) ? value : undefined;
+  return normalizeThemeMode(value);
 }

@@ -1,11 +1,13 @@
 import {
   isBuiltinThemeId,
   isThemeId,
+  normalizeThemeMode,
   type ThemeId,
+  type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 export type ThemeName = ThemeId | "custom";
-export type ThemeMode = "system" | "light" | "dark";
+export type { ThemeMode };
 export type ResolvedTheme =
   | "dark"
   | "light"
@@ -32,8 +34,6 @@ export type ResolvedTheme =
   | "custom"
   | "custom-light";
 
-const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
-
 function prefersLightScheme(): boolean {
   if (typeof globalThis.matchMedia !== "function") {
     return false;
@@ -45,10 +45,8 @@ export function parseThemeSelection(
   themeRaw: unknown,
   modeRaw: unknown,
 ): { theme: ThemeName; mode: ThemeMode } {
-  const mode = typeof modeRaw === "string" ? modeRaw : "";
-
   const normalizedTheme = themeRaw === "custom" || isThemeId(themeRaw) ? themeRaw : "claw";
-  const normalizedMode = VALID_THEME_MODES.has(mode as ThemeMode) ? (mode as ThemeMode) : "system";
+  const normalizedMode = normalizeThemeMode(modeRaw) ?? "system";
 
   return { theme: normalizedTheme, mode: normalizedMode };
 }
@@ -63,12 +61,9 @@ function resolveMode(mode: ThemeMode): "light" | "dark" {
 export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   const resolvedMode = resolveMode(mode);
   if (theme === "claw") {
-    return resolvedMode === "light" ? "light" : "dark";
+    return resolvedMode;
   }
-  if (!isBuiltinThemeId(theme)) {
-    return resolvedMode === "light" ? "custom-light" : "custom";
-  }
-  const family = theme === "knot" ? "openknot" : theme;
+  const family = !isBuiltinThemeId(theme) ? "custom" : theme === "knot" ? "openknot" : theme;
   return resolvedMode === "light" ? `${family}-light` : family;
 }
 

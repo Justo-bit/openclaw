@@ -33,7 +33,6 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   const mode = catalogTheme?.mode ?? settings.themeMode;
   const resolvedTheme = resolveTheme(effectiveTheme, mode);
   root.dataset.themeId = effectiveTheme;
-  root.dataset.themeRequestedId = settings.theme;
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
@@ -103,15 +102,15 @@ export function createApplicationTheme(
         catalogLoadError = undefined;
       }
     } catch (error) {
-      catalogLoadError = {
-        themes: [],
-        error: error instanceof Error ? error.message : String(error),
-      };
-    } finally {
-      catalogLoading = false;
       if (!disposed) {
+        catalogLoadError = {
+          themes: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
         publish();
       }
+    } finally {
+      catalogLoading = false;
     }
   };
 
