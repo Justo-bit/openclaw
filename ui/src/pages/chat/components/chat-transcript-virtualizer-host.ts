@@ -297,6 +297,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           callback,
         ),
       measureElement: measureTranscriptRow,
+      // Lit commits measured rows asynchronously; leave the observer delivery cycle first.
+      useAnimationFrameWithResizeObserver: true,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
