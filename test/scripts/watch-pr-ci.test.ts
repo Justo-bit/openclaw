@@ -24,7 +24,7 @@ function runWatcher(
   ghScript: string,
   headSha = sha,
   options: string[] = [],
-  clock: "poll" | "wall" = "poll",
+  clock: "poll" | "wall" | { readClock: string } = "poll",
   envOverrides: NodeJS.ProcessEnv = {},
   notifierPath?: string,
 ) {
@@ -38,10 +38,11 @@ function runWatcher(
     // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
     writeFileSync(
       clockPath,
-      `import { syncBuiltinESMExports } from "node:module";
+      `import { readFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const now = ${clock === "wall" ? "Date.now" : "() => 0"};
+  const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
   const realSleep = timers.setTimeout;
   let waitedMs = 0;
   Date.now = () => now() + waitedMs;
@@ -468,6 +469,12 @@ console.log(JSON.stringify(value));
         const repo = "fixture-owner/fixture-repo";
         const pullPath = `repos/${repo}/pulls/42`;
         const notifierPath = notifier ? join(root, "notifier") : undefined;
+        const readClockPath = join(root, "read-clock");
+        if (slowQuota) {
+          // Charge request time independently of process startup so the diagnostic
+          // gets to exercise its real child timeout, even on a busy host.
+          writeFileSync(readClockPath, "0");
+        }
         writeFileSync(callsPath, "");
         const result = await runWatcher(
           `#!/usr/bin/env node
@@ -489,9 +496,9 @@ if (args[0] === "browse" && args[1] === "--no-browser") {
   process.exit(0);
 } else if (args[0] === "api" && args.includes(pullPath)) {
   if (args[args.indexOf("--hostname") + 1] !== ${JSON.stringify(host)}) throw new Error("wrong API host");
-  if (process.env.OCTOPOOL_FRESH !== "1") throw new Error("metadata read must revalidate mutable PR state");
+  if (args[args.indexOf("-H") + 1] !== "Cache-Control: max-age=0") throw new Error("metadata read must revalidate mutable PR state");
   if (${slowQuota} && reads > 0) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    fs.writeFileSync(${JSON.stringify(readClockPath)}, "500");
     console.error("HTTP 429 Too Many Requests");
     process.exit(1);
   }
@@ -512,7 +519,7 @@ console.log(JSON.stringify(value));
 `,
           sha,
           ["--repo", repo, "--completion", "ci-run"],
-          slowBrowse || slowQuota ? "wall" : "poll",
+          slowQuota ? { readClock: readClockPath } : slowBrowse ? "wall" : "poll",
           { OPENCLAW_PR_LOCK_NOTIFY_FD: notifier ? "3" : undefined },
           notifierPath,
         );

@@ -181,7 +181,7 @@ function option(args, name) {
   return index < 0 ? undefined : args[index + 1];
 }
 
-function api(repo, endpoint, route, paginate = false, readOptions = () => ({})) {
+function api(repo, endpoint, route, paginate = false, options = {}) {
   return execPrGhJson(
     [
       "api",
@@ -189,9 +189,9 @@ function api(repo, endpoint, route, paginate = false, readOptions = () => ({})) 
       repo.host,
       endpoint,
       ...(paginate ? ["--paginate", "--slurp"] : []),
-      ...(route === "plain" ? ["-H", "Cache-Control: max-age=0"] : []),
+      ...(route === "plain" || options.revalidate ? ["-H", "Cache-Control: max-age=0"] : []),
     ],
-    { ...readOptions(), stdio: ["ignore", "pipe", "pipe"] },
+    { ...options.readOptions?.(), stdio: ["ignore", "pipe", "pipe"] },
     route,
   );
 }
@@ -229,11 +229,11 @@ function selectFields(record, fields, kind) {
   );
 }
 
-function readPr(repo, pr, fields, route, readOptions = () => ({})) {
+function readPr(repo, pr, fields, route, options = {}) {
   if (!/^[1-9][0-9]*$/.test(pr)) {
     throw new Error("Expected a positive PR number.");
   }
-  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route, false, readOptions);
+  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route, false, options);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("GitHub did not return one PR JSON object.");
   }
@@ -289,7 +289,7 @@ function readPr(repo, pr, fields, route, readOptions = () => ({})) {
   };
   if (fields.includes("files")) {
     result.files = pageItems(
-      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true, readOptions),
+      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true, options),
     ).map((file) => ({
       path: file.filename,
       additions: file.additions,
@@ -300,11 +300,11 @@ function readPr(repo, pr, fields, route, readOptions = () => ({})) {
   if (fields.includes("statusCheckRollup")) {
     const commit = `repos/${repo.name}/commits/${record.head.sha}`;
     const checks = pageItems(
-      api(repo, `${commit}/check-runs?filter=latest&per_page=100`, route, true, readOptions),
+      api(repo, `${commit}/check-runs?filter=latest&per_page=100`, route, true, options),
       "check_runs",
     );
     const statuses = pageItems(
-      api(repo, `${commit}/status?per_page=100`, route, true, readOptions),
+      api(repo, `${commit}/status?per_page=100`, route, true, options),
       "statuses",
     );
     result.statusCheckRollup = [
@@ -332,7 +332,7 @@ function readPr(repo, pr, fields, route, readOptions = () => ({})) {
 
 export function readPrMetadata(pr, repository, fields, readOptions = () => ({})) {
   const repo = repositoryLocator(repository, "read", readOptions);
-  return readPr(repo, String(pr), fields, "read", readOptions);
+  return readPr(repo, String(pr), fields, "read", { readOptions, revalidate: true });
 }
 
 function main([route, ...args]) {

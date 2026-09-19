@@ -410,10 +410,9 @@ function readPr(pr: number, repo: string, completion: string, deadline?: number)
     // Repository resolution and metadata share one read budget, including diagnostics.
     const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
     return RollupPageSchema.parse(
-      readPrMetadata(pr, repo, ["state", "mergeable", "headRefOid"], () => ({
-        ...ghReadOptions(readDeadline),
-        env: { ...process.env, OCTOPOOL_FRESH: "1" },
-      })),
+      readPrMetadata(pr, repo, ["state", "mergeable", "headRefOid"], () =>
+        ghReadOptions(readDeadline),
+      ),
     );
   }
   return RollupPageSchema.parse(
