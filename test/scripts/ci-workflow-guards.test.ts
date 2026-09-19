@@ -19624,10 +19624,16 @@ it.each(["publish", "promote"])(
         runInNewContext(finalize.if.replace(/^\$\{\{|\}\}$/gu, ""), {
           always: () => true,
           contains: (value: string, part: string) => value.includes(part),
-          inputs: { tag: "v2026.9.4", prepared_plugins: "", publish_openclaw_npm: true },
+          inputs: {
+            tag: "v2026.9.4",
+            prepared_plugins: "",
+            publish_openclaw_npm: true,
+            finalize_release_before_docker: false,
+          },
           needs: {
             publish: { result: "success" },
             publish_docker: { result: "success" },
+            finalize_github_release_before_docker: { result: "skipped" },
             verify: { result: "success" },
             [approvalId]: { result },
           },

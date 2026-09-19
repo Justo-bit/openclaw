@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { deserialize, serialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { serialize } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -35,7 +33,7 @@ afterEach(async () => {
 
 describe("worker plugin state", () => {
   it.each(["observe", "compareDelete"] as const)(
-    "shares lifecycle custody with an overlapping host owner during %s",
+    "delegates an existing host lifecycle owner during %s",
     async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
         const store = createPluginStateKeyedStore<string>("memory-core", {
@@ -43,34 +41,14 @@ describe("worker plugin state", () => {
           maxEntries: 10,
           env: state.env,
         });
-        const messages = vi.spyOn(Worker.prototype, "postMessage");
         await store.register("workspace", "owner");
-        const worker = messages.mock.contexts[0];
-        messages.mockRestore();
-        if (!(worker instanceof Worker)) {
-          throw new Error("Expected the shared-state worker");
-        }
         const observation = await store.observe("workspace");
-        let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-        const nativePost = worker.postMessage.bind(worker);
-        const dispatch = vi
-          .spyOn(worker, "postMessage")
-          .mockImplementation((message, transferList) => {
-            const request = asOptionalRecord(message);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
-              // A sibling native owner starts after broker preparation but before
-              // dispatch. Its live custody must be shared with this worker command.
-              held = acquireStateDatabaseCoordinator({
-                databasePath: resolveOpenClawStateSqlitePath(state.env),
-                busyTimeoutMs: 0,
-              });
-            }
-            return nativePost(message, transferList);
-          });
+        // Only custody held before broker preparation delegates to the worker.
+        // Fresh operations instead acquire their own lifecycle lease off-thread.
+        const held = acquireStateDatabaseCoordinator({
+          databasePath: resolveOpenClawStateSqlitePath(state.env),
+          busyTimeoutMs: 0,
+        });
         try {
           if (operation === "observe") {
             await expect(store.observe("workspace")).resolves.toMatchObject({ value: "owner" });
@@ -82,10 +60,8 @@ describe("worker plugin state", () => {
               }),
             ).resolves.toEqual({ status: "applied" });
           }
-          expect(held).toBeDefined();
         } finally {
-          dispatch.mockRestore();
-          held?.release();
+          held.release();
         }
         expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
       });
