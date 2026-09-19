@@ -29,6 +29,7 @@ import {
   type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { readUiCss } from "./chat-responsive.styles.test-support.ts";
 
 const VIEWPORTS = [
   [320, 568],
@@ -64,7 +65,6 @@ let sharedAppPage: Page | null = null;
 let sharedAppPagePromise: Promise<Page> | null = null;
 const sharedAppPageErrors: string[] = [];
 let realChatServer: ControlUiE2eServer | null = null;
-let cachedUiCss: string | null = null;
 
 const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
@@ -280,39 +280,6 @@ function expectControlRect(rect: ControlRect | null, label: string): ControlRect
   }
   expectFiniteRect(rect);
   return rect;
-}
-
-function readUiCss(): string {
-  if (cachedUiCss !== null) {
-    return cachedUiCss;
-  }
-  const files = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/layout.mobile.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/chat/composer-queue.css",
-    "ui/src/styles/chat/progress-card.css",
-    "ui/src/styles/chat/composer-progress.css",
-    "ui/src/styles/chat/composer-context-strip.css",
-    "ui/src/styles/chat/text.css",
-    "ui/src/styles/chat/grouped.css",
-    "ui/src/styles/chat/author-avatar.css",
-    "ui/src/styles/chat/tool-cards.css",
-    "ui/src/styles/chat/working-indicator.css",
-    "ui/src/styles/chat/question-card.css",
-    "ui/src/styles/rail-header.css",
-    "ui/src/styles/chat/sidebar.css",
-    "ui/src/styles/chat/session-rail.css",
-    "ui/src/styles/chat/side-panel.css",
-  ];
-  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
-  return cachedUiCss;
 }
 
 function iconSvg() {
