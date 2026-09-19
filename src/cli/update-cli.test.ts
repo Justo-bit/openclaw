@@ -4861,6 +4861,7 @@ describe("update-cli", () => {
   it.each([false, true])(
     "reports successful plugin source fallback without failing the core update (json=%s)",
     async (json) => {
+      mockGitUpdateAfterMutation();
       const fallback = "@openclaw/demo unavailable; using clawhub:@openclaw/demo instead.";
       syncPluginsForUpdateChannel.mockImplementationOnce(
         async (params: {
@@ -5119,6 +5120,7 @@ describe("update-cli", () => {
   });
 
   it("includes colored ClawHub trust warnings in json post-core plugin output", async () => {
+    mockGitUpdateAfterMutation();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
@@ -5286,6 +5288,7 @@ describe("update-cli", () => {
   });
 
   it("marks disabled-after-failure plugin skips as post-update warnings", async () => {
+    mockGitUpdateAfterMutation();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
