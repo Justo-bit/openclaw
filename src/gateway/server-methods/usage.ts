@@ -310,7 +310,6 @@ export const usageHandlers: GatewayRequestHandlers = {
             groupingMode,
             startMs,
             endMs,
-            limit,
             visibilityFilter,
           });
           const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
@@ -333,7 +332,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             includeUntimestamped,
             dayBucket,
           });
-          loadUsageSessionContext(mergedEntries, visibilityFilter);
+          loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
 
           for (const [entryIndex, { entry: merged, creator }] of matchedEntries.entries()) {
             const agentId = merged.agentId;

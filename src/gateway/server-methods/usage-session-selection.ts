@@ -198,7 +198,6 @@ export async function selectUsageSessions(params: {
   groupingMode: UsageGroupingMode;
   startMs: number;
   endMs: number;
-  limit: number;
   visibilityFilter?: (key: string, entry: SessionEntry) => boolean;
 }): Promise<UsageSessionSelection[]> {
   const {
@@ -391,11 +390,8 @@ export async function selectUsageSessions(params: {
   // Sort by most recent first
   mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-  // Only response rows need context reports; totals still include every selected instance.
-  for (const [index, row] of mergedEntries.entries()) {
-    if (index >= params.limit) {
-      break;
-    }
+  // Carry physical targets through filtering; only emitted rows will hydrate context.
+  for (const row of mergedEntries) {
     const target = targetsBySessionKey.get(row.key);
     if (!target) {
       continue;
