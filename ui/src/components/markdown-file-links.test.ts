@@ -275,7 +275,7 @@ describe("file links", () => {
     "~/example.com/guide.md",
     "/example.com/guide.md",
     "C:/example.com/guide.md",
-    ".github/workflows/ci.yml",
+    ".config/workflows/check.yml",
     "src/components.v2/Button.tsx",
     "src.v2/app.ts",
   ])("keeps the local path %s addressable", (path) => {
