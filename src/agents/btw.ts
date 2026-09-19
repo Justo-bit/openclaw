@@ -409,12 +409,9 @@ async function resolveBtwPreparedRuntimeAuth(
 
 async function resolveRuntimeModel(params: {
   abortSignal?: AbortSignal;
-  cfg: OpenClawConfig;
   provider: string;
   model: string;
   agentId?: string;
-  agentDir: string;
-  workspaceDir?: string;
   sessionEntry?: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
@@ -433,9 +430,7 @@ async function resolveRuntimeModel(params: {
   modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 }> {
   const preparedModelRuntime = params.preparedModelRuntime;
-  const cfg = preparedModelRuntime.config;
-  const agentDir = preparedModelRuntime.agentDir;
-  const workspaceDir = preparedModelRuntime.workspaceDir;
+  const { config: cfg, agentDir, workspaceDir } = preparedModelRuntime;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
   const resolution = await resolveModelAsync(params.provider, params.model, agentDir, cfg, {
     abortSignal: params.abortSignal,
@@ -789,12 +784,9 @@ export async function runBtwSideQuestion(
       if (!runtimeSelection) {
         runtimeSelection = await resolveRuntimeModel({
           abortSignal: params.opts?.abortSignal,
-          cfg: params.cfg,
           provider: params.provider,
           model: params.model,
           agentId: sessionAgentId,
-          agentDir: params.agentDir,
-          workspaceDir,
           sessionEntry: params.sessionEntry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,

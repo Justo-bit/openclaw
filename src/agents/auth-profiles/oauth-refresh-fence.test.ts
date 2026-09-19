@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { OAuthManagerRefreshError } from "./oauth-manager-errors.js";
+import { createOAuthManager } from "./oauth-manager.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { refreshSerializedOAuthCredential } from "./oauth-refresh-fence.js";
 import {
@@ -361,10 +362,9 @@ describe("OAuth refresh generation fence", () => {
 
       if (outcome === "throw") {
         await expect(run).rejects.toSatisfy((caught: unknown) => {
-          expect(caught).toBeInstanceOf(AggregateError);
-          const aggregate = caught as AggregateError;
-          expect(aggregate.errors).toEqual([initiatingError, terminalError]);
-          expect(aggregate.cause).toBe(initiatingError);
+          assert(caught instanceof AggregateError);
+          expect(caught.errors).toEqual([initiatingError, terminalError]);
+          expect(caught.cause).toBe(initiatingError);
           return true;
         });
       } else {

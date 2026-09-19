@@ -526,6 +526,13 @@ describe("describeImageWithModelCore", () => {
       await owner.drain();
     }
 
+    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
+    const requestSignal = requireRecord(completeCall[2], "complete options").signal;
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal).toBe(
+      requestSignal,
+    );
+    expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
     expect(result.text).toBe("workspace ok");
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
@@ -534,7 +541,7 @@ describe("describeImageWithModelCore", () => {
         agentDir: "/tmp/openclaw-agent",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
-      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
+      expect.objectContaining({ catalogMode: "static", abortSignal: requestSignal }),
     );
     expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
@@ -543,6 +550,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: requestSignal,
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
@@ -610,6 +618,16 @@ describe("describeImageWithModelCore", () => {
       text: "normalized ok",
       model: "gpt-5.4",
     });
+    const [completeModel, , completeOptions] = expectDefined(
+      completeMock.mock.calls[0],
+      "complete call 0",
+    );
+    const requestSignal = requireRecord(completeOptions, "complete options").signal;
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal).toBe(
+      requestSignal,
+    );
+    expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelAsyncMock).toHaveBeenCalledExactlyOnceWith(
       "openai",
@@ -617,6 +635,7 @@ describe("describeImageWithModelCore", () => {
       "/tmp/openclaw-agent",
       {},
       {
+        abortSignal: requestSignal,
         modelIdSource: "selected",
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
@@ -625,7 +644,6 @@ describe("describeImageWithModelCore", () => {
         skipAgentDiscovery: true,
       },
     );
-    const [completeModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
     expect(requireRecord(completeModel, "complete model").api).toBe("openai-responses");
   });
 

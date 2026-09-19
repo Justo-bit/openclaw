@@ -18,11 +18,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type {
-  ImageCompressionModelPolicy,
-  ImageCompressionPolicy,
-  WebMediaResult,
-} from "../../media/web-media.js";
+import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -452,9 +448,9 @@ async function resolveImageCompressionPolicy(params: {
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
-  const models: ImageCompressionModelPolicy[] = await Promise.all(
-    modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
-      return resolveImageCompressionModelPolicy({
+  const models = await Promise.all(
+    modelCandidates.map((candidate) =>
+      resolveImageCompressionModelPolicy({
         signal: params.signal,
         cfg: params.cfg,
         provider: candidate.provider,
@@ -465,8 +461,8 @@ async function resolveImageCompressionPolicy(params: {
         deps: {
           resolveModelAsync: imageToolProviderDeps.resolveModelAsync,
         },
-      });
-    }),
+      }),
+    ),
   );
   return {
     imageCount: params.imageCount,
@@ -525,8 +521,6 @@ function resolveImageToolTimeoutMs(params: {
     DEFAULT_TIMEOUT_SECONDS.image,
   );
 }
-
-type ImageSandboxConfig = MediaToolSandbox;
 
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
@@ -666,7 +660,7 @@ export function createImageTool(options?: {
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  sandbox?: ImageSandboxConfig;
+  sandbox?: MediaToolSandbox;
   cwd?: string;
   fsPolicy?: ToolFsPolicy;
   agentChannel?: string | null;

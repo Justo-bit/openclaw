@@ -20,7 +20,8 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { OAuthManagerRefreshError } from "./oauth-manager-errors.js";
+import { createOAuthManager } from "./oauth-manager.js";
 import {
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
