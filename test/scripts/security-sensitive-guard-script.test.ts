@@ -171,6 +171,25 @@ describe("security-sensitive guard entry point", () => {
     expect(result.comment).toContain("Informational");
   });
 
+  it.each([
+    { script: "security-sensitive-guard" as const, filename: "src/gateway/auth.ts" },
+    { script: "dependency-guard" as const, filename: "pnpm-workspace.yaml" },
+  ])("$script reports GitHub errors when notice writes are forbidden", ({ script, filename }) => {
+    const result = runGuard({
+      script,
+      files: [{ filename }],
+      authorRole: "maintain",
+      comments: [],
+      routes: {
+        "POST /repos/openclaw/openclaw/issues/7/comments": { httpError: 403 },
+        "POST /repos/openclaw/openclaw/issues/7/labels": { httpError: 403 },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/Skipping label .*Fixture API failure/u);
+    expect(result.stderr).toMatch(/Skipping comment creation.*Fixture API failure/u);
+  });
+
   it("does not transfer a maintainer author's exemption to a duplicate PR with the same head", () => {
     const duplicatePullRequest = {
       number: 8,

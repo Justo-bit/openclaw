@@ -111,6 +111,28 @@ describe("memory workspace lock comparisons", () => {
     expect(await store.lookup(key)).toBeUndefined();
   });
 
+  it("reports the observed holder when the acquisition bound expires", async () => {
+    const store = createLockStore();
+    const acquiredAt = Date.now();
+    const holder = { owner: `${process.ppid}:active`, acquiredAt };
+    await store.register(key, holder);
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(acquiredAt - 10_000)
+      .mockReturnValue(acquiredAt);
+    const task = vi.fn(async () => "unreachable");
+    try {
+      await expect(withMemoryWorkspaceLock(key, task)).rejects.toMatchObject({
+        code: "MEMORY_WORKSPACE_LOCK_HELD",
+        outcome: { kind: "held", holder: { owner: holder.owner, epoch: acquiredAt } },
+      });
+      expect(task).not.toHaveBeenCalled();
+      expect(await store.lookup(key)).toEqual(holder);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each([
     { owner: "replacement-owner", acquiredAt: expected.acquiredAt },
     { owner: expected.owner, acquiredAt: expected.acquiredAt + 1 },
