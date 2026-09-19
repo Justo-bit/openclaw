@@ -61,7 +61,6 @@ import {
   dropLegacySessionTranscriptSearchSchema,
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
-  hasPendingConversationProgressSnapshotColumn,
   hasPendingSessionConversationRouteContextColumn,
   hasPendingSessionProjectColumn,
   hasPendingSessionTranscriptContextEligibilityColumn,
@@ -446,7 +445,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       hasPendingSessionKeyContractSchemaMigration(database) ||
       hasRetiredAgentStateLeaseSchema(database) ||
       hasPendingSessionConversationRouteContextColumn(database) ||
-      hasPendingConversationProgressSnapshotColumn(database) ||
       hasPendingSessionTranscriptContextEligibilityColumn(database) ||
       hasPendingInputConsumptionColumnMigration(database) ||
       hasPendingSessionProjectColumn(database));

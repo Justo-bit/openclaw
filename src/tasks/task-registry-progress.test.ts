@@ -34,6 +34,7 @@ import {
 import type * as ProgressRuntime from "./task-registry-progress-runtime.js";
 import type { TaskProgressPublication } from "./task-registry-progress-runtime.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
+import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import { resetTaskRegistryListenerState } from "./task-registry-state.js";
 import {
   createTaskRecord,
@@ -46,7 +47,9 @@ import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import {
   configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
+  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -72,6 +75,8 @@ const origin = {
 };
 const receipts = new Map<string, ProgressContinuationReceipt>();
 const publications: Array<TaskProgressPublication & { messageId: string }> = [];
+const sendMessage = vi.fn<TaskRegistryDeliveryRuntime["sendMessage"]>();
+const notifications: Array<Parameters<TaskRegistryDeliveryRuntime["sendMessage"]>[0]> = [];
 const runContextClaims: Array<{ runId: string; claim: string }> = [];
 
 function receipt(messageId = "existing-parent-card"): ProgressContinuationReceipt {
@@ -219,8 +224,22 @@ beforeEach(async () => {
   subagentRuns.clear();
   receipts.clear();
   publications.length = 0;
+  notifications.length = 0;
   configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
   configureTaskFlowRegistryRuntime({ store: createInMemoryTaskFlowRegistryStore() });
+  sendMessage.mockReset().mockImplementation(async (params) => {
+    await params.onPlatformSendDispatch?.();
+    params.assertDirectAdapterHandoff?.();
+    notifications.push(params);
+    return {
+      channel: origin.channel,
+      to: params.to,
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "sent",
+    };
+  });
+  setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
   runtime.adoptTaskProgressMessage.mockReset().mockImplementation(async (params) => {
     params.assertCurrent();
     receipts.set(params.operationId, structuredClone(params.receipt));
@@ -256,6 +275,7 @@ beforeEach(async () => {
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
+  resetTaskRegistryDeliveryRuntimeForTests();
   for (const { runId, claim } of runContextClaims) {
     releaseAgentRunContext(runId, claim);
   }
@@ -410,35 +430,154 @@ describe("adopted requester progress", () => {
     expect(publications.at(-1)?.content).toContain("Worker (failed)");
   });
 
-  it.each(["no card", "adoption refused", "missing snapshot"] as const)(
-    "never starts a replacement card when there is %s",
+  it.each(["no card", "adoption refused"] as const)(
+    "coalesces opt-in notifications without creating a retained receipt after %s",
     async (state) => {
-      const item = child("Worker");
-      if (state === "no card") {
-        expect(settle([item])).toBe(true);
-      } else if (state === "adoption refused") {
+      const first = child("First");
+      const second = child("Second");
+      if (state === "adoption refused") {
         runtime.adoptTaskProgressMessage.mockResolvedValueOnce(false);
-        const capability = continuation([item])!;
+        const capability = continuation([first, second])!;
         expect(await capability.adopt(receipt())).toBe(false);
         expect(await capability.adopt(receipt("retry-card"))).toBe(false);
         capability.close();
-        expect(settle([item])).toBe(true);
       } else {
-        await adopt([item]);
-        receipts.clear();
+        first.entry.completionRequesterSessionId = undefined;
+        second.entry.completionRequesterSessionId = undefined;
       }
-      tool(item.entry);
-      await vi.advanceTimersByTimeAsync(30_000);
+      tool(first.entry);
+      expect(settle([first, second])).toBe(true);
+      for (let index = 0; index < 3; index++) {
+        tool(second.entry, index);
+      }
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(notifications).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({
+        ...origin,
+        mirror: { sessionKey: PARENT, agentId: "main" },
+      });
+      expect(notifications[0]!.content).toContain("First");
+      expect(notifications[0]!.content).toContain("Second");
+      expect(notifications[0]!.content).toContain("public-notes-2.txt");
+      expect(notifications[0]!.content).not.toContain("private-");
+      expect(getTaskById(first.task.taskId)).toMatchObject({
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      expect(first.entry.requesterSettleWake).toMatchObject({ status: "pending", attemptCount: 0 });
+      expect(peekSystemEvents(PARENT)).toEqual([]);
       expect(runtime.publishTaskProgressMessage).not.toHaveBeenCalled();
+      expect(receipts.size).toBe(0);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(notifications).toHaveLength(1);
+    },
+  );
+
+  it("does not replace an identified retained card whose snapshot is missing", async () => {
+    const item = child("Worker");
+    await adopt([item]);
+    receipts.clear();
+    tool(item.entry);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runtime.publishTaskProgressMessage).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("excludes completed children and their pending activity from generic notifications", async () => {
+    const first = child("Finished");
+    const second = child("Active");
+    expect(settle([first, second])).toBe(true);
+    tool(first.entry, 1);
+    tool(second.entry, 2);
+    markTaskTerminalById({ taskId: first.task.taskId, status: "succeeded", endedAt: Date.now() });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.content).toContain("Active");
+    expect(notifications[0]!.content).toContain("public-notes-2.txt");
+    expect(notifications[0]!.content).not.toMatch(/Finished|public-notes-1|succeeded/);
+    expect(getTaskById(second.task.taskId)).toMatchObject({
+      status: "running",
+      deliveryStatus: "pending",
+    });
+  });
+
+  it.each(["rearm", "membership", "finish", "resume", "dispatch"] as const)(
+    "drops generic progress after its yielded authority changes: %s",
+    async (change) => {
+      const item = child("Worker");
+      expect(settle([item])).toBe(true);
+      tool(item.entry);
+      switch (change) {
+        case "rearm":
+          item.entry.requesterSettleWake!.rearmGeneration = 2;
+          break;
+        case "membership":
+          item.entry.requesterSettleWake!.batchRunIds!.push("different-wave");
+          break;
+        case "finish":
+          markTaskTerminalById({
+            taskId: item.task.taskId,
+            status: "succeeded",
+            endedAt: Date.now(),
+          });
+          break;
+        case "resume": {
+          const runId = "resumed-requester";
+          const claim = claimAgentRunContext(
+            runId,
+            { sessionKey: PARENT, agentId: "main", projectSessionActive: true },
+            { trackOwner: true, ownsContext: true },
+          );
+          if (!claim) {
+            throw new Error("Expected requester execution ownership");
+          }
+          runContextClaims.push({ runId, claim });
+          break;
+        }
+        case "dispatch":
+          item.entry.requesterSettleWake!.status = "dispatching";
+          break;
+      }
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(sendMessage).not.toHaveBeenCalled();
       expect(publications).toEqual([]);
     },
   );
+
+  it("rechecks generic authority at transport and carries newer activity to the next notification", async () => {
+    const first = child("First");
+    expect(settle([first])).toBe(true);
+    const send = sendMessage.getMockImplementation()!;
+    sendMessage.mockImplementationOnce(async (params) => {
+      first.entry.requesterSettleWake!.rearmGeneration = 2;
+      return send(params);
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(notifications).toEqual([]);
+    const second = child("Second", { turn: "second-turn" });
+    expect(settle([second])).toBe(true);
+    sendMessage.mockImplementationOnce(async (params) => {
+      tool(second.entry, 2);
+      return send(params);
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(notifications).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(notifications).toHaveLength(2);
+    expect(notifications[1]!.content).toContain("public-notes-2.txt");
+    expect(receipts.size).toBe(0);
+  });
 
   it("keeps silent children silent and allows done-only children to continue an adopted card", async () => {
     const quiet = child("Quiet", { notifyPolicy: "silent" });
     expect(continuation([quiet])).toBeUndefined();
     expect(settle([quiet])).toBe(true);
     tool(quiet.entry);
+    const doneOnly = child("Done only", { notifyPolicy: "done_only", turn: "quiet-turn" });
+    expect(settle([doneOnly])).toBe(true);
+    tool(doneOnly.entry);
     const visible = child("Visible", { notifyPolicy: "done_only", turn: "next-turn" });
     await adopt([visible]);
     tool(visible.entry);
@@ -447,6 +586,7 @@ describe("adopted requester progress", () => {
     expect(publications[0]!.content).toContain("Visible");
     expect(publications[0]!.content).toContain("public-notes-1.txt");
     expect(publications[0]!.content).not.toContain("Quiet");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("rejects a retained capability after close and a second adoption after use", async () => {

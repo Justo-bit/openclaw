@@ -190,31 +190,6 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("delivers a yield acknowledgment despite private partial output in group message-tool-only mode", async () => {
-    const turn = createTurn();
-    turn.queued.originatingChatType = "group";
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-    const execution = createSettledExecution();
-    if (execution.outcome.kind === "settled") {
-      execution.outcome.result.meta = {
-        durationMs: 0,
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      };
-    }
-
-    expect(
-      await resolveFollowupDeliveryDecision({
-        turn,
-        execution,
-        accounting: createAccounting([{ text: "Private partial output." }]),
-      }),
-    ).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "Research started; results will follow." }],
-    });
-  });
-
   it("keeps ambient room-event finals silent", async () => {
     const turn = createTurn({
       queued: {
@@ -486,24 +461,6 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "silent" });
   });
 
-  it("delivers a sanitized terminal failure in message-tool-only mode", async () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = await resolveFollowupDeliveryDecision({
-      turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([], {
-        terminalFailurePayload: { text: "terminal failure", isError: true },
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "terminal failure", isError: true }],
-    });
-  });
-
   it.each([
     ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
     ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
@@ -586,24 +543,6 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("keeps a terminal failure when suppressed partial output is present", async () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = await resolveFollowupDeliveryDecision({
-      turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([{ text: "private partial" }], {
-        terminalFailurePayload: { text: "terminal failure", isError: true },
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "terminal failure", isError: true }],
-    });
-  });
-
   it("prefers terminal failure over stranded-text recovery", async () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -614,7 +553,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution,
-      accounting: createAccounting([], {
+      accounting: createAccounting([{ text: "private partial" }], {
         terminalFailurePayload: { text: "terminal failure", isError: true },
       }),
     });
@@ -768,30 +707,6 @@ describe("deliverFollowupDecision", () => {
     } finally {
       deliveryState.enqueue.mockReset();
     }
-  });
-
-  it("allows the latest same-channel dispatcher to recover a route failure", async () => {
-    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({
-      ok: false,
-      delivered: false,
-      error: "offline",
-    });
-    const turn = createTurn();
-    turn.queued.run.messageProvider = "discord";
-
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "same-channel reply" }] },
-      turn,
-      defaults: createDefaults(onBlockReply),
-      runId: "run-1",
-      runFollowup: vi.fn(async () => {}),
-    });
-
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "same-channel reply" }),
-    );
   });
 
   it("keeps block-status delivery out of the assistant transcript", async () => {

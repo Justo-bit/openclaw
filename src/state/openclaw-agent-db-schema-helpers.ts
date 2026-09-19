@@ -102,7 +102,6 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     "session_pending_inputs.consumed_event_id",
     "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
-    "conversation_deliveries.progress_snapshot_json",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
       ({ columnName, tableName }) => `${tableName}.${columnName}`,

@@ -18,7 +18,6 @@
     "projects-doctor",
     "projects-startup-migration",
     "taskflow-restoration",
-    "progress-receipt-restoration",
     "stale-source-plugin-shadow",
     "prerelease-plugin-registry",
     "tilde-log-path",

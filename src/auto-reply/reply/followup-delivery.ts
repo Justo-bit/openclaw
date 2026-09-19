@@ -240,28 +240,9 @@ export async function resolveFollowupDeliveryDecision(params: {
       hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
       result.didSendDeterministicApprovalPrompt === true,
   };
-  let waitingStatusPayload = accounting.terminalFailurePayload
+  const waitingStatusPayload = accounting.terminalFailurePayload
     ? undefined
     : buildWaitingStatusPayload(waitingStatusParams);
-  if (
-    !hasTerminalPayload &&
-    waitingStatusPayload &&
-    !result.meta?.yieldAcknowledgment?.trim() &&
-    result.acceptedSessionSpawns?.length
-  ) {
-    // Ordinary replies must not load the task presentation runtime.
-    const { prepareTaskProgressAcknowledgment } =
-      await import("../../tasks/task-registry-progress.js");
-    const preparedAcknowledgment = await prepareTaskProgressAcknowledgment({
-      requesterSessionKey:
-        turn.session.kind === "session" ? turn.session.key : turn.queued.run.sessionKey,
-      acceptedSessionSpawns: result.acceptedSessionSpawns,
-    });
-    waitingStatusPayload = buildWaitingStatusPayload({
-      ...waitingStatusParams,
-      preparedAcknowledgment,
-    });
-  }
   const fallbackPayload = accounting.terminalFailurePayload
     ? isInteractive && !hasCompletedTerminalDeliveryEvidence(result)
       ? sourcePolicy.sourceReplyDeliveryMode === "message_tool_only"

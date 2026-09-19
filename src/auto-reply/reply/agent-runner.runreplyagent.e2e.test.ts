@@ -4970,45 +4970,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it.each([
-    { label: "implicit continuation", meta: { continuationPending: true }, implicit: true },
-    { label: "yield without acknowledgment", meta: { yielded: true }, implicit: false },
-    {
-      label: "explicit acknowledgment",
-      meta: { yielded: true, yieldAcknowledgment: "Research started; results will follow." },
-      implicit: false,
-    },
-  ])("delivers one waiting status for $label", async ({ meta, implicit }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: { durationMs: 0, ...meta },
-      acceptedSessionSpawns: [
-        {
-          runId: "child-run",
-          childSessionKey: "agent:main:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      ],
-    });
-    const onPendingContinuation = vi.fn();
-    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
-
-    const result = await run();
-    expect(result).toMatchObject({
-      text:
-        meta.yieldAcknowledgment ??
-        "I’m continuing this work and will send the result when it is ready.",
-      replyToId: "msg",
-    });
-    expect(onPendingContinuation).toHaveBeenCalledOnce();
-    const metadata = getReplyPayloadMetadata(requireRecord(result, "waiting status"));
-    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(metadata?.continuationStatus).toBe(true);
-    expect(onPendingContinuation.mock.calls[0]).toEqual(
-      implicit ? [{ settle: expect.any(Function) }] : [],
-    );
-  });
-
-  it.each([
     { label: "default status" },
     { label: "explicit status", acknowledgment: "Research started; results will follow." },
     {
@@ -5061,42 +5022,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     const result = await run();
-    const payload = Array.isArray(result) ? result[0] : result;
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
 
-    expect(payload).toMatchObject({ text: "Research started; results will follow." });
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
-  it("preserves a visible final reply instead of adding a yield acknowledgment", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Research already finished." }],
-      meta: {
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      },
-    });
-    const { run } = createMinimalRun();
-
-    await expect(run()).resolves.toMatchObject({
-      text: "Research already finished.",
-      replyToId: "msg",
-    });
-  });
-
-  it("delivers a yield acknowledgment when the only payload is filtered", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "internal reasoning", isReasoning: true }],
-      meta: {
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      },
-    });
-    const { run } = createMinimalRun();
-
-    await expect(run()).resolves.toMatchObject({
-      text: "Research started; results will follow.",
-      replyToId: "msg",
-    });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Research started; results will follow.",
+    ]);
+    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.deliverDespiteSourceReplySuppression).toBe(
+      true,
+    );
   });
 
   it.each([

@@ -176,7 +176,7 @@ export async function prepareReplyAgentPayloads(state: {
       committedMessagingToolSourceReplyDelivery ||
       runResult.didSendDeterministicApprovalPrompt === true,
   };
-  let waitingStatusPayload = terminalFailurePayload
+  const waitingStatusPayload = terminalFailurePayload
     ? undefined
     : buildWaitingStatusPayload(waitingStatusParams);
   const retryBlockedSourceReply =
@@ -472,18 +472,6 @@ export async function prepareReplyAgentPayloads(state: {
     replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
     didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
   } else if (waitingStatusPayload && !hasTerminalReplyPayload) {
-    if (!runResult.meta?.yieldAcknowledgment?.trim() && runResult.acceptedSessionSpawns?.length) {
-      // Ordinary replies must not load the task presentation runtime.
-      const { prepareTaskProgressAcknowledgment } =
-        await import("../../tasks/task-registry-progress.js");
-      const preparedAcknowledgment = await prepareTaskProgressAcknowledgment({
-        requesterSessionKey: sessionKey ?? followupRun.run.sessionKey,
-        acceptedSessionSpawns: runResult.acceptedSessionSpawns,
-      });
-      waitingStatusPayload =
-        buildWaitingStatusPayload({ ...waitingStatusParams, preparedAcknowledgment }) ??
-        waitingStatusPayload;
-    }
     const acknowledgmentResult = await buildFinalPayloads([waitingStatusPayload]);
     replyPayloads =
       acknowledgmentResult.replyPayloads.length > 0

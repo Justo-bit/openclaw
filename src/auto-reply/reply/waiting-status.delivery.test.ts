@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import type { ProgressContinuationReceipt } from "../../channels/progress-continuation.js";
 import type * as ProgressRequester from "../../tasks/task-progress-requester.js";
-import type * as ProgressCoordinator from "../../tasks/task-registry-progress.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -20,16 +19,11 @@ import {
 } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
-const { prepareProgress, createContinuation, settleRequester } = vi.hoisted(() => ({
-  prepareProgress: vi.fn<typeof ProgressCoordinator.prepareTaskProgressAcknowledgment>(),
+const { createContinuation, settleRequester } = vi.hoisted(() => ({
   createContinuation: vi.fn<typeof ProgressRequester.createTaskProgressContinuation>(),
   settleRequester: vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(() => true),
 }));
 
-vi.mock("../../tasks/task-registry-progress.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ProgressCoordinator>()),
-  prepareTaskProgressAcknowledgment: prepareProgress,
-}));
 vi.mock("../../tasks/task-progress-requester.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ProgressRequester>()),
   createTaskProgressContinuation: createContinuation,
@@ -42,7 +36,6 @@ vi.mock("../../agents/live-model-switch.js", () => ({
   consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
 }));
 
-const preparedText = "IndexWorker: reviewing migration boundaries.\nCommand: pnpm db:migrate";
 const runId = "waiting-progress-run";
 const receipt: ProgressContinuationReceipt = {
   channel: "discord",
@@ -145,7 +138,6 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 }
 
 beforeEach(() => {
-  prepareProgress.mockReset().mockResolvedValue(preparedText);
   settleRequester.mockReset().mockReturnValue(true);
   createContinuation.mockReset().mockImplementation((params) => {
     let open = true;
@@ -165,34 +157,23 @@ beforeEach(() => {
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
-  it.each(["filtered reasoning", "private partial output"])(
-    "uses named task progress when the only payload is %s",
-    async (hiddenPayload) => {
-      const context = createContext();
-      if (hiddenPayload === "filtered reasoning") {
-        context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
-      } else {
-        context.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-        context.execution.result.payloads = [{ text: "Private partial output" }];
-      }
-      const payloads = await prepare(lane, context);
-      const status = payloads.find((payload) => payload.text === preparedText);
-      expect(status).toBeDefined();
-      expect(getReplyPayloadMetadata(status ?? {})?.deliverDespiteSourceReplySuppression).toBe(
-        true,
-      );
-      expect(settleRequester).not.toHaveBeenCalled();
-    },
-  );
-
   it.each(["explicit acknowledgment", "visible final", "terminal failure"])(
-    "preserves %s precedence without preparing task progress",
+    "preserves %s precedence",
     async (precedence) => {
       const context = createContext();
+      const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
+      context.opts = { onPendingContinuation };
       const selected: ReplyPayload = { text: `${precedence} selected` };
       if (precedence === "explicit acknowledgment") {
-        context.execution.result.meta.yieldAcknowledgment = selected.text;
+        context.execution.result.meta.yieldAcknowledgment = ` ${selected.text} `;
+        context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
+        if (lane === "queued") {
+          context.followupRun.originatingChatType = "group";
+          context.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+          context.execution.result.payloads.push({ text: "Private partial output" });
+        }
       } else if (precedence === "visible final") {
+        context.execution.result.meta.yieldAcknowledgment = "Still waiting.";
         context.execution.result.payloads = [selected];
       } else {
         context.execution = {
@@ -206,32 +187,47 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
       if (selected.isError) {
         expect(payloads[0]?.isError).toBe(true);
       }
+      if (precedence === "explicit acknowledgment") {
+        expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
+          continuationStatus: true,
+          deliverDespiteSourceReplySuppression: true,
+        });
+        if (lane === "ordinary") {
+          expect(onPendingContinuation.mock.calls).toEqual([[]]);
+        }
+      }
       if (precedence !== "explicit acknowledgment") {
         expect(createContinuation).not.toHaveBeenCalled();
       }
-      expect(prepareProgress).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["heartbeat", "internal session", "delivered message", "silent reply"])(
-    "does not expose task progress for a %s",
-    async (suppression) => {
-      const context = createContext();
-      if (suppression === "heartbeat") {
-        context.isHeartbeat = true;
-      } else if (suppression === "internal session") {
-        context.sessionKey = "agent:main:subagent:internal";
-        context.followupRun.run.sessionKey = context.sessionKey;
-      } else if (suppression === "delivered message") {
-        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
-      } else {
-        context.execution.result.meta.finalAssistantVisibleText = "NO_REPLY";
-      }
-      expect(await prepare(lane, context)).toEqual([]);
-      expect(prepareProgress).not.toHaveBeenCalled();
-      expect(createContinuation).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "heartbeat",
+    "subagent session",
+    "internal turn",
+    "silentExpected turn",
+    "delivered message",
+    "silent reply",
+  ])("does not deliver a waiting status for a %s", async (suppression) => {
+    const context = createContext();
+    if (suppression === "heartbeat") {
+      context.isHeartbeat = true;
+    } else if (suppression === "subagent session") {
+      context.sessionKey = "agent:main:subagent:internal";
+      context.followupRun.run.sessionKey = context.sessionKey;
+    } else if (suppression === "internal turn") {
+      context.followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
+    } else if (suppression === "silentExpected turn") {
+      context.followupRun.run.silentExpected = true;
+    } else if (suppression === "delivered message") {
+      context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+    } else {
+      context.execution.result.meta.finalAssistantVisibleText = "NO_REPLY";
+    }
+    expect(await prepare(lane, context)).toEqual([]);
+    expect(createContinuation).not.toHaveBeenCalled();
+  });
 
   it("does not offer adoption for a yield without accepted children", async () => {
     const context = createContext();
@@ -240,16 +236,6 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
     expect(getReplyPayloadMetadata(payloads[0] ?? {})?.continuationStatus).toBe(true);
     expect(getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation?.adopt).toBeUndefined();
     expect(createContinuation).not.toHaveBeenCalled();
-  });
-
-  it("retains a deliverable acknowledgment when authoritative task facts are unavailable", async () => {
-    prepareProgress.mockResolvedValue(undefined);
-    const payloads = await prepare(lane, createContext());
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).not.toBe(true);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.deliverDespiteSourceReplySuppression).toBe(
-      true,
-    );
   });
 });
 
@@ -262,7 +248,11 @@ it.each([
   "settles an implicit continuation once after delivery=$delivered adoption=$adopted",
   async ({ delivered, adopted }) => {
     const context = createContext();
-    context.execution.result.meta = { durationMs: 0, continuationPending: true };
+    context.execution.result.meta = {
+      durationMs: 0,
+      continuationPending: true,
+      yieldAcknowledgment: " ",
+    };
     const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
     context.opts = { onPendingContinuation };
     context.execution.directBlockDeliveries = [
@@ -270,8 +260,11 @@ it.each([
     ];
 
     const payloads = await prepare("ordinary", context);
-    expect(payloads.map((payload) => payload.text)).toEqual([preparedText]);
-    expect(getReplyPayloadMetadata(payloads[0] ?? {})?.continuationStatus).toBe(true);
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
+      continuationStatus: true,
+      deliverDespiteSourceReplySuppression: true,
+    });
     const adopt = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation?.adopt;
     if (adopted) {
       await expect(adopt?.(receipt)).resolves.toBe(true);

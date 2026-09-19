@@ -361,24 +361,12 @@ it("keeps the captured requester when a child also owns a current association on
 });
 
 describe("detached progress at the registered channel boundary", () => {
-  it("adopts without a platform effect and edits the original card after SQLite reopens", async () => {
+  it("restores prior presentation into subsequent updates across two storage reopens", async () => {
     await withPublisher(async (fixture) => {
       expect(await fixture.adopt()).toBe(true);
       expect(fixture.sends).toEqual([]);
       expect(fixture.edits).toEqual([]);
       expect([...fixture.messages.values()]).toEqual([initialMessage]);
-      await fixture.restart();
-
-      expect(await fixture.publish(updatedContent)).toBe("sent");
-      expect(fixture.sends).toEqual([]);
-      expect(fixture.edits).toEqual([{ ...initialMessage, text: updatedContent }]);
-      expect([...fixture.messages.values()]).toEqual([{ ...initialMessage, text: updatedContent }]);
-    });
-  });
-
-  it("restores prior presentation into subsequent updates across two storage reopens", async () => {
-    await withPublisher(async (fixture) => {
-      expect(await fixture.adopt()).toBe(true);
       for (const line of ["Compare independent findings", "Finish source audit"]) {
         await fixture.restart();
         const progress = createChannelProgressDraftCompositor({

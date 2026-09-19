@@ -180,6 +180,7 @@ export function captureTaskProgressContinuationForRequesterTurn(params: {
     for (const [key, batch] of taskProgressBatches) {
       const continuation = batch.requesterContinuation;
       if (
+        batch.operationId &&
         batch.requesterSessionKey === requesterSessionKey &&
         (params.requesterAgentId === undefined ||
           batch.requesterAgentId === params.requesterAgentId) &&

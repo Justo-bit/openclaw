@@ -4,7 +4,6 @@ import type { ChannelProgressDraftCompositorSnapshot } from "openclaw/plugin-sdk
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
-import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { resetTelegramClientOptionsCacheForTests } from "./send.js";
 
 let server: Server;
@@ -133,12 +132,6 @@ it.each([false, true])(
           { step: "Verify the result", status: "in_progress" },
         ],
       };
-      const preview = renderTelegramProgressDraftPreview(progressSnapshot, {
-        richMessages,
-        toolProgress: true,
-        maxLines: 2,
-        maxLineChars: 120,
-      });
       await telegramPlugin.actions?.handleAction?.({
         channel: "telegram",
         action: "edit",
@@ -177,9 +170,6 @@ it.each([false, true])(
           fields: expect.objectContaining({
             chat_id: "123",
             message_id: 42,
-            ...(richMessages
-              ? { rich_message: preview.richMessage }
-              : { text: preview.text.replaceAll("<br>", "\n"), parse_mode: "HTML" }),
           }),
         },
       ]);
@@ -215,6 +205,7 @@ it.each([false, true])(
         });
       } else {
         expect(fields.rich_message).toBeUndefined();
+        expect(fields.parse_mode).toBe("HTML");
         expect(fields.text).toContain(
           "<code>printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"</code>",
         );

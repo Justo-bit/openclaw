@@ -27,7 +27,7 @@ describe("progress draft snapshot continuation", () => {
 
   it("redacts public progress before rendering and durable snapshot capture", async () => {
     const secret = `sk-test-${"a".repeat(48)}`;
-    const update = vi.fn<ChannelProgressDraftCompositorParams["update"]>(() => true);
+    const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
     const progress = createProgress({
       update,
       entry: {
@@ -54,6 +54,7 @@ describe("progress draft snapshot continuation", () => {
       await progress.pushCommentaryProgress(`Checking account ${secret}`);
       const snapshot = progress.getSnapshot();
       expect(JSON.stringify(update.mock.calls)).not.toContain(secret);
+      expect(progress.getText()).not.toContain(secret);
       expect(serializeConversationProgressSnapshot(snapshot)).not.toContain(secret);
       expect(snapshot.plan?.[0]?.step).toContain("Check account");
       expect(update.mock.calls[0]?.[0]).toContain("Account");
@@ -62,103 +63,82 @@ describe("progress draft snapshot continuation", () => {
     }
   });
 
-  it("keeps the parent card through keyed child updates without inheriting delivery", async () => {
-    vi.useFakeTimers();
-    const parentUpdate = vi.fn(() => true);
-    const parent = createProgress({ update: parentUpdate });
-    await parent.pushPlanProgress(
-      [
-        { step: "Inspect", status: "completed" },
-        { step: "Repair", status: "in_progress" },
-      ],
-      { explanation: "Checking *literal* input", explanationFormat: "plain" },
-    );
-    await parent.pushCommentaryProgress("I will keep the existing card", { itemId: "parent" });
-    await parent.pushItemEvent({ itemId: "child", kind: "tool", name: "read", status: "running" });
-    const initialSnapshot = structuredClone(parent.getSnapshot());
-    parent.cancel();
-    parentUpdate.mockClear();
-
-    const update = vi.fn<ChannelProgressDraftCompositorParams["update"]>();
-    update.mockReturnValueOnce(false).mockReturnValue(true);
-    const progress = createProgress({ initialSnapshot, update });
-    try {
-      expect(update).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-      expect(progress.hasStarted).toBe(false);
-      expect(progress.isVisible).toBe(false);
-      expect(await progress.noteActivity({ startImmediately: true })).toBe(false);
-      expect(progress.isVisible).toBe(false);
-
-      progress.beginAssistantMessage();
-      expect(
+  it.each(["live", "prepared"] as const)(
+    "continues detached presentation without inheriting delivery (%s)",
+    async (mode) => {
+      vi.useFakeTimers();
+      const initialSnapshot = {
+        label: "Parent label",
+        lines: [
+          { id: "commentary:parent", kind: "item" as const, text: "Parent note", label: "Note" },
+          { id: "child", kind: "tool" as const, text: "Read", label: "Read", status: "running" },
+        ],
+        plan: [
+          { step: "Inspect", status: "completed" as const },
+          { step: "Repair", status: "in_progress" as const },
+        ],
+        planExplanation: "Checking *literal* input",
+        planExplanationFormat: "plain" as const,
+        statusHeadline: "Transferred *headline*",
+        statusHeadlineFormat: "plain" as const,
+        preparedBlocks: [{ text: "Old transport markup", format: "markdown" as const }],
+      };
+      const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
+      const progress = createProgress({
+        initialSnapshot,
+        update: mode === "live" ? update : undefined,
+      });
+      initialSnapshot.lines[0]!.text = "Mutated note";
+      initialSnapshot.plan[0]!.step = "Mutated step";
+      try {
+        expect(update).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        expect(progress.hasStarted).toBe(false);
+        expect(progress.isVisible).toBe(false);
+        await progress.noteActivity({ startImmediately: true });
         await progress.pushItemEvent({
           itemId: "child",
           kind: "tool",
           name: "read",
           status: "completed",
-        }),
-      ).toBe(true);
-      expect(progress.isVisible).toBe(true);
-      const text = update.mock.lastCall?.[0] ?? "";
-      expect(text).toContain("I will keep the existing card");
-      expect(text).toContain("Inspect");
-      expect(text).toContain("Repair");
-      expect(text).toContain("Checking \\*literal\\* input");
-      expect(progress.getSnapshot()).toMatchObject({
-        plan: initialSnapshot.plan,
-        planExplanation: initialSnapshot.planExplanation,
-        planExplanationFormat: "plain",
-        statusHeadlineFormat: "plain",
-      });
-      expect(
-        progress
-          .getSnapshot()
-          .lines.filter((line) => typeof line === "object" && line.id === "child"),
-      ).toEqual([expect.objectContaining({ status: "completed" })]);
-      expect(parentUpdate).not.toHaveBeenCalled();
-    } finally {
-      progress.cancel();
-    }
-  });
-
-  it("retains detached headline and label data until an explicit status replacement", async () => {
-    const initialSnapshot = {
-      label: "Parent label",
-      lines: [
-        { id: "commentary:parent", kind: "item" as const, text: "Parent note", label: "Note" },
-      ],
-      plan: [{ step: "Parent step", status: "in_progress" as const }],
-      planExplanation: "Underlying plan",
-      statusHeadline: "Transferred *headline*",
-      statusHeadlineFormat: "plain" as const,
-      preparedBlocks: [{ text: "Old transport markup", format: "markdown" as const }],
-    };
-    const update = vi.fn<ChannelProgressDraftCompositorParams["update"]>(() => true);
-    const progress = createProgress({ initialSnapshot, update });
-    initialSnapshot.lines[0]!.text = "Mutated note";
-    initialSnapshot.plan[0]!.step = "Mutated step";
-    try {
-      await progress.noteActivity({ startImmediately: true });
-      expect(update.mock.lastCall?.[0]).toContain("Parent label");
-      expect(update.mock.lastCall?.[0]).toContain("Parent note");
-      expect(update.mock.lastCall?.[0]).toContain("Parent step");
-      expect(update.mock.lastCall?.[1].snapshot.preparedBlocks).toContainEqual({
-        text: "Transferred *headline*",
-        format: "plain",
-      });
-      expect(update.mock.lastCall?.[0]).not.toContain("Old transport markup");
-      expect(progress.getSnapshot().planExplanation).toBe("Underlying plan");
-
-      await progress.pushNarrationProgress("Child status");
-      expect(update.mock.lastCall?.[0]).toContain("Child status");
-      expect(update.mock.lastCall?.[0]).not.toContain("Transferred");
-      expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
-      expect(progress.getSnapshot().plan).toEqual([{ step: "Parent step", status: "in_progress" }]);
-    } finally {
-      progress.cancel();
-    }
-  });
+        });
+        expect(progress.hasStarted).toBe(mode === "live");
+        expect(progress.isVisible).toBe(mode === "live");
+        expect(vi.getTimerCount()).toBe(0);
+        const text = progress.getText();
+        expect(text).toContain("Parent label");
+        expect(text).toContain("Parent note");
+        expect(text).toContain("Inspect");
+        expect(text).toContain("Repair");
+        expect(text).toContain("Transferred \\*headline\\*");
+        expect(text).not.toContain("Old transport markup");
+        expect(
+          progress
+            .getSnapshot()
+            .lines.filter((line) => typeof line === "object" && line.id === "child"),
+        ).toEqual([expect.objectContaining({ status: "completed" })]);
+        if (mode === "live") {
+          expect(update.mock.lastCall?.[1].snapshot.preparedBlocks).toContainEqual({
+            text: "Transferred *headline*",
+            format: "plain",
+          });
+        }
+        await progress.pushItemEvent({ itemId: "child", hideFromChannelProgress: true });
+        expect(progress.getSnapshot().lines).not.toContainEqual(
+          expect.objectContaining({ id: "child" }),
+        );
+        await progress.pushNarrationProgress("Child status");
+        expect(progress.getText()).toContain("Child status");
+        expect(progress.getText()).not.toContain("Transferred");
+        expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
+        await progress.pushNarrationProgress("");
+        expect(progress.getText()).toContain("Checking \\*literal\\* input");
+        expect(progress.getSnapshot().planExplanationFormat).toBe("plain");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
 
   it("applies privacy, quiet failures, approval priority and bounds to transferred lines", async () => {
     const parent = createProgress();
@@ -176,7 +156,7 @@ describe("progress draft snapshot continuation", () => {
     });
     const initialSnapshot = parent.getSnapshot();
     parent.cancel();
-    const update = vi.fn<ChannelProgressDraftCompositorParams["update"]>(() => true);
+    const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
     const progress = createProgress({
       initialSnapshot,
       update,

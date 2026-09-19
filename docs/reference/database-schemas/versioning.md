@@ -153,26 +153,25 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
-Conversation progress continuations use the bare nullable
-`conversation_deliveries.progress_snapshot_json TEXT` column without a schema
-version bump. Writable database open and Doctor's existing additive migration
-install it; read-only inspection accepts its absence without writing. Existing
-receipts retain `NULL`, with no inferred or backfilled presentation state.
+Conversation progress continuations reuse the agent database's `cache_entries`
+table with scope `conversation-progress` and the delivery operation ID as the key.
+No table, column, schema-version change, or migration is required. A missing cache
+entry means no retained presentation; older receipts are not backfilled.
 
-The receipt row owns both the known platform message identity and its bounded,
-data-only prepared presentation. Recording that association is one guarded
-transaction. Later snapshot updates preserve the delivery status and original
-message hash: desired presentation is not proof that a platform edit was delivered
-or that work completed. Snapshots are limited to 64 KiB of JSON, 4,096 characters
-per string, 128 rolling lines, and 64 checklist steps or prepared blocks. Invalid
-optional stored snapshots are ignored without hiding the delivery receipt.
+The receipt owns the known platform message identity and delivery status.
+Adoption records that evidence and its bounded, data-only prepared snapshot in
+one guarded transaction. Later updates write only the snapshot cache, leaving
+the receipt unchanged: desired presentation is not proof that a platform edit
+was delivered or that work completed. Snapshots are limited to 64 KiB of JSON,
+4,096 characters per string, 128 rolling lines, and 64 checklist steps or prepared
+blocks. Invalid optional snapshots are ignored without hiding delivery evidence.
 
-Older same-version readers and writers ignore the nullable column and preserve
-the fields they do not update. They cannot resume the newer presentation flow.
-Binary rollback leaves the column and receipts intact; after re-upgrade, restore
-still requires the existing task and requester authority, not just a snapshot.
-The column follows the receipt's existing cleanup lifecycle and adds no separate
-store, retry owner, or completion credit.
+Reopening restores cached presentation only under the existing task and
+requester checks; the snapshot never grants authority. Older builds ignore the
+cache scope and cannot resume the newer presentation flow. Canonical session
+repair carries snapshots with their receipt identities. The existing session
+delivery cleanup removes matching snapshot keys with their receipts, with no new
+expiry policy, cleanup loop, or completion owner.
 
 Transcript context eligibility uses a bare nullable
 `session_transcript_active_events.context_eligible INTEGER` column without

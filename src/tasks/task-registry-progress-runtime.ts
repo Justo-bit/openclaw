@@ -8,6 +8,7 @@ import { createTypingCallbacks } from "../channels/typing.js";
 import {
   type ConversationDeliveryRecord,
   getConversationDeliveryOperation,
+  getConversationProgressSnapshot,
   recordConversationProgressReceipt,
   updateConversationProgressSnapshot,
 } from "../config/sessions/conversation-delivery-store.js";
@@ -246,7 +247,7 @@ export function readTaskProgressSnapshot(
   });
   return current?.sessionKey === params.sessionKey &&
     current.sessionId === params.requesterSessionId
-    ? receipt.progressSnapshot
+    ? getConversationProgressSnapshot(scope, params.operationId)
     : undefined;
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
@@ -8,7 +9,10 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
+import {
+  getAgentRunLifecycleGeneration,
+  resolveProjectedAgentRunProgressState,
+} from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -19,7 +23,9 @@ import {
 import type { SessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
+import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
 import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
   getTasksByRunId,
   tasks,
@@ -50,11 +56,12 @@ function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
   const backing = readTaskBackingInstance(task.detail);
   const entry = subagentRuns.get(runId);
   const wake = entry?.requesterSettleWake;
+  const operationId = wake?.progressOperationId;
   if (
     backing?.runtime !== "subagent" ||
     !entry ||
     entry.generation !== backing.generation ||
-    !entry.completionRequesterSessionId ||
+    (operationId && !entry.completionRequesterSessionId) ||
     (entry.taskRunId ?? entry.runId) !== task.runId ||
     entry.childSessionKey !== task.childSessionKey ||
     entry.requesterSessionKey !== task.ownerKey ||
@@ -67,7 +74,10 @@ function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
     entry.collect === true ||
     wake?.requesterYieldBatch !== true ||
     (wake.status !== "pending" && wake.status !== "dispatching") ||
-    !wake.progressOperationId ||
+    (!operationId &&
+      (!shouldAutoDeliverTaskStateChange(task) ||
+        wake.status !== "pending" ||
+        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
     wake.rearmGeneration === undefined ||
     !wake.batchRunIds?.includes(runId) ||
     !hasAuthoritativeTaskBacking(task)
@@ -75,14 +85,18 @@ function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
     return undefined;
   }
   const owner = resolveTaskDeliveryOwner(task);
-  if (!owner.sessionKey || !owner.agentId || !canDeliverToRequesterOrigin(owner.requesterOrigin)) {
+  if (
+    !owner.sessionKey ||
+    (operationId && !owner.agentId) ||
+    !canDeliverToRequesterOrigin(owner.requesterOrigin)
+  ) {
     return undefined;
   }
   const key = JSON.stringify([
     owner.sessionKey,
     owner.agentId,
     owner.requesterOrigin,
-    wake.progressOperationId,
+    ...(operationId ? [operationId] : [wake.rearmGeneration, wake.batchRunIds]),
   ]);
   return {
     task,
@@ -90,7 +104,7 @@ function resolveYieldedTaskProgress(task: TaskRecord, runId: string) {
     owner,
     key,
     generation: backing.generation,
-    operationId: wake.progressOperationId,
+    operationId,
     requesterSessionId: entry.completionRequesterSessionId,
   };
 }
@@ -116,58 +130,6 @@ export function scheduleYieldedSubagentTaskProgress(
 export function scheduleYieldedSubagentRunProgress(entry: SubagentRunRecord) {
   for (const task of getTasksByRunId(entry.taskRunId ?? entry.runId)) {
     enqueueYieldedTaskProgress(task, entry.runId);
-  }
-}
-
-/** Read-only preparation; the normal reply dispatcher still owns acknowledgement delivery. */
-export async function prepareTaskProgressAcknowledgment(params: {
-  requesterSessionKey?: string;
-  acceptedSessionSpawns: readonly { runId: string; childSessionKey: string }[];
-}): Promise<string | undefined> {
-  try {
-    const requester = params.requesterSessionKey?.trim();
-    if (!requester) {
-      return undefined;
-    }
-    const rows = params.acceptedSessionSpawns
-      .slice(0, MAX_PROGRESS_BATCH_MEMBERS)
-      .flatMap((spawn) => {
-        const entry = subagentRuns.get(spawn.runId);
-        if (
-          !entry ||
-          entry.childSessionKey !== spawn.childSessionKey ||
-          entry.requesterSessionKey !== requester ||
-          entry.killIntent ||
-          entry.execution.suppressSessionEffects ||
-          entry.suppressAnnounceReason ||
-          entry.collect
-        ) {
-          return [];
-        }
-        const task = getTasksByRunId(entry.taskRunId ?? entry.runId).find(
-          (candidate) =>
-            candidate.ownerKey === requester &&
-            candidate.childSessionKey === entry.childSessionKey &&
-            candidate.notifyPolicy !== "silent" &&
-            readTaskBackingInstance(candidate.detail)?.generation === entry.generation &&
-            hasAuthoritativeTaskBacking(candidate),
-        );
-        return task ? [{ task, entry }] : [];
-      });
-    const owner = rows[0] ? resolveTaskDeliveryOwner(rows[0].task) : undefined;
-    if (!owner?.requesterOrigin || !rows.length) {
-      return undefined;
-    }
-    const { prepareProgressContent } = await loadProgressPresentation();
-    return (
-      (await prepareProgressContent(`ack:${requester}`, owner.requesterOrigin, rows))?.content ||
-      undefined
-    );
-  } catch (error) {
-    taskRegistryLog.debug("Delegated activity preparation failed; retaining the waiting notice", {
-      error,
-    });
-    return undefined;
   }
 }
 
@@ -251,9 +213,11 @@ export function getTaskProgressBatchesForRuns(entries: readonly SubagentRunRecor
     scheduleYieldedSubagentRunProgress(entry);
   }
   return [...taskProgressBatches].flatMap(([key, batch]) =>
+    batch.operationId &&
     [...batch.members.values()].some(
       (member) => generations.get(member.runId) === member.generation,
-    ) && prepareProgressBatch(key, batch)
+    ) &&
+    prepareProgressBatch(key, batch)
       ? [{ key, batch }]
       : [],
   );
@@ -385,7 +349,12 @@ function prepareProgressBatch(key: string, batch: TaskProgressBatch) {
     taskProgressBatches.get(key) !== batch ||
     batch.abortController.signal.aborted ||
     isGatewayRestartDraining() ||
-    batch.lifecycleGeneration !== getAgentRunLifecycleGeneration()
+    batch.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
+    (!batch.operationId &&
+      resolveProjectedAgentRunProgressState({
+        sessionKeys: [batch.requesterSessionKey],
+        agentId: batch.requesterAgentId,
+      }))
   ) {
     return undefined;
   }
@@ -439,13 +408,13 @@ function prepareProgressBatch(key: string, batch: TaskProgressBatch) {
     if (active?.key === key) {
       hasPendingWake = true;
       rows.push({ task, entry: member });
-    } else if (isTerminalTaskStatus(task.status)) {
+    } else if (batch.operationId && isTerminalTaskStatus(task.status)) {
       const wake = entry?.requesterSettleWake;
       hasPendingWake ||=
         wake?.progressOperationId === batch.operationId &&
         wake.batchRunIds?.includes(member.runId) === true;
       rows.push({ task, entry: member });
-    } else if (entry?.killIntent || entry?.killReconciliation) {
+    } else if (batch.operationId && (entry?.killIntent || entry?.killReconciliation)) {
       awaitingTerminal = true;
     }
   }
@@ -467,6 +436,7 @@ function prepareProgressBatch(key: string, batch: TaskProgressBatch) {
     sessionKey: batch.requesterSessionKey,
     rows,
     complete:
+      Boolean(batch.operationId) &&
       !awaitingTerminal &&
       !hasPendingWake &&
       !batch.requesterContinuation?.isCurrent() &&
@@ -549,7 +519,7 @@ function publishProgressBatch(key: string, batch: TaskProgressBatch): Promise<vo
     }
     try {
       const current = prepareProgressBatch(key, batch);
-      if (!current || (current.complete && batch.revision === revision)) {
+      if (!current || ((!batch.operationId || current.complete) && batch.revision === revision)) {
         retireProgressBatch(key, batch);
       } else if (batch.revision !== revision) {
         scheduleProgressBatch(key, batch);
@@ -567,7 +537,7 @@ function publishProgressBatch(key: string, batch: TaskProgressBatch): Promise<vo
 
 async function runProgressPublication(key: string, batch: TaskProgressBatch): Promise<void> {
   try {
-    if (getGlobalHookRunner()?.hasHooks("reply_payload_sending")) {
+    if (batch.operationId && getGlobalHookRunner()?.hasHooks("reply_payload_sending")) {
       return;
     }
     await runWithGatewayDetachedWorkContinuation(async () => {
@@ -575,7 +545,7 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
         () => prepareProgressBatch(key, batch),
         () => undefined,
       );
-      if (!fresh || fresh.rows.length === 0 || !fresh.owner.agentId) {
+      if (!fresh || fresh.rows.length === 0) {
         return null;
       }
       const assertCurrent = () => {
@@ -584,29 +554,36 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
           throw new Error("Background progress was superseded before delivery");
         }
       };
-      const { readTaskProgressSnapshot, publishTaskProgressMessage } = await loadProgressRuntime();
-      const identity = {
-        operationId: batch.operationId,
-        requesterSessionId: batch.requesterSessionId,
-        sessionKey: fresh.sessionKey,
-        agentId: fresh.owner.agentId,
-      };
+      const progressRuntime = batch.operationId ? await loadProgressRuntime() : undefined;
+      const identity =
+        batch.operationId && batch.requesterSessionId && fresh.owner.agentId
+          ? {
+              operationId: batch.operationId,
+              requesterSessionId: batch.requesterSessionId,
+              sessionKey: fresh.sessionKey,
+              agentId: fresh.owner.agentId,
+            }
+          : undefined;
       assertCurrent();
-      const initialSnapshot = readTaskProgressSnapshot(identity);
-      if (!initialSnapshot) {
+      const initialSnapshot = identity && progressRuntime?.readTaskProgressSnapshot(identity);
+      if (batch.operationId && !initialSnapshot) {
         return null;
       }
-      const capturedItems = [...batch.pendingItems].filter(([, update]) => {
-        if (!update.source) {
+      const capturedItems = [...batch.pendingItems].filter(([, { source }]) => {
+        if (!source) {
           return true;
         }
-        const task = tasks.get(update.source.taskId);
+        const task = tasks.get(source.taskId);
         const backing = task ? readTaskBackingInstance(task.detail) : undefined;
         return (
           task?.ownerKey === batch.requesterSessionKey &&
           task.notifyPolicy !== "silent" &&
           backing?.runtime === "subagent" &&
-          backing.generation === update.source.generation
+          backing.generation === source.generation &&
+          (batch.operationId ||
+            fresh.rows.some(
+              (row) => row.task.taskId === source.taskId && row.entry.runId === source.runId,
+            ))
         );
       });
       const capturedPlan = batch.pendingPlan;
@@ -622,30 +599,59 @@ async function runProgressPublication(key: string, batch: TaskProgressBatch): Pr
         return null;
       }
       assertCurrent();
-      const origin = fresh.rows[0]?.entry.progressOrigin;
-      const publication = await publishTaskProgressMessage({
-        ...identity,
-        origin: fresh.origin,
-        sourceMessageId: origin?.messageId,
-        sourceChannelId: origin?.channelId,
-        content: presentation.content,
-        previousContent: batch.lastPublishedContent,
-        snapshot: presentation.snapshot,
-        signal: AbortSignal.any([batch.abortController.signal, getGatewayRestartDrainSignal()]),
-        assertCurrent,
-      });
-      if (publication === "sent" || publication === "unchanged") {
-        batch.lastPublishedContent = presentation.content;
-        for (const [itemId, update] of capturedItems) {
-          if (batch.pendingItems.get(itemId) === update) {
-            batch.pendingItems.delete(itemId);
-          }
+      if (identity && progressRuntime) {
+        const origin = fresh.rows[0]?.entry.progressOrigin;
+        const publication = await progressRuntime.publishTaskProgressMessage({
+          ...identity,
+          origin: fresh.origin,
+          sourceMessageId: origin?.messageId,
+          sourceChannelId: origin?.channelId,
+          content: presentation.content,
+          previousContent: batch.lastPublishedContent,
+          snapshot: presentation.snapshot,
+          signal: AbortSignal.any([batch.abortController.signal, getGatewayRestartDrainSignal()]),
+          assertCurrent,
+        });
+        if (publication !== "sent" && publication !== "unchanged") {
+          return null;
         }
-        if (batch.pendingPlan === capturedPlan) {
-          batch.pendingPlan = undefined;
-        }
-        await ensureProgressTyping(key, batch);
+      } else {
+        const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
+        assertCurrent();
+        const idempotencyKey = `task-progress:${createHash("sha256").update(key).digest("hex")}:${Date.now()}`;
+        await sendMessage({
+          channel: fresh.origin.channel,
+          to: fresh.origin.to ?? "",
+          accountId: fresh.origin.accountId,
+          threadId: fresh.origin.threadId,
+          content: presentation.content,
+          agentId: fresh.owner.agentId,
+          idempotencyKey,
+          mirror: {
+            sessionKey: fresh.sessionKey,
+            agentId: fresh.owner.agentId,
+            idempotencyKey,
+          },
+          skipQueue: true,
+          gatewayOwnedDelivery: true,
+          abortSignal: AbortSignal.any([
+            batch.abortController.signal,
+            getGatewayRestartDrainSignal(),
+          ]),
+          assertDirectAdapterHandoff: assertCurrent,
+          onPlatformSendDispatch: async () => assertCurrent(),
+        });
       }
+      batch.lastPublishedContent = presentation.content;
+      for (const [itemId, update] of capturedItems) {
+        if (batch.pendingItems.get(itemId) === update) {
+          batch.pendingItems.delete(itemId);
+        }
+      }
+      if (batch.pendingPlan === capturedPlan) {
+        batch.pendingPlan = undefined;
+      }
+      await ensureProgressTyping(key, batch);
       return null;
     }, "tasks:progress");
   } catch (error) {

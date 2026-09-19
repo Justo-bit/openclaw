@@ -70,8 +70,8 @@ export type TaskProgressBatch = {
   lifecycleGeneration: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterSessionId: string;
-  operationId: string;
+  requesterSessionId?: string;
+  operationId?: string;
   origin: DeliveryContext;
   abortController: AbortController;
   lastPublishedContent?: string;

@@ -58,7 +58,6 @@ export async function prepareProgressContent(
     },
   };
   const budget = resolveChannelProgressDraftMaxLines(entry);
-  let content = "";
   const childLabels = new Map<string, string>();
   const observations = new Map(
     rows.map(({ task }) => [task.taskId, getTaskExecutionObservation(task)]),
@@ -115,99 +114,89 @@ export async function prepareProgressContent(
       copyProgressDraftLineMetadata(line, labeled);
       return labeled;
     },
-    update: (text) => {
-      content = text;
-      // Preparation is not proof of a platform send.
-      return false;
-    },
   });
-  try {
-    let retained = 0;
-    const streams = rows.map(({ task, entry: run }) => {
-      const label = formatTaskStatusTitleText(task.label, "Subagent");
-      const observation = getTaskExecutionObservation(task);
-      const namespace = `${run.runId}:${run.generation}`;
-      const taskItem: AgentActivityItem = {
-        itemId: `${namespace}:task`,
-        kind: "subagent",
-        phase: "update",
-        title: observation.state === "finished" ? `${label} (${task.status})` : label,
-        ...(observation.state === "running"
-          ? { status: "running" }
-          : observation.state === "finished"
-            ? {
-                phase: "end",
-                status:
-                  task.status === "cancelled"
-                    ? undefined
-                    : task.status === "succeeded"
-                      ? "completed"
-                      : "failed",
-              }
-            : {}),
-        ...(observation.state === "unknown" ? { summary: "Current activity unavailable" } : {}),
-        ...(observation.state === "waiting" || observation.state === "queued"
-          ? { summary: observation.state }
+  let retained = 0;
+  const streams = rows.map(({ task, entry: run }) => {
+    const label = formatTaskStatusTitleText(task.label, "Subagent");
+    const observation = observations.get(task.taskId)!;
+    const namespace = `${run.runId}:${run.generation}`;
+    const taskItem: AgentActivityItem = {
+      itemId: `${namespace}:task`,
+      kind: "subagent",
+      phase: "update",
+      title: observation.state === "finished" ? `${label} (${task.status})` : label,
+      ...(observation.state === "running"
+        ? { status: "running" }
+        : observation.state === "finished"
+          ? {
+              phase: "end",
+              status:
+                task.status === "cancelled"
+                  ? undefined
+                  : task.status === "succeeded"
+                    ? "completed"
+                    : "failed",
+            }
           : {}),
-      };
-      const terminalItem = observation.state === "finished" ? taskItem : undefined;
-      const items: AgentActivityItem[] = terminalItem ? [] : [taskItem];
-      const prepared =
-        initialSnapshot || shouldAutoDeliverTaskStateChange(task)
-          ? getTaskPreparedActivity(task.taskId)
-          : undefined;
-      for (const item of prepared?.values() ?? []) {
-        items.push(
-          prepareItem({
-            item,
-            source: {
-              taskId: task.taskId,
-              runId: run.runId,
-              generation: run.generation ?? 0,
-              label,
-            },
-          }),
-        );
-      }
-      const selected = items.slice(-budget);
-      retained = Math.max(retained, selected.length);
-      return {
-        items: selected,
-        terminalItem,
-        at: parseDateFirstTimestampMs(observation.lastActivityAt) ?? task.createdAt,
-      };
-    });
-    streams.sort((left, right) => left.at - right.at);
-    // Interleave children so one chatty child cannot consume every retained row.
-    for (let offset = retained - 1; offset >= 0; offset -= 1) {
-      for (const { items } of streams) {
-        const item = items[items.length - 1 - offset];
-        if (item) {
-          await compositor.pushItemEvent(item);
-        }
-      }
-    }
-    for (const update of updates?.items ?? []) {
-      await compositor.pushItemEvent(prepareItem(update));
-    }
-    // Pending activity can outlive overlay cleanup; finish with authoritative outcomes.
-    for (const { terminalItem } of streams) {
-      if (terminalItem) {
-        await compositor.pushItemEvent(terminalItem);
-      }
-    }
-    if (updates?.plan) {
-      await compositor.pushPlanProgress(updates.plan.steps, {
-        explanation: updates.plan.explanation,
-        explanationFormat: updates.plan.explanationFormat,
-      });
-    }
-    await compositor.start();
-    return {
-      content,
-      snapshot: compositor.getSnapshot(),
+      ...(observation.state === "unknown" ? { summary: "Current activity unavailable" } : {}),
+      ...(observation.state === "waiting" || observation.state === "queued"
+        ? { summary: observation.state }
+        : {}),
     };
-  } finally {
-    compositor.cancel();
+    const terminalItem = observation.state === "finished" ? taskItem : undefined;
+    const items: AgentActivityItem[] = terminalItem ? [] : [taskItem];
+    const prepared =
+      initialSnapshot || shouldAutoDeliverTaskStateChange(task)
+        ? getTaskPreparedActivity(task.taskId)
+        : undefined;
+    for (const item of prepared?.values() ?? []) {
+      items.push(
+        prepareItem({
+          item,
+          source: {
+            taskId: task.taskId,
+            runId: run.runId,
+            generation: run.generation ?? 0,
+            label,
+          },
+        }),
+      );
+    }
+    const selected = items.slice(-budget);
+    retained = Math.max(retained, selected.length);
+    return {
+      items: selected,
+      terminalItem,
+      at: parseDateFirstTimestampMs(observation.lastActivityAt) ?? task.createdAt,
+    };
+  });
+  streams.sort((left, right) => left.at - right.at);
+  // Interleave children so one chatty child cannot consume every retained row.
+  for (let offset = retained - 1; offset >= 0; offset -= 1) {
+    for (const { items } of streams) {
+      const item = items[items.length - 1 - offset];
+      if (item) {
+        await compositor.pushItemEvent(item);
+      }
+    }
   }
+  for (const update of updates?.items ?? []) {
+    await compositor.pushItemEvent(prepareItem(update));
+  }
+  // Pending activity can outlive overlay cleanup; finish with authoritative outcomes.
+  for (const { terminalItem } of streams) {
+    if (terminalItem) {
+      await compositor.pushItemEvent(terminalItem);
+    }
+  }
+  if (updates?.plan) {
+    await compositor.pushPlanProgress(updates.plan.steps, {
+      explanation: updates.plan.explanation,
+      explanationFormat: updates.plan.explanationFormat,
+    });
+  }
+  return {
+    content: compositor.getText(),
+    snapshot: compositor.getSnapshot(),
+  };
 }

@@ -1,17 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { assertOpenClawAgentSchemaContains } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
   ensureSessionAdditiveColumns,
-  hasPendingConversationProgressSnapshotColumn,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 describe("agent DB conversation migration", () => {
   const databases: Array<{ close: () => void }> = [];
@@ -20,76 +14,6 @@ describe("agent DB conversation migration", () => {
     for (const database of databases.splice(0)) {
       database.close();
     }
-  });
-
-  it("adds nullable progress state without backfilling receipts or breaking same-version readers", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    databases.push(database);
-    const schema = ["conversations", "conversation_deliveries"]
-      .map((table) => extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, table))
-      .join("\n");
-    const previousSchema = schema.replace(/^\s*progress_snapshot_json[^\n]*\n/mu, "");
-    database.exec(previousSchema);
-    database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
-    database.exec(`
-      INSERT INTO conversations (
-        conversation_id, channel, account_id, kind, peer_id, delivery_target, created_at, updated_at
-      ) VALUES ('conversation', 'telegram', 'default', 'direct', 'peer', 'peer', 1, 1);
-      INSERT INTO conversation_deliveries (
-        operation_id, operation_kind, conversation_id, message_hash, status,
-        platform_message_id, created_at, updated_at
-      ) VALUES ('receipt', 'send', 'conversation', 'hash', 'sent', 'message', 1, 1);
-    `);
-    const rows = database.prepare("SELECT * FROM conversation_deliveries").all();
-    const before = database.prepare("SELECT sql FROM sqlite_schema ORDER BY name").all();
-    database.exec("PRAGMA query_only = ON");
-    expect(hasPendingConversationProgressSnapshotColumn(database)).toBe(true);
-    expect(() => assertOpenClawAgentSchemaContains(database, ":memory:", schema)).not.toThrow();
-    expect(database.prepare("SELECT * FROM conversation_deliveries").all()).toEqual(rows);
-    expect(database.prepare("SELECT sql FROM sqlite_schema ORDER BY name").all()).toEqual(before);
-    database.exec("PRAGMA query_only = OFF");
-
-    ensureSessionAdditiveColumns(database);
-    const migrated = database.prepare("PRAGMA schema_version").get();
-    ensureSessionAdditiveColumns(database);
-    expect(database.prepare("PRAGMA schema_version").get()).toEqual(migrated);
-    expect(
-      database
-        .prepare("PRAGMA table_info(conversation_deliveries)")
-        .all()
-        .find((column) => column.name === "progress_snapshot_json"),
-    ).toMatchObject({
-      name: "progress_snapshot_json",
-      type: "TEXT",
-      notnull: 0,
-      dflt_value: null,
-      pk: 0,
-    });
-    const migratedRows = database.prepare("SELECT * FROM conversation_deliveries").all();
-    for (const row of migratedRows) {
-      expect(row.progress_snapshot_json).toBeNull();
-      delete row.progress_snapshot_json;
-    }
-    expect(migratedRows).toEqual(rows);
-    expect(() =>
-      assertSqliteSchemaContains(database, ":memory:", previousSchema, {
-        allowCompatibleAdditiveColumns: true,
-      }),
-    ).not.toThrow();
-    database
-      .prepare("UPDATE conversation_deliveries SET progress_snapshot_json = ?")
-      .run('{"lines":[]}');
-    // A same-version old writer changes only the fields it knows.
-    database.exec("UPDATE conversation_deliveries SET updated_at = 2");
-    expect(
-      database.prepare("SELECT progress_snapshot_json FROM conversation_deliveries").get(),
-    ).toEqual({
-      progress_snapshot_json: '{"lines":[]}',
-    });
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
   });
 
   it("adds nullable route context without advancing the schema version", () => {

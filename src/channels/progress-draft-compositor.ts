@@ -224,6 +224,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
+    if (!params.update) {
+      return false;
+    }
     let blocks: Array<{ text: string; format: "plain" | "markdown" }> = [];
     const text = formatDraftText(lines, {
       onPreparedBlocks: (prepared) => {
@@ -277,7 +280,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       !preambleText ||
       !narrationText ||
       preambleAt === undefined ||
-      !gate.hasStarted ||
+      !gate?.hasStarted ||
       finalReplyStarted ||
       finalReplyDelivered
     ) {
@@ -295,22 +298,24 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     }, remaining);
   };
 
-  const gate = createChannelProgressDraftGate({
-    onStart: async () => {
-      lastStartRendered = await render({ flush: true });
-      schedulePreambleExpiryRefresh();
-    },
-    setTimeoutFn,
-    clearTimeoutFn,
-  });
+  const gate =
+    params.update &&
+    createChannelProgressDraftGate({
+      onStart: async () => {
+        lastStartRendered = await render({ flush: true });
+        schedulePreambleExpiryRefresh();
+      },
+      setTimeoutFn,
+      clearTimeoutFn,
+    });
 
   const startAndRender = async (options?: { flush?: boolean }): Promise<boolean> => {
-    const alreadyStarted = gate.hasStarted;
+    const alreadyStarted = gate?.hasStarted;
     if (!alreadyStarted) {
       lastStartRendered = false;
     }
-    await gate.startNow();
-    if (!gate.hasStarted) {
+    await gate?.startNow();
+    if (!gate?.hasStarted) {
       return false;
     }
     // Startup already rendered; preserve its acceptance without publishing twice.
@@ -320,9 +325,10 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const renderAfterRetraction = async (): Promise<boolean> => {
     if (
       !params.active ||
+      !params.update ||
       finalReplyStarted ||
       finalReplyDelivered ||
-      (params.mode === "progress" && !gate.hasStarted)
+      (params.mode === "progress" && !gate?.hasStarted)
     ) {
       return false;
     }
@@ -388,7 +394,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         })
       : lines;
     const lineChanged = nextLines !== lines;
-    const hasUnconfirmedRender = formatDraftText(nextLines) !== lastRenderedText;
+    const hasUnconfirmedRender = params.update && formatDraftText(nextLines) !== lastRenderedText;
     const diffStatChanged =
       params.updateOnLineChange === true &&
       JSON.stringify(resolveDiffStat() ?? null) !== lastRenderedDiffStatKey;
@@ -400,7 +406,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       reasoningProgress.reset();
       lastReasoningLine = undefined;
     }
-    if (shouldStoreLine && params.tryNativeUpdate) {
+    if (shouldStoreLine && params.update && params.tryNativeUpdate) {
       // Native draft updates get unformatted text; if the channel accepts it,
       // keep local state aligned without sending a generic draft message.
       const text = formatDraftText(nextLines, { formatted: false });
@@ -420,9 +426,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       const flush = options?.flush === true || needsAttention;
       return await startAndRender(flush ? { flush: true } : undefined);
     }
-    const alreadyStarted = gate.hasStarted;
-    const progressActive = await gate.noteWork();
-    if ((alreadyStarted || progressActive) && gate.hasStarted) {
+    const alreadyStarted = gate?.hasStarted;
+    const progressActive = await gate?.noteWork();
+    if ((alreadyStarted || progressActive) && gate?.hasStarted) {
       return await render();
     }
     return false;
@@ -448,7 +454,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return suppressDefaultToolProgressMessages;
     },
     get hasStarted() {
-      return gate.hasStarted;
+      return gate?.hasStarted ?? false;
     },
     get isVisible() {
       return Boolean(lastRenderedText) && !finalReplyStarted && !finalReplyDelivered;
@@ -460,11 +466,12 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return Boolean(planSteps?.length);
     },
     getSnapshot,
+    getText: () => formatDraftText(),
     markFinalReplyStarted() {
       finalReplyStarted = true;
       // Final delivery must disarm the delayed start before async delivery work.
       // Queued turns reopen the gate through beginNewTurn().
-      gate.cancel();
+      gate?.cancel();
       clearPreambleExpiryTimer();
     },
     markFinalReplyDelivered() {
@@ -479,7 +486,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       }
       finalReplyStarted = false;
       finalReplyDelivered = false;
-      gate.reset();
+      gate?.reset();
       clearProgressState(false);
       return true;
     },
@@ -504,11 +511,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       clearProgressState(true);
     },
     cancel() {
-      gate.cancel();
+      gate?.cancel();
       clearPreambleExpiryTimer();
     },
-    start() {
-      return gate.startNow();
+    async start() {
+      await gate?.startNow();
     },
     async noteActivity(options?: { startImmediately?: boolean }) {
       if (
@@ -524,9 +531,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         // Explicit activity flushes even after startup; other updates can batch.
         return await startAndRender({ flush: true });
       }
-      const alreadyStarted = gate.hasStarted;
-      const progressActive = await gate.noteWork();
-      if ((alreadyStarted || progressActive) && gate.hasStarted) {
+      const alreadyStarted = gate?.hasStarted;
+      const progressActive = await gate?.noteWork();
+      if ((alreadyStarted || progressActive) && gate?.hasStarted) {
         return await render();
       }
       return false;
@@ -619,7 +626,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       schedulePreambleExpiryRefresh();
       // Work activity owns the delayed start gate. Retain preambles from fast
       // turns without making their draft visible.
-      return gate.hasStarted ? await render() : false;
+      return gate?.hasStarted ? await render() : false;
     },
     async pushNarrationProgress(text?: string) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
@@ -647,7 +654,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       // Tool activity owns the delayed start gate. Narration may arrive while
       // that timer is pending; retain the newest text without flashing a draft
       // for a turn that finishes inside the grace period.
-      return gate.hasStarted ? await render() : false;
+      return gate?.hasStarted ? await render() : false;
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (
@@ -700,8 +707,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         });
       }
       lastReasoningLine = displayLine;
-      const progressActive = await gate.noteWork();
-      if (progressActive && gate.hasStarted) {
+      const progressActive = await gate?.noteWork();
+      if (progressActive && gate?.hasStarted) {
         return await render();
       }
       return false;
