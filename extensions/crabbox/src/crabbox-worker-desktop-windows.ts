@@ -23,6 +23,13 @@ public static class OpenClawActiveSession {
   [DllImport("wtsapi32.dll", SetLastError=true)] static extern bool WTSEnumerateSessions(IntPtr server, int reserved, int version, out IntPtr sessions, out int count);
   [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr memory);
   [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+  [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSQuerySessionInformation(IntPtr server, int session, int kind, out IntPtr value, out int bytes);
+  static string Read(int session, int kind) {
+    IntPtr value; int bytes;
+    if (!WTSQuerySessionInformation(IntPtr.Zero, session, kind, out value, out bytes)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try { return Marshal.PtrToStringUni(value); } finally { WTSFreeMemory(value); }
+  }
+  public static string UserSid(int session) { return new System.Security.Principal.NTAccount(Read(session, 7), Read(session, 5)).Translate(typeof(System.Security.Principal.SecurityIdentifier)).Value; }
   public static int Get() {
     IntPtr sessions; int count;
     if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out sessions, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -44,11 +51,12 @@ public static class OpenClawActiveSession {
 $consoleSession = [OpenClawActiveSession]::Get()
 if ($consoleSession -le 0) { throw 'Cloud worker requires an active interactive Windows session; reprovision the desktop worker' }
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if ($userSid -ne [OpenClawActiveSession]::UserSid($consoleSession)) { throw 'Cloud worker active Windows account changed; reprovision the desktop worker' }
 `;
 
 // Crabbox owns the privileged session switch. Keep one request producer for setup
 // and enrollment, and retain cancellation evidence when the service outcome is unknown.
-function interactiveScript(script: string): string {
+function interactiveScript(script: string, preparation = ""): string {
   const inner = `param([string]$ResultPath)
 $ErrorActionPreference = 'Stop'
 $expectedSid = '__CRABBOX_EXPECTED_SID__'
@@ -83,6 +91,7 @@ $cancelPath = $resultPath + '.cancel'
 $request = Join-Path (Join-Path $base 'desktop-launch-requests') ($identity + '.request')
 $requestTemporary = $request + '.tmp'
 $source = ${quote(inner)}
+${preparation}
 $source = $source.Replace('__CRABBOX_EXPECTED_SID__', $userSid).Replace('__CRABBOX_EXPECTED_SESSION__', [string]$consoleSession)
 $settled = $false
 try {
@@ -117,6 +126,89 @@ try {
   if ($settled) { @($scriptPath, $resultPath, $cancelPath) | ForEach-Object { Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue } }
 }`;
 }
+
+const vncIdentity = String.raw`
+$vncExecutable = 'C:\Program Files\TightVNC\tvnserver.exe'
+function Assert-VncProcess($process, [string]$argument, [int]$session, [string]$sid) {
+  $command = '^"?' + [regex]::Escape($vncExecutable) + '"?\s+' + [regex]::Escape($argument) + '[ \t]*$'
+  if (-not $process -or -not $process.CreationDate -or $process.ExecutablePath -ine $vncExecutable -or $process.CommandLine -notmatch $command -or $process.SessionId -ne $session -or (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 5).Sid -ne $sid) { throw 'Cloud desktop VNC process identity changed; reprovision the worker' }
+}
+function Get-WorkerVnc([string]$sid, [int]$session) {
+  $listeners = @(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)
+  if (-not $listeners.Count) { return $null }
+  $owners = @($listeners.OwningProcess | Sort-Object -Unique)
+  if ($owners.Count -ne 1 -or @($listeners | Where-Object { $_.LocalAddress -ne '127.0.0.1' }).Count) { throw 'Cloud desktop VNC requires one worker-owned loopback listener' }
+  $process = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $owners[0]) -OperationTimeoutSec 5
+  Assert-VncProcess $process '-run' $session $sid
+  return $process
+}
+`;
+
+// Only OpenClaw's exclusive desktop leases hand VNC to the interactive account.
+// Service credentials stay in this administrative context, outside launcher requests.
+const prepareVnc = `${vncIdentity}
+if (-not (Test-Path -LiteralPath $vncExecutable -PathType Leaf)) { throw 'Crabbox TightVNC is unavailable; reprovision the Windows desktop worker' }
+$serviceKey = Get-Item -LiteralPath 'HKLM:\\Software\\TightVNC\\Server'
+if (Test-Path -LiteralPath 'HKLM:\\Software\\TightVNC\\Server\\ServiceOnly') { throw 'The Windows image forbids TightVNC application mode; prepare an image that permits interactive VNC' }
+$vncSettings = @{ UseVncAuthentication = 1; UseControlAuthentication = 1; RfbPort = 5900; AcceptRfbConnections = 1; AllowLoopback = 1; LoopbackOnly = 1; AcceptHttpConnections = 0; UseD3D = 0; UseMirrorDriver = 0; RemoveWallpaper = 0 }
+$credentials = @{}
+foreach ($name in @('Password', 'ControlPassword')) {
+  $value = $serviceKey.GetValue($name)
+  if ($serviceKey.GetValueKind($name) -ne 'Binary' -or $value.Length -ne 8) { throw 'Crabbox VNC credentials are unavailable; reprovision the worker' }
+  $credentials[$name] = $value
+}
+foreach ($name in @('UseVncAuthentication', 'UseControlAuthentication')) {
+  if ($serviceKey.GetValueKind($name) -ne 'DWord' -or $serviceKey.GetValue($name) -ne 1) { throw 'Crabbox VNC authentication is not enabled; reprovision the worker' }
+}
+$vncService = Get-Service -Name tvnserver
+$serviceCommand = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\tvnserver').ImagePath
+if ($serviceCommand -notmatch ('^"?' + [regex]::Escape($vncExecutable) + '"?\\s+-service$')) { throw 'Crabbox VNC service executable changed; reprovision the worker' }
+if ($vncService.Status -eq 'Running') {
+  if (-not ('OpenClawVncService' -as [type])) {
+    Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class OpenClawVncService {
+  [StructLayout(LayoutKind.Sequential)] struct Status { public uint type, state, accepted, error, specificError, checkpoint, waitHint, pid, flags; }
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool QueryServiceStatusEx(IntPtr service, int level, out Status status, int size, out int needed);
+  public static uint ProcessId(IntPtr service) { Status status; int needed; if (!QueryServiceStatusEx(service, 0, out status, Marshal.SizeOf(typeof(Status)), out needed)) throw new Win32Exception(Marshal.GetLastWin32Error()); return status.pid; }
+}
+'@
+  }
+  $servicePid = [OpenClawVncService]::ProcessId($vncService.ServiceHandle.DangerousGetHandle())
+  $serviceProcess = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $servicePid) -OperationTimeoutSec 5
+  Assert-VncProcess $serviceProcess '-service' 0 'S-1-5-18'
+  $serviceBirth = $serviceProcess.CreationDate
+  $listeners = @(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)
+  if (@($listeners | Where-Object { $_.OwningProcess -ne $servicePid }).Count) { throw 'Cloud desktop VNC port belongs to another process' }
+  $serviceProcess = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $servicePid) -OperationTimeoutSec 5
+  Assert-VncProcess $serviceProcess '-service' 0 'S-1-5-18'
+  if ($serviceProcess.CreationDate -ne $serviceBirth -or [OpenClawVncService]::ProcessId($vncService.ServiceHandle.DangerousGetHandle()) -ne $servicePid -or [OpenClawActiveSession]::Get() -ne $consoleSession -or [OpenClawActiveSession]::UserSid($consoleSession) -ne $userSid) { throw 'Cloud desktop changed before VNC service handover' }
+  $vncService.Stop()
+  $vncService.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(15))
+} elseif ($vncService.Status -ne 'Stopped') { throw 'Crabbox VNC service is transitioning; reprovision the worker' }
+$existingVnc = Get-WorkerVnc $userSid $consoleSession
+if ([OpenClawActiveSession]::Get() -ne $consoleSession -or [OpenClawActiveSession]::UserSid($consoleSession) -ne $userSid) { throw 'Cloud desktop changed before VNC configuration' }
+Set-Service -Name tvnserver -StartupType Disabled
+$userKeyPath = 'Registry::HKEY_USERS\\' + $userSid + '\\Software\\TightVNC\\Server'
+if (-not $existingVnc) {
+  if (Test-Path -LiteralPath $userKeyPath) { Remove-Item -LiteralPath $userKeyPath -Recurse -Force }
+  New-Item -Path $userKeyPath -Force | Out-Null
+  foreach ($name in $vncSettings.Keys) { New-ItemProperty -LiteralPath $userKeyPath -Name $name -PropertyType DWord -Value $vncSettings[$name] -Force | Out-Null }
+  foreach ($name in $credentials.Keys) { New-ItemProperty -LiteralPath $userKeyPath -Name $name -PropertyType Binary -Value $credentials[$name] -Force | Out-Null }
+}
+$userKey = Get-Item -LiteralPath $userKeyPath
+foreach ($name in $vncSettings.Keys) {
+  if ($userKey.GetValueKind($name) -ne 'DWord' -or $userKey.GetValue($name) -ne $vncSettings[$name]) { throw 'Cloud desktop VNC settings changed; reprovision the worker' }
+}
+foreach ($name in $credentials.Keys) {
+  if ($userKey.GetValueKind($name) -ne 'Binary' -or [Convert]::ToBase64String($userKey.GetValue($name)) -cne [Convert]::ToBase64String($credentials[$name])) { throw 'Cloud desktop VNC credentials changed; reprovision the worker' }
+}
+# ConvertFrom-Json coerces ISO timestamps to DateTime; decimal text preserves exact birth ticks.
+$expectedVnc = if ($existingVnc) { @{ pid = [int]$existingVnc.ProcessId; birthTicks = [string]$existingVnc.CreationDate.ToUniversalTime().Ticks } } else { $null }
+$source = $source.Replace('__CRABBOX_VNC_IDENTITY__', (ConvertTo-Json -InputObject $expectedVnc -Compress))
+`;
 
 function browserLauncher(leaseId: string): string {
   return `$ErrorActionPreference = 'Stop'
@@ -172,7 +264,8 @@ if ($args.Count) { throw 'OpenClaw worker terminal does not accept arguments' }
 $child = Start-Process -FilePath ${quote(WINDOWS_POWERSHELL)} -ArgumentList '-NoLogo -NoProfile -NoExit' -WindowStyle Normal -PassThru
 Start-Sleep -Milliseconds 200
 if ($child.HasExited) { throw 'Cloud worker terminal exited before becoming ready' }`;
-  return interactiveScript(`$directory = ${quote(directory)}
+  return interactiveScript(
+    `$directory = ${quote(directory)}
   New-Item -ItemType Directory -Force -Path $directory | Out-Null
   icacls.exe $directory /inheritance:r /grant ('*' + $expectedSid + ':(OI)(CI)F') /grant '*S-1-5-18:(OI)(CI)F' /grant '*S-1-5-32-544:(OI)(CI)F' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Cloud desktop launcher directory permissions could not be secured' }
@@ -194,7 +287,45 @@ if ($child.HasExited) { throw 'Cloud worker terminal exited before becoming read
   if (-not ('OpenClawWallpaper' -as [type])) { Add-Type 'using System; using System.Runtime.InteropServices; public static class OpenClawWallpaper { [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool SystemParametersInfo(uint action, uint parameter, string value, uint flags); }' }
   Assert-LaunchCurrent
   if (-not [OpenClawWallpaper]::SystemParametersInfo(20, 0, $wallpaper, 3)) { throw 'Cloud worker wallpaper could not be applied' }
-  Write-LaunchResult @{ status = 'ready' }`);
+  ${vncIdentity}
+  $startedVnc = $null
+  try {
+    Assert-LaunchCurrent
+    $expectedVnc = ConvertFrom-Json '__CRABBOX_VNC_IDENTITY__'
+    $vnc = Get-WorkerVnc $expectedSid $expectedSession
+    if ($expectedVnc) {
+      if (-not $vnc -or $vnc.ProcessId -ne $expectedVnc.pid -or [string]$vnc.CreationDate.ToUniversalTime().Ticks -ne $expectedVnc.birthTicks) { throw 'Cloud desktop VNC changed during setup handover; reprovision the worker' }
+    } elseif ($vnc) { throw 'Cloud desktop VNC appeared during setup handover; reprovision the worker' }
+    if (-not $vnc) {
+      Assert-LaunchCurrent
+      $startedVnc = Start-Process -FilePath $vncExecutable -ArgumentList '-run' -PassThru
+      $vnc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $startedVnc.Id) -OperationTimeoutSec 5
+      Assert-VncProcess $vnc '-run' $expectedSession $expectedSid
+    }
+    $vncBirth = $vnc.CreationDate
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+      Assert-LaunchCurrent
+      $listener = Get-WorkerVnc $expectedSid $expectedSession
+      if ($listener) {
+        if ($listener.ProcessId -ne $vnc.ProcessId -or $listener.CreationDate -ne $vncBirth) { throw 'Cloud desktop VNC changed before becoming ready' }
+        if ((Get-Service -Name tvnserver).Status -ne 'Stopped') { throw 'Crabbox VNC service resumed during desktop setup' }
+        Assert-LaunchCurrent
+        $result = @{ status = 'ready' }
+        if ($startedVnc) { $result.pid = [int]$vnc.ProcessId; $result.startTime = $vncBirth.ToUniversalTime().ToString('o') }
+        Write-LaunchResult $result
+        break
+      }
+      if ($startedVnc -and $startedVnc.HasExited) { throw 'Cloud desktop VNC exited before becoming ready' }
+      if ([DateTime]::UtcNow -ge $deadline) { throw 'Cloud desktop VNC did not listen on 127.0.0.1:5900 within 15 seconds' }
+      Start-Sleep -Milliseconds 100
+    } while ($true)
+  } catch {
+    if ($startedVnc -and -not $startedVnc.HasExited) { $startedVnc.Kill() }
+    throw
+  } finally { if ($startedVnc) { $startedVnc.Dispose() } }`,
+    prepareVnc,
+  );
 }
 
 export function createCrabboxWindowsDesktopEndpoint(leaseId: string): WorkerDesktopEndpoint {
@@ -265,7 +396,7 @@ child.once("spawn", () => {
   try {
     const scriptPath = path.join(directory, "launch.ps1");
     fs.writeFileSync(scriptPath, script, "utf8");
-    const result = require("node:child_process").spawnSync(${JSON.stringify(WINDOWS_POWERSHELL)}, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], { encoding: "utf8", windowsHide: true, timeout: 65000, maxBuffer: 1024 * 1024 });
+    const result = require("node:child_process").spawnSync(${JSON.stringify(WINDOWS_POWERSHELL)}, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], { encoding: "utf8", windowsHide: true, timeout: 95000, maxBuffer: 1024 * 1024 });
     if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr?.trim() || "Cloud worker Windows desktop launch failed");
     return JSON.parse(result.stdout.trim());
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }

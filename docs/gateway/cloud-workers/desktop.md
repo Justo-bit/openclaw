@@ -52,6 +52,10 @@ AWS macOS requires an available EC2 Mac Dedicated Host and On-Demand allocation.
 
 Use a managed Windows desktop image with Crabbox's **CrabboxDesktopLauncher** service and an active desktop for the configured worker account. Desktop enrollment runs inside that interactive session; the ordinary detached SSH launcher remains the path for headless Windows workers. A Session 0 process or a process belonging to another account cannot satisfy desktop enrollment replay. See [Windows runtime prerequisites](/gateway/cloud-workers/setup-and-bundle-installation#native-windows-prerequisites).
 
+OpenClaw switches the lease's managed TightVNC server to the interactive account with GDI capture, preserving Crabbox's VNC authentication and restricting the listener to loopback. The image must permit TightVNC application mode. Provisioning replay reuses the verified server so attached viewers stay connected; release and reprovision the worker after its interactive session ends.
+
+This mode controls the active desktop; it does not provide sign-in, Ctrl+Alt+Delete, or secure-desktop control. Use OpenClaw provisioning replay or reprovisioning for recovery. Crabbox's generic VNC reset manages service mode.
+
 Workspaces containing symbolic links require Windows Developer Mode in the image or the **Create symbolic links** privilege for the interactive account.
 
 ## Desktop size
