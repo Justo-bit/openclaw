@@ -1211,6 +1211,8 @@ jobs:
     needs: [resolve_release_target]
     outputs:
       source_sha: ${{ needs.resolve_release_target.outputs.sha }}
+      clawhub_run_id: ${{ steps.children.outputs.plugin_clawhub_run_id }}
+      clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
     if: ${{ !inputs.publish_docker_only }}
     env:
       STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve_release_target.outputs.stable_soak_waiver || '""') }}
@@ -1752,11 +1754,7 @@ jobs:
           verify_release_tag_target
           if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
             echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
-            for child_run_id in "${CHILD_PLUGIN_CLAWHUB_RUN_ID}" "${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID}"; do
-              if [[ -n "${child_run_id}" ]]; then
-                gh run cancel --repo "$GITHUB_REPOSITORY" "${child_run_id}" >/dev/null 2>&1 || true
-              fi
-            done
+            cleanup_clawhub_children || true
             exit 1
           fi
           echo "plugin_npm_completed=true" >> "$GITHUB_OUTPUT"
@@ -1907,12 +1905,8 @@ jobs:
           approve_clawhub=true
           if [[ "${failed}" != "0" ]]; then
             approve_clawhub=false
-            for child_run_id in "${plugin_clawhub_run_id}" "${plugin_clawhub_bootstrap_run_id}"; do
-              if [[ -n "${child_run_id}" ]]; then
-                gh run cancel --repo "$GITHUB_REPOSITORY" "${child_run_id}" >/dev/null 2>&1 || true
-                clawhub_failed=1
-              fi
-            done
+            cleanup_clawhub_children || true
+            clawhub_failed=1
           fi
           if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
@@ -2030,6 +2024,17 @@ jobs:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
           if-no-files-found: error
+
+      - name: Clean up ClawHub children after failure
+        if: ${{ failure() || cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
+            source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+            cleanup_clawhub_children
+          fi
 
   verify_core_npm_registry:
     name: Verify already-published core npm package
@@ -2368,3 +2373,31 @@ jobs:
           name: windows-release-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-dispatch.json
           if-no-files-found: warn
+
+  cleanup_clawhub:
+    name: Clean up ClawHub children after parent failure
+    needs:
+      [publish, publish_android, publish_vcr, dispatch_linux_mirror, publish_linux, publish_windows]
+    if: ${{ failure() || cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted cleanup tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts/lib
+          persist-credentials: false
+
+      - name: Cancel unfinished ClawHub children
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ needs.publish.outputs.clawhub_run_id }}
+          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ needs.publish.outputs.clawhub_bootstrap_run_id }}
+        run: |
+          source scripts/lib/release-publish-children.sh
+          cleanup_clawhub_children

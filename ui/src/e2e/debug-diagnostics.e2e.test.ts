@@ -2,7 +2,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -238,6 +241,8 @@ suite.define(() => {
           10,
         );
         expect(Number.isFinite(initialPingMs)).toBe(true);
+        const ping = widget.locator(".gateway-vital--ping");
+        expect(await ping.getAttribute("data-degraded")).toBeNull();
         const nextSystemInfoCount = (await gateway.getRequests("system.info")).length;
         const minimizedCurrentWorkCount = (
           await gateway.getRequests("sessions.list", currentWorkQuery)
@@ -286,6 +291,14 @@ suite.define(() => {
             ),
           )
           .toBeGreaterThanOrEqual(initialPingMs + 200);
+        if (captureUiProof) {
+          await writeFile(
+            path.join(proofDir, "ping-high.png"),
+            await takeControlUiElementScreenshot(page, widget, [ping]),
+          );
+        }
+        expect(await ping.getAttribute("data-degraded")).toBe("");
+        await expect.poll(() => ping.getAttribute("data-degraded")).toBeNull();
         await gateway.waitForRequest("system.info", { after: systemInfoCount + 2 });
         expect(await gateway.getRequests("sessions.list", currentWorkQuery)).toHaveLength(
           minimizedCurrentWorkCount,
