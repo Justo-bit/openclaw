@@ -40,7 +40,10 @@
       "pluginApi": ">=2026.9.4"
     },
     "build": {
-      "openclawVersion": "2026.9.4"
+      "openclawVersion": "2026.9.4",
+      "workerEntries": [
+        "./catalog-page.worker.ts"
+      ]
     },
     "release": {
       "publishToClawHub": true,

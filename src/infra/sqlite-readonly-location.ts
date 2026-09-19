@@ -3,11 +3,8 @@ import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   markSqliteInspectionOperation,
@@ -446,7 +443,6 @@ export async function createOnlineReadOnlyBackup(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const tempDir = await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
-  const sqlite = requireNodeSqlite();
   try {
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
@@ -459,7 +455,7 @@ export async function createOnlineReadOnlyBackup(
         `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
       );
       source.prepare("PRAGMA schema_version;").get();
-      await retainSnapshotWork(sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath)));
+      await retainSnapshotWork(backupNodeSqliteDatabase(source, snapshotPath));
       source.exec("ROLLBACK;");
     } finally {
       if (source.isOpen) {
@@ -740,9 +736,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
       throw new Error("SQLite inspection requires an open owner outside a transaction");
     }
     const location = path.join(directory, "database.sqlite.partial");
-    await retainSnapshotWork(
-      requireNodeSqlite().backup(database, resolveSqliteFilesystemPath(location)),
-    );
+    await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();
     assertCurrent();
     return publishPreparedCopy(directory);

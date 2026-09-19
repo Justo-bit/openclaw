@@ -6,6 +6,13 @@ type RowsReader = {
   assertCurrent: () => void;
 };
 
+export class AuthProfileRuntimeReadStaleError extends Error {
+  constructor() {
+    super("Auth profile store changed during its runtime read; retry resolution");
+    this.name = "AuthProfileRuntimeReadStaleError";
+  }
+}
+
 // Include WAL and rollback-journal writes from other processes, without opening
 // SQLite (which could release a host writer's POSIX locks).
 function readIdentity(databasePath: string): string {
@@ -41,7 +48,7 @@ export function createRuntimeAuthProfileRowsCache(
         reader.assertCurrent();
         // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
         if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new Error("Auth profile store changed during its runtime read; retry resolution");
+          throw new AuthProfileRuntimeReadStaleError();
         }
       };
       return {
