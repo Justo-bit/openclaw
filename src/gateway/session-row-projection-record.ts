@@ -22,6 +22,8 @@ export type Row = {
   entry?: SessionEntry;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
   materializedSequence?: number;
+  profileRevision?: number;
+  subagentRevision?: number;
   lastMessagePreview?: string;
   fallbackModel?: ReturnType<
     typeof rowProjection.readSessionRowInputs
@@ -261,6 +263,29 @@ export function dematerialize(row: Row): Row {
   };
 }
 
+export function readSessionRowParents(
+  row: Row,
+  storedEntry: SessionEntry,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+) {
+  const parents = new Set<string>();
+  const addParent = (key: string | null | undefined) => {
+    if (key && key !== row.key) {
+      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath));
+    }
+  };
+  addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
+  addParent(storedEntry.spawnedBy);
+  const runs = context.subagentRunsByChildSessionKey.get(row.key);
+  if (runs) {
+    for (const run of runs) {
+      addParent(run.controllerSessionKey || run.requesterSessionKey);
+    }
+  }
+  return parents;
+}
+
 export function acquireSessionRowEntry(params: {
   row: Row;
   storedEntry: SessionEntry | undefined;
@@ -277,20 +302,7 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const entry = projectGatewaySessionEntry(cfg, storedEntry);
-  const parents = new Set<string>();
-  const addParent = (key: string | null | undefined) => {
-    if (key && key !== row.key) {
-      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath));
-    }
-  };
-  addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
-  addParent(storedEntry.spawnedBy);
-  const runs = context.subagentRunsByChildSessionKey.get(row.key);
-  if (runs) {
-    for (const run of runs) {
-      addParent(run.controllerSessionKey || run.requesterSessionKey);
-    }
-  }
+  const parents = readSessionRowParents(row, storedEntry, cfg, context);
   const changed = !isDeepStrictEqual([storedEntry, parents], [row.storedEntry, row.parents]);
   if (changed) {
     params.markRelated(row);

@@ -310,7 +310,7 @@ vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
 }));
 
-vi.mock("undici", async (importOriginal) => {
+vi.mock("undici/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,

@@ -8,8 +8,8 @@ import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.j
 import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import {
   createOnlineReadOnlyBackup,
-  inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
+  prepareSqliteReadOnlyLocationSyncFallbackInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import {
@@ -31,12 +31,11 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
   const stagingRoot = args[2];
-  const agentSchemaVersionForOwnership = args[3] === undefined ? undefined : Number(args[3]);
   if (
     (mode !== "sync" &&
+      mode !== "sync-fallback" &&
       mode !== "async" &&
       mode !== "consolidated" &&
-      mode !== "schema-header" &&
       mode !== "reclaim") ||
     !pathname
   ) {
@@ -78,21 +77,6 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       return { ok: true, warnings };
     }
-    if (mode === "schema-header") {
-      if (
-        agentSchemaVersionForOwnership !== undefined &&
-        (!Number.isSafeInteger(agentSchemaVersionForOwnership) ||
-          agentSchemaVersionForOwnership < 0)
-      ) {
-        throw new Error("SQLite schema header requires a valid supported agent schema version");
-      }
-      const header = await inspectSqliteSchemaHeaderInProcess(
-        pathname,
-        stagingRoot,
-        agentSchemaVersionForOwnership,
-      );
-      return { ok: true, header };
-    }
     if (mode === "consolidated") {
       if (!stagingRoot || path.dirname(path.resolve(pathname)) !== path.resolve(stagingRoot)) {
         throw new Error(
@@ -108,7 +92,9 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const prepared =
       mode === "sync"
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
-        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
+        : mode === "sync-fallback"
+          ? await prepareSqliteReadOnlyLocationSyncFallbackInProcess(pathname, stagingRoot)
+          : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
@@ -119,6 +105,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
 
 function runSession(): void {
   let busy = false;
+  let closeRequested = false;
   const transfers = createSqliteWorkerTransferOwner();
   const sourceLeases = new Set<ReturnType<typeof acquireStateDatabaseHandleLease>>();
   let activeTransfer: { requestId: number; transferId: number } | undefined;
@@ -145,9 +132,13 @@ function runSession(): void {
     }
   });
   process.on("message", (message: unknown) => {
-    if (message === "close" && !busy) {
-      transfers.close();
-      process.disconnect?.();
+    if (message === "close") {
+      if (busy) {
+        closeRequested = true;
+      } else {
+        transfers.close();
+        process.disconnect?.();
+      }
       return;
     }
     if (
@@ -249,7 +240,7 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      message.args[0] !== "sync" ||
+      (message.args[0] !== "sync" && message.args[0] !== "sync-fallback") ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
@@ -261,13 +252,15 @@ function runSession(): void {
         Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
           ? { ok: false, message: "exceeded its output buffer" }
           : inspected;
-      if (result.ok) {
-        busy = false;
-      }
       process.send?.({ id, result }, (error) => {
         if (error || !result.ok) {
           // A failed inspection may still own a native handle and admission.
           process.exit(1);
+          return;
+        }
+        busy = false;
+        if (closeRequested) {
+          process.disconnect?.();
         }
       });
     });

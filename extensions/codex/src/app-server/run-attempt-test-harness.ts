@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
   nativeHookRelayTesting,
@@ -12,23 +11,14 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  deleteSessionEntry,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseAsync,
-  drainSessionDiskBudgetWorkers,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -39,12 +29,19 @@ import {
   turnStartResult,
 } from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  createCodexTestHostCapabilities,
+  getCodexTestToolFactory,
+} from "./host-capability.test-support.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
+import {
+  cleanupRunSessionOwnersForTest,
+  seedRunSessionOwnerForTest,
+} from "./run-attempt-session-owners.test-support.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
@@ -75,12 +72,7 @@ const execApprovalsRuntimeMocks = vi.hoisted(() => ({
 function createHarnessHostCapabilities(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams["hostCapabilities"] {
-  return Object.freeze({
-    kind: "agent-harness-host-capability",
-    version: 1,
-    assertActive: () => {},
-    bindToolSurface: (tools) => tools,
-    createToolSurface: (options) => createOpenClawCodingTools(options),
+  return createCodexTestHostCapabilities({
     runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
       await runBeforeToolCallHook({
         ...request,
@@ -102,8 +94,6 @@ function createHarnessHostCapabilities(
           turnSourceThreadId: params.currentThreadTs,
         }),
       }),
-    requestApproval: async () => undefined,
-    waitForApproval: async () => undefined,
   });
 }
 
@@ -117,7 +107,6 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 });
 
 export let tempDir: string;
-const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
@@ -321,17 +310,6 @@ export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
 }
 
-/** Models the core owner required for a reusable stable-key Codex binding. */
-export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
-  const scope = {
-    agentId: "main",
-    sessionKey,
-    storePath: resolveStorePath(undefined, { agentId: "main" }),
-  };
-  await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
-  seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
-}
-
 export function createNativeRunParams(
   sessionFile: string,
   workspaceDir: string,
@@ -350,6 +328,10 @@ export function createNativeRunParams(
 export async function bindProductionHarnessHostCapabilitiesForTest(
   params: EmbeddedRunAttemptParams,
 ): Promise<() => void> {
+  const factory = getCodexTestToolFactory(params);
+  if (factory) {
+    await setHostToolFactoryForTest(params, factory);
+  }
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
   const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
   params.hostCapabilities = host.capabilities;
@@ -726,13 +708,15 @@ export function setupRunAttemptTestHooks(): void {
       close();
     }
     await sandboxExecServerRegistry.closeAll();
+    await nativeHookRelayUnregisterQueue.clear();
+    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    await cleanupRunSessionOwnersForTest();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
-    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
-    await nativeHookRelayUnregisterQueue.clear();
-    await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();
     resetAgentEventsForTest();
@@ -741,16 +725,7 @@ export function setupRunAttemptTestHooks(): void {
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
     vi.unstubAllEnvs();
-    await sandboxExecServerRegistry.closeAll();
-    for (const owner of seededSessionOwnersForTest.splice(0)) {
-      await deleteSessionEntry(owner);
-    }
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

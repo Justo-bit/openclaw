@@ -22,6 +22,7 @@ import {
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { activeSessions } from "../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
@@ -34,7 +35,10 @@ import {
   verifyPreparedSidecarRecovery,
   verifyServiceCleanupRecovery,
 } from "./server-plugin-reload.activation.test-support.js";
-import { verifyActiveCallDrainLease } from "./server-plugin-reload.active-call.test-support.js";
+import {
+  verifyActiveCallDrainLease,
+  verifyLateActiveCallDrainObservation,
+} from "./server-plugin-reload.active-call.test-support.js";
 import {
   verifyGatewayCacheOwnership,
   verifySharedGatewayCacheOwnership,
@@ -119,7 +123,7 @@ afterEach(async () => {
     }
     await clearActivePluginRegistry();
   } finally {
-    activeSessions.clear();
+    await clearTranscriptCapturesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
@@ -281,7 +285,7 @@ it.each(["lookup", "replacement"] as const)(
 );
 
 it.each([5_000, 15_000, 70_000])(
-  "recovers channels after an admitted write outlives the drain deadline (%i ms)",
+  "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
       createRecoveryFixture,
@@ -289,6 +293,9 @@ it.each([5_000, 15_000, 70_000])(
       holdMs,
     ),
 );
+
+it("keeps restored plugins serving when an expired drain observation settles late", () =>
+  verifyLateActiveCallDrainObservation(createRecoveryFixture));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));
@@ -548,10 +555,6 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               },
             });
           },
-          // Settle the timed-out advertiser after quiescence, while service cleanup owns the drain.
-          initialStop: async () => {
-            releaseStartup.resolve();
-          },
           beforePublish: async () => {
             if (outcome === "rollback") {
               throw publicationFailure;
@@ -584,6 +587,21 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               details: { committed: outcome === "after-commit error" },
               cause: publicationFailure,
             });
+          } else if (outcome === "late startup") {
+            const reloading = fixture.reload();
+            void reloading.catch(() => {});
+            try {
+              await vi.waitFor(() =>
+                expect(fixture.owner.getReloadStatus()).toMatchObject({
+                  phase: "reloading",
+                  deadlineAtMs: expect.any(Number),
+                }),
+              );
+              expect(fixture.firstStop).not.toHaveBeenCalled();
+            } finally {
+              releaseStartup.resolve();
+              await reloading;
+            }
           } else {
             await fixture.reload();
           }
