@@ -43,6 +43,7 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.parse":
       return bytes + command.input.raw.byteLength;
@@ -82,6 +83,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return [command.input.payload.buffer];
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
@@ -126,10 +128,14 @@ function captureHashes(includeMemo = true) {
     hashes,
     accept<T>(result: WorkspaceComputationHashResult<T>): T {
       if (context) {
-        for (const [identity, digest] of result.hashes) {
-          context.memo.set(identity, digest);
+        // Single-file probes bypass the memo. Retaining them rescans a growing
+        // placement cache after every file, including private temporary copies.
+        if (includeMemo) {
+          for (const [identity, digest] of result.hashes) {
+            context.memo.set(identity, digest);
+          }
+          pruneWorkspaceHashMemo(context.memo);
         }
-        pruneWorkspaceHashMemo(context.memo);
         if (context.metrics) {
           context.metrics.contentHashCount += result.metrics.contentHashCount;
           context.metrics.contentHashDurationMs += result.metrics.contentHashDurationMs;
@@ -241,6 +247,18 @@ export async function computeWorkspaceFileSnapshot(
         input: encodeManifestValue({ path, maxBytes, root, hashes: hashes.hashes }),
       },
       signal,
+    ),
+  );
+}
+
+export async function readWorkspaceNodes(root: string, paths: string[]) {
+  const hashes = captureHashes();
+  return new Map(
+    hashes.accept(
+      await compute({
+        type: "workspace.manifest.nodes",
+        input: encodeManifestValue({ root, paths, hashes: hashes.hashes }),
+      }),
     ),
   );
 }
@@ -372,6 +390,7 @@ export async function prepareWorkspaceStageInput(
     {
       type: "workspace.manifest.stage-input",
       input: {
+        inputPath: input.inputPath,
         stagingRoot: input.stagingRoot,
         stagedResultRef: input.stagedResultRef,
         baseManifestRef: input.baseManifestRef,
