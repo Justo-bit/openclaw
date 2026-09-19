@@ -55,6 +55,7 @@ type SkillsPathWatchState = {
   close: () => void;
   schedule: (path?: string) => void;
   watchRoot: string;
+  ancestorRoot: string;
   depth: number;
   initialScan: "pending" | "ready" | "error";
   timer?: ReturnType<typeof setTimeout>;
@@ -193,9 +194,31 @@ function resolveWatchTargets(
   return sortedTargets;
 }
 
-function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
+function createSkillsPathWatcher(
+  target: WatchTarget,
+  previousAncestorRoot = target.watchRoot,
+): SkillsPathWatchState {
   const usePolling = resolveSkillsWatcherUsePolling();
   const pathFilter = createSkillsWatchPathFilter(target.path, usePolling);
+  // Descendant native watches do not report ancestor moves. Keep shallow
+  // observation along the original path even after its content watch promotes.
+  const ancestorRoot = isPathInside(previousAncestorRoot, target.watchRoot)
+    ? previousAncestorRoot
+    : target.watchRoot;
+  const ancestorRoots: string[] = [];
+  let currentRoot = target.watchRoot;
+  while (isPathInside(ancestorRoot, currentRoot)) {
+    if (currentRoot !== target.path) {
+      ancestorRoots.push(currentRoot);
+    }
+    const parent = toWatchRoot(path.dirname(currentRoot));
+    if (parent === currentRoot) {
+      break;
+    }
+    currentRoot = parent;
+  }
+  const pendingAncestors = new Set(ancestorRoots);
+  let contentReady = target.path !== target.watchRoot;
   const watcher =
     target.path === target.watchRoot
       ? runInSkillsWatcherContext(() =>
@@ -213,7 +236,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
           }),
         )
       : undefined;
-  let releaseAncestor: (() => void) | undefined;
+  const releaseAncestors: (() => void)[] = [];
   const state: SkillsPathWatchState = {
     closed: false,
     close: () => {
@@ -224,12 +247,14 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       clearTimeout(state.timer);
       if (watcher) {
         void teardownSkillsPathWatcher({ watcher });
-      } else {
-        releaseAncestor?.();
+      }
+      for (const release of releaseAncestors) {
+        release();
       }
     },
     schedule: (changedPath) => schedule(changedPath),
     watchRoot: target.watchRoot,
+    ancestorRoot,
     depth: target.depth,
     initialScan: "pending",
     subscribers: new Set<string>(),
@@ -239,7 +264,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     if (!isCurrent()) {
       return true;
     }
-    const nextTarget = makeSkillsWatchTarget(target.path, state.depth, state.watchRoot);
+    const nextTarget = makeSkillsWatchTarget(target.path, state.depth, state.ancestorRoot);
     if (nextTarget.watchRoot === state.watchRoot) {
       return false;
     }
@@ -359,11 +384,14 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   // Reconcile the whole workspace once its initial scans finish, rather than
   // rebuilding metadata for every root that becomes ready.
   const ready = () => {
-    if (!reconcileRoot()) {
+    if (!reconcileRoot() && contentReady && pendingAncestors.size === 0) {
       settleInitialScan("ready");
     }
   };
-  watcher?.on("ready", ready);
+  watcher?.on("ready", () => {
+    contentReady = true;
+    ready();
+  });
   const onChange = (event: string, changedPath: string) => {
     if (
       !isCurrent() ||
@@ -428,15 +456,27 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     settleInitialScan("error");
   };
   watcher?.on("error", onError);
-  if (!watcher) {
-    releaseAncestor = acquireSkillsAncestorWatcher(target.watchRoot, usePolling, {
-      path: target.path,
-      ignored: pathFilter.ignored,
-      ready,
-      changed: onChange,
-      raw: onRaw,
-      error: onError,
-    }).release;
+  for (const root of ancestorRoots) {
+    releaseAncestors.push(
+      acquireSkillsAncestorWatcher(root, usePolling, {
+        path: target.path,
+        ignored: pathFilter.ignored,
+        ready: () => {
+          pendingAncestors.delete(root);
+          ready();
+        },
+        changed: onChange,
+        raw: onRaw,
+        error: (error) => {
+          pendingAncestors.delete(root);
+          onError(error);
+          // Missing roots still need the ancestor's recovery scan.
+          if (watcher) {
+            ready();
+          }
+        },
+      }).release,
+    );
   }
 
   return state;
@@ -454,10 +494,13 @@ function subscribeWorkspaceToPath(workspaceDir: string, watchTarget: WatchTarget
   }
   if (existing) {
     // A changed ancestor or deeper target needs a rebuilt watcher, preserving subscribers.
-    const next = createSkillsPathWatcher({
-      ...watchTarget,
-      depth: Math.max(existing.depth, watchTarget.depth),
-    });
+    const next = createSkillsPathWatcher(
+      {
+        ...watchTarget,
+        depth: Math.max(existing.depth, watchTarget.depth),
+      },
+      existing.ancestorRoot,
+    );
     for (const subscriber of existing.subscribers) {
       next.subscribers.add(subscriber);
       const owner = workspaceWatchOwners.get(subscriber);
