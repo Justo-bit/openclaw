@@ -5,6 +5,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { loadAuthProfileStoreForRuntimeAsync, resolveAuthProfileOrder } from "../auth-profiles.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { waitForOwnedOAuthRefreshes } from "../auth-profiles/oauth-manager.js";
 import { AuthProfileRuntimeReadStaleError } from "../auth-profiles/runtime-persisted-rows.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
@@ -165,6 +166,8 @@ type DynamicModelAuthProfile = {
 };
 
 export async function resolveDynamicModelAuthProfile(params: {
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
@@ -173,6 +176,8 @@ export async function resolveDynamicModelAuthProfile(params: {
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
   preferredProfile?: string;
 }): Promise<DynamicModelAuthProfile> {
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
   const explicitProfileId = params.authProfileId?.trim() || undefined;
   // A prepared mode is authoritative; model discovery does not reselect its credentials.
   if (params.authProfileMode) {
@@ -195,14 +200,31 @@ export async function resolveDynamicModelAuthProfile(params: {
       preferredProfile: params.preferredProfile,
     }),
   };
-  const readStore = () => loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
-  const store = await readStore().catch((error: unknown) => {
+  const readStore = () => {
+    params.abortSignal?.throwIfAborted();
+    params.assertCurrent?.();
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, readOptions);
+  };
+  const store = await readStore().catch(async (error: unknown) => {
     if (!(error instanceof AuthProfileRuntimeReadStaleError)) {
       throw error;
     }
-    // OAuth publication can overlap selection. The rejected reader has joined its cleanup.
+    params.assertCurrent?.();
+    await waitForOwnedOAuthRefreshes({
+      databasePath: error.databasePath,
+      providers: listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: params.provider,
+        config: params.cfg,
+      }),
+      profileId: explicitProfileId,
+      abortSignal: params.abortSignal,
+    });
+    params.assertCurrent?.();
+    // The rejected reader has joined cleanup; keep one fresh selection attempt.
     return readStore();
   });
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
   const profileId =
     explicitProfileId ??
     listOpenAIAuthProfileProvidersForAgentRuntime({
@@ -384,6 +406,7 @@ export function normalizeProviderModelRef(params: {
 }
 
 type ResolveModelWithRegistryParams = {
+  abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   provider: string;
   modelId: string;

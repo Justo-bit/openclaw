@@ -44,6 +44,7 @@ import {
 export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
 type CommonModelResolutionOptions = {
+  abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
@@ -221,6 +222,7 @@ export async function resolveModelAsync(
       const suppressedRuntimeModel =
         explicitModel.kind === "suppressed"
           ? await resolveRuntimePreferredSuppressedModel({
+              abortSignal: options?.abortSignal,
               assertCurrent: options?.assertCurrent,
               provider: normalizedRef.provider,
               modelId: normalizedRef.model,
@@ -308,6 +310,8 @@ export async function resolveModelAsync(
     };
     const resolveDynamicAttempt = async () => {
       const authProfile = await resolveDynamicModelAuthProfile({
+        abortSignal: options?.abortSignal,
+        assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
@@ -337,6 +341,7 @@ export async function resolveModelAsync(
           });
       options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
+        abortSignal: options?.abortSignal,
         assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,

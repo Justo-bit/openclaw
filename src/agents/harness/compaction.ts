@@ -173,6 +173,7 @@ async function resolveHarnessCompactApiKey(params: {
     authProfileMode,
   }: Parameters<Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"]>[0]) =>
     resolveModelAsync(provider, modelId, agentDir, config, {
+      abortSignal: compactParams.abortSignal,
       ...preparedStores,
       preparedModelRuntime: params.preparedModelRuntime,
       authProfileId: profileId,
@@ -186,6 +187,7 @@ async function resolveHarnessCompactApiKey(params: {
     try {
       model = (
         await resolveModelAsync(provider, modelId, agentDir, compactParams.config, {
+          abortSignal: compactParams.abortSignal,
           ...preparedStores,
           preparedModelRuntime: params.preparedModelRuntime,
           authProfileId:

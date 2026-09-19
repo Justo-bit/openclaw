@@ -521,6 +521,7 @@ async function runIsolatedCompletionOwned(
           | undefined;
         if (harness.authBootstrap === "harness") {
           const resolution = await resolveModelAsync(provider, request.model, agentDir, config, {
+            abortSignal: request.abortSignal,
             assertCurrent,
             ...lease.snapshot.createStores(),
             preparedModelRuntime: lease.snapshot,
@@ -613,6 +614,7 @@ async function runIsolatedCompletionOwned(
                 metadataSnapshot: lease.snapshot.metadataSnapshot,
                 resolveModel: ({ config: modelConfig, authProfileId, authProfileMode }) =>
                   resolveModelAsync(runtimeModel.provider, runtimeModel.id, agentDir, modelConfig, {
+                    abortSignal: request.abortSignal,
                     assertCurrent,
                     modelIdSource: "selected",
                     preparedModelRuntime: lease.snapshot,

@@ -332,6 +332,7 @@ async function toSimpleContextMessages(params: {
 type BtwRuntimeAuthPreparation = ReturnType<typeof prepareAgentRuntimeAuth>;
 
 type BtwRuntimeModelMaterialization = {
+  abortSignal?: AbortSignal;
   provider: string;
   modelId: string;
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
@@ -359,6 +360,7 @@ async function materializeBtwRuntimeModel(
       ...(params.forceResolve !== undefined ? { forceResolve: params.forceResolve } : {}),
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, agentDir, config, {
+          abortSignal: params.abortSignal,
           modelIdSource: "selected",
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
@@ -406,6 +408,7 @@ async function resolveBtwPreparedRuntimeAuth(
 }
 
 async function resolveRuntimeModel(params: {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -435,6 +438,7 @@ async function resolveRuntimeModel(params: {
   const workspaceDir = preparedModelRuntime.workspaceDir;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
   const resolution = await resolveModelAsync(params.provider, params.model, agentDir, cfg, {
+    abortSignal: params.abortSignal,
     authStorage,
     modelRegistry,
     preparedModelRuntime,
@@ -501,6 +505,7 @@ async function resolveRuntimeModel(params: {
   await reconcileAuthProfileQuotaBlocks(authParams);
   const runtimeAuthPreparation = prepareAgentRuntimeAuth(authParams);
   model = await materializeBtwRuntimeModel({
+    abortSignal: params.abortSignal,
     provider: runtimeProvider,
     modelId: runtimeModelId,
     preparedModelRuntime,
@@ -783,6 +788,7 @@ export async function runBtwSideQuestion(
     const resolveRuntimeSelection = async () => {
       if (!runtimeSelection) {
         runtimeSelection = await resolveRuntimeModel({
+          abortSignal: params.opts?.abortSignal,
           cfg: params.cfg,
           provider: params.provider,
           model: params.model,
@@ -919,6 +925,7 @@ export async function runBtwSideQuestion(
       const resolvedAttempt = implicitHarnessAuthPlan
         ? { plan: implicitHarnessAuthPlan, model: runtime.model }
         : await resolveBtwPreparedRuntimeAuth({
+            abortSignal: params.opts?.abortSignal,
             preparation: runtimeAuthPreparation,
             model: runtime.model,
             provider: runtime.model.provider,
@@ -1214,6 +1221,7 @@ export async function runBtwSideQuestion(
     const resolvedAttempt =
       finalizedOpenClawFallback?.resolvedAttempt ??
       (await resolveBtwPreparedRuntimeAuth({
+        abortSignal: params.opts?.abortSignal,
         preparation: runtimeAuthPreparation,
         model,
         provider: model.provider,

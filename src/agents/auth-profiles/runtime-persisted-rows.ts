@@ -7,7 +7,7 @@ type RowsReader = {
 };
 
 export class AuthProfileRuntimeReadStaleError extends Error {
-  constructor() {
+  constructor(readonly databasePath: string) {
     super("Auth profile store changed during its runtime read; retry resolution");
     this.name = "AuthProfileRuntimeReadStaleError";
   }
@@ -48,7 +48,7 @@ export function createRuntimeAuthProfileRowsCache(
         reader.assertCurrent();
         // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
         if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new AuthProfileRuntimeReadStaleError();
+          throw new AuthProfileRuntimeReadStaleError(databasePath);
         }
       };
       return {

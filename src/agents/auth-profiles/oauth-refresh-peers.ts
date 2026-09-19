@@ -139,6 +139,7 @@ export async function fenceOAuthRefreshPeers(params: {
   generation: OAuthCredential;
   fence: OAuthCredential;
   rollbackOnFailure?: boolean;
+  beforeWrite?: (databasePath: string) => void;
 }): Promise<OAuthRefreshPeerClaim[]> {
   const claims: OAuthRefreshPeerClaim[] = [];
   try {
@@ -152,6 +153,7 @@ export async function fenceOAuthRefreshPeers(params: {
         continue;
       }
       if (isExactOAuthCredential(credential, params.fence)) {
+        params.beforeWrite?.(candidate.databasePath);
         claims.push({ candidate });
         continue;
       }
@@ -182,6 +184,7 @@ export async function fenceOAuthRefreshPeers(params: {
           if (!isExactOAuthCredential(current?.type === "oauth" ? current : undefined, original)) {
             return false;
           }
+          params.beforeWrite?.(candidate.databasePath);
           currentStore.profiles[params.profileId] = { ...params.fence };
           claimed = true;
           return true;
@@ -190,6 +193,7 @@ export async function fenceOAuthRefreshPeers(params: {
       if (!claimed) {
         const current = updated.store.profiles[params.profileId];
         if (isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)) {
+          params.beforeWrite?.(candidate.databasePath);
           claims.push({ candidate });
           continue;
         }

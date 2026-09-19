@@ -441,6 +441,7 @@ function resolveCompressionModelCandidates(params: {
 }
 
 async function resolveImageCompressionPolicy(params: {
+  signal?: AbortSignal;
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
@@ -454,6 +455,7 @@ async function resolveImageCompressionPolicy(params: {
   const models: ImageCompressionModelPolicy[] = await Promise.all(
     modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
       return resolveImageCompressionModelPolicy({
+        signal: params.signal,
         cfg: params.cfg,
         provider: candidate.provider,
         model: candidate.model,
@@ -815,6 +817,7 @@ export function createImageTool(options?: {
           );
         }
         const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
+          signal,
           cfg: options?.config,
           imageModelConfig,
           modelOverride,

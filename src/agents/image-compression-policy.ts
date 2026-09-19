@@ -12,6 +12,7 @@ const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
 
 /** Resolves the authoritative image limits for one selected provider/model. */
 export async function resolveImageCompressionModelPolicy(params: {
+  signal?: AbortSignal;
   cfg?: OpenClawConfig;
   provider: string;
   model: string;
@@ -31,6 +32,7 @@ export async function resolveImageCompressionModelPolicy(params: {
         params.agentDir,
         params.cfg,
         {
+          abortSignal: params.signal,
           allowBundledStaticCatalogFallback: true,
           skipProviderRuntimeHooks,
           skipAgentDiscovery: true,
@@ -43,6 +45,7 @@ export async function resolveImageCompressionModelPolicy(params: {
       // SAFETY: model resolution preserves provider runtime fields on its narrower Model result.
       return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
     } catch {
+      params.signal?.throwIfAborted();
       return {};
     }
   }

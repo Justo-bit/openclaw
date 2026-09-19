@@ -288,6 +288,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
 };
 
 async function resolveApprovedModel(params: {
+  signal: AbortSignal;
   target: WorkerInferenceSessionTarget;
   request: WorkerInferenceStartParams;
   dependencies: WorkerInferenceRuntimeDependencies;
@@ -413,6 +414,7 @@ async function resolveApprovedModel(params: {
     // Route projection and credential selection are one decision. Pin even an
     // automatic profile so generic auth fallback cannot cross to another route.
     const prepared = await dependencies.prepareModel({
+      signal: params.signal,
       cfg: modelConfig,
       agentId: target.agentId,
       provider: resolved.ref.provider,
@@ -480,6 +482,7 @@ export function createWorkerInferenceExecutor(
       agentDir: resolveAgentDir(config, target.agentId),
     });
     const approved = await resolveApprovedModel({
+      signal,
       target,
       request,
       dependencies,
