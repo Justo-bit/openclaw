@@ -21502,21 +21502,25 @@ public struct TaskSuggestionsAcceptParams: Codable, Sendable {
     public let taskid: String
     public let mode: String?
     public let cloudprofileid: String?
+    public let cwd: String?
 
     public init(
         taskid: String,
         mode: String? = nil,
-        cloudprofileid: String? = nil)
+        cloudprofileid: String? = nil,
+        cwd: String? = nil)
     {
         self.taskid = taskid
         self.mode = mode
         self.cloudprofileid = cloudprofileid
+        self.cwd = cwd
     }
 
     private enum CodingKeys: String, CodingKey {
         case taskid = "taskId"
         case mode
         case cloudprofileid = "cloudProfileId"
+        case cwd
     }
 }
 
@@ -21785,6 +21789,19 @@ public struct TaskSummary: Codable, Sendable {
         case terminaloutcome = "terminalOutcome"
         case result
         case prompt
+    }
+}
+
+public struct TaskWorktreeSourceRequiredErrorDetails: Codable, Sendable {
+    public let code: String
+    public let cwd: String
+
+    public init(
+        code: String,
+        cwd: String)
+    {
+        self.code = code
+        self.cwd = cwd
     }
 }
 
@@ -23289,6 +23306,16 @@ public struct TranscriptsStatusResult: Codable, Sendable {
         case active
         case latesttranscript = "latestTranscript"
         case omitted
+    }
+}
+
+public struct TranscriptsSummarizeParams: Codable, Sendable {
+    public let selector: String
+
+    public init(
+        selector: String)
+    {
+        self.selector = selector
     }
 }
 
@@ -27363,6 +27390,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case setupAdmissionBusy(SetupAdmissionBusyErrorDetails)
     case githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails)
     case sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails)
+    case taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails)
 
     public init(code: String, missingscope: String, requiredscopes: [String]) {
         self = .missingScope(
@@ -27388,6 +27416,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .setupAdmissionBusy(let value): value.code
         case .githubPublicationSelectionRejected(let value): value.code
         case .sessionWorkspaceRecoveryRequired(let value): value.code
+        case .taskWorktreeSourceRequired(let value): value.code
         }
     }
 
@@ -27421,6 +27450,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "SETUP_ADMISSION_BUSY": self = try .setupAdmissionBusy(SetupAdmissionBusyErrorDetails(from: decoder))
         case "GITHUB_PUBLICATION_SELECTION_REJECTED": self = try .githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails(from: decoder))
         case "SESSION_WORKSPACE_RECOVERY_REQUIRED": self = try .sessionWorkspaceRecoveryRequired(SessionWorkspaceRecoveryRequiredErrorDetails(from: decoder))
+        case "TASK_WORKTREE_SOURCE_REQUIRED": self = try .taskWorktreeSourceRequired(TaskWorktreeSourceRequiredErrorDetails(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -27444,6 +27474,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .setupAdmissionBusy(let value): try value.encode(to: encoder)
         case .githubPublicationSelectionRejected(let value): try value.encode(to: encoder)
         case .sessionWorkspaceRecoveryRequired(let value): try value.encode(to: encoder)
+        case .taskWorktreeSourceRequired(let value): try value.encode(to: encoder)
         }
     }
 }

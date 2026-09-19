@@ -104,6 +104,64 @@ afterEach(() => {
 describe("verifyBetaRelease workflow outcomes", () => {
   const version = "2026.5.10-beta.3";
 
+  function historicalFixture(conclusion: string, overrides: Record<string, unknown> = {}) {
+    const originalRef = "release-publish/aaaaaaaaaaaa-123";
+    const fixture = workflowFixture({ headBranch: originalRef, conclusion, attempt: 2 }, false);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA", "a".repeat(40));
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT", "1");
+    const original = JSON.parse(readFileSync(join(fixture.binDir, "run.json"), "utf8"));
+    writeFileSync(
+      join(fixture.binDir, "attempt.json"),
+      JSON.stringify({
+        ...original,
+        databaseId: 44,
+        attempt: 1,
+        headSha: "a".repeat(40),
+        conclusion: "success",
+        url: "https://example.invalid/runs/44/attempts/1",
+        ...overrides,
+      }),
+    );
+    return fixture;
+  }
+
+  it.each(["success", "failure"])(
+    "records the original npm attempt after a later %s rerun",
+    async (conclusion) => {
+      const fixture = historicalFixture(conclusion);
+
+      await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+      expect(
+        JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+      ).toEqual([
+        expect.objectContaining({
+          id: "44",
+          runAttempt: 1,
+          url: "https://example.invalid/runs/44/attempts/1",
+        }),
+      ]);
+      expect(
+        JSON.parse(
+          readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+        ),
+      ).toMatchObject({ children: { openclawNpm: { runAttempt: "1", conclusion: "success" } } });
+    },
+  );
+
+  it.each([
+    { attempt: 2 },
+    { databaseId: 45 },
+    { headSha: "b".repeat(40) },
+    { conclusion: "failure" },
+    { jobs: [{ name: "publish_openclaw_npm", conclusion: "failure" }] },
+  ])("rejects changed or unsuccessful historical publisher evidence: %j", async (overrides) => {
+    const fixture = historicalFixture("success", overrides);
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow();
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
   it("retains the original npm publisher when a recovery parent uses newer tooling", async () => {
     const originalRef = "release-publish/aaaaaaaaaaaa-123";
     const fixture = workflowFixture({ headBranch: originalRef }, false);
@@ -192,7 +250,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     print({version: npm.version, "dist-tags": npm.tags[name], "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/package.tgz"});
   }
 } else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
-  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
+  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), args.includes("--attempt") ? "attempt.json" : "run.json")));
 } else if (args[0] === "api" && args[1].endsWith("/actions/runs/34")) {
   process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "bootstrap.json")));
 } else if (args[0] === "api" && args[1].includes("/actions/runs/34/artifacts?")) {
