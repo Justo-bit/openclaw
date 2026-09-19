@@ -61,8 +61,12 @@ export async function withChatSubmitHandoff(
   try {
     let current = queued;
     if (yieldsToInput) {
-      // Durable custody lets the browser accept the next input before delivery.
-      await yieldChatSubmitToInput();
+      // History, picker, and busy-run waits already yield. Register those sends
+      // with the drain before yielding so a background wake cannot claim them
+      // as restored rows and discard their foreground branch fence.
+      if (startsImmediately) {
+        await yieldChatSubmitToInput();
+      }
       const pending =
         options.isCurrent() && visibleSessionMatches(host, queued.sessionKey!, queued.agentId)
           ? readQueuedMessageById(host, queued.id)

@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -200,9 +200,17 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   const { loadGatewaySessionEntryReadOnly } =
     await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   const original = mocks.loadSession.getMockImplementation()!;
-  await upsertSessionEntryCore(
+  const entry = {
+    ...original(sessionKey).entry,
+    updatedAt: Date.now(),
+    lifecycleRevision: randomUUID(),
+  };
+  // Fixture seeding must not start an unrelated maintenance Worker that competes
+  // with publication's zero-wait shared-state lease acquisition.
+  await patchSessionEntryCore(
     { agentId: "main", sessionKey, storePath: path.join(root, "sessions.json") },
-    { ...original(sessionKey).entry, updatedAt: Date.now(), lifecycleRevision: randomUUID() },
+    () => entry,
+    { fallbackEntry: entry, skipMaintenance: true },
   );
   mocks.loadSession.mockImplementation(
     (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>

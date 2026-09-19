@@ -28,6 +28,7 @@ import {
   applySessionEntryMaintenance,
   refreshSqliteSessionPlannerStatisticsBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
+import { observeSessionMaintenanceChanges } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
@@ -344,6 +345,11 @@ it("does not hold channel recording behind automatic session maintenance", async
     await materializationReleased;
   };
 
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+  if (!databasePath) {
+    throw new Error("expected maintenance ingress database path");
+  }
+  const staleRemoved = observeSessionMaintenanceChanges(databasePath, staleSessionKey);
   const entryWrite = recordInboundSession({
     storePath,
     sessionKey: "agent:main:discord:direct:maintenance-ingress",
@@ -370,12 +376,14 @@ it("does not hold channel recording behind automatic session maintenance", async
     materializationStarted.then(() => "maintenance" as const),
   ]);
   const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
+  let laterStaleRemoved: Promise<void> | undefined;
   if (firstCompleted === "entry-write") {
     await materializationStarted;
     replaceSessionEntrySync(
       { sessionKey: laterStaleSessionKey, storePath },
       { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
     );
+    laterStaleRemoved = observeSessionMaintenanceChanges(databasePath, laterStaleSessionKey);
     await recordInboundSession({
       storePath,
       sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
@@ -402,12 +410,9 @@ it("does not hold channel recording behind automatic session maintenance", async
   await entryWrite;
 
   expect(firstCompleted).toBe("entry-write");
-  await vi.waitFor(() => {
-    expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-    if (firstCompleted === "entry-write") {
-      expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
-    }
-  });
+  await Promise.all([staleRemoved, laterStaleRemoved]);
+  expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
 });
 
 it.each([
